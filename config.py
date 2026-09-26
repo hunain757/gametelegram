@@ -44,7 +44,7 @@ def load_config() -> Config:
         telegram_token=os.environ["TELEGRAM_BOT_TOKEN"],
         gemini_api_key=os.environ["GEMINI_API_KEY"],
         twelvedata_api_key=os.environ["TWELVEDATA_API_KEY"],
-        gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+        gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
         symbol=os.getenv("SYMBOL", "XAU/USD"),
         scan_interval_minutes=int(os.getenv("SCAN_INTERVAL_MINUTES", "15")),
         min_confidence=int(os.getenv("MIN_CONFIDENCE", "70")),
