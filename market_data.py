@@ -1,4 +1,7 @@
-"""Market data: XAU/USD candles from Twelve Data, volume from Binance PAXG/USDT.
+"""Market data per instrument.
+
+Gold: candles from Twelve Data (weekend candles removed), volume from Binance PAXG/USDT.
+Bitcoin: candles and real volume straight from Binance (free, no key, 24/7).
 
 Higher timeframes change slowly, so each timeframe is cached for a while. This keeps
 a 5-minute scan loop inside the Twelve Data free plan (800 requests/day, 8/minute).
@@ -9,6 +12,8 @@ import time
 from datetime import datetime, timezone
 
 import httpx
+
+from instruments import drop_closed
 
 log = logging.getLogger("goldbot.data")
 
@@ -55,9 +60,10 @@ async def fetch_volume_candles(client: httpx.AsyncClient, symbol: str, interval:
 
 
 class MarketData:
-    def __init__(self, api_key: str, symbol: str, volume_symbol: str = "PAXGUSDT"):
+    def __init__(self, api_key: str, symbol: str, volume_symbol: str = "PAXGUSDT", source: str = "twelvedata"):
         self.api_key = api_key
         self.symbol = symbol
+        self.source = source
         self.volume_symbol = volume_symbol
         self._cache: dict[str, tuple[float, list[dict]]] = {}
         self._vcache: dict[str, tuple[float, list[dict]]] = {}
@@ -77,13 +83,18 @@ class MarketData:
             self._day, self.requests_today = today, 0
 
         async with httpx.AsyncClient() as client:
+            if self.source == "binance":
+                return await self._get_binance(client, now)
             for tf in TIMEFRAMES:
                 cached = self._cache.get(tf)
                 if cached and now - cached[0] < CACHE_TTL[tf]:
                     continue
                 try:
-                    self._cache[tf] = (now, await fetch_candles(client, self.api_key, self.symbol, tf))
+                    fresh = drop_closed(await fetch_candles(client, self.api_key, self.symbol, tf), tf)
                     self.requests_today += 1
+                    if len(fresh) < 30:
+                        raise MarketDataError(f"only {len(fresh)} {tf} candles after removing closed-market ones")
+                    self._cache[tf] = (now, fresh)
                 except Exception as e:
                     if not cached or tf == "5min":
                         raise MarketDataError(str(e)) from e
@@ -94,7 +105,8 @@ class MarketData:
                     for tf in TIMEFRAMES:
                         cached = self._vcache.get(tf)
                         if not cached or now - cached[0] >= CACHE_TTL[tf]:
-                            self._vcache[tf] = (now, await fetch_volume_candles(client, self.volume_symbol, tf))
+                            vol = await fetch_volume_candles(client, self.volume_symbol, tf)
+                            self._vcache[tf] = (now, drop_closed(vol, tf))
                 except Exception as e:
                     log.warning("Volume source unavailable, retrying in 30 min: %s", e)
                     self._volume_off_until = now + 1800
@@ -102,3 +114,19 @@ class MarketData:
         candles = {tf: self._cache[tf][1] for tf in TIMEFRAMES}
         volumes = {tf: v[1] for tf, v in self._vcache.items()}
         return candles, volumes
+
+    async def _get_binance(self, client: httpx.AsyncClient, now: float):
+        """Crypto: one Binance request per stale timeframe gives candles and volume together."""
+        for tf in TIMEFRAMES:
+            cached = self._cache.get(tf)
+            if cached and now - cached[0] < min(CACHE_TTL[tf], 240):
+                continue
+            try:
+                self._cache[tf] = (now, await fetch_volume_candles(client, self.symbol, tf))
+            except Exception as e:
+                if not cached or tf == "5min":
+                    raise MarketDataError(f"Binance {self.symbol} {tf}: {e}") from e
+                log.warning("Using cached %s %s candles: %s", self.symbol, tf, e)
+        candles = {tf: self._cache[tf][1] for tf in TIMEFRAMES}
+        self._vcache = {tf: (now, c) for tf, c in candles.items()}
+        return candles, dict(candles)

@@ -17,7 +17,8 @@ import httpx
 import sessions
 import tracker
 from levels import key_levels
-from market_data import fetch_candles
+from instruments import drop_closed
+from market_data import BINANCE_INTERVAL, BINANCE_URL, fetch_candles
 from setups import STYLES, analyze_market, find_setup
 from storage import stats
 
@@ -155,10 +156,35 @@ def optimize(candles_by_tf: dict[str, list[dict]], style: str, min_trades: int =
             "ranked": ranked, "too_few": len(rows) - len(usable), "min_trades": min_trades}
 
 
-async def fetch_history(api_key: str, symbol: str, style: str) -> dict[str, list[dict]]:
+async def fetch_binance_history(client: httpx.AsyncClient, symbol: str, tf: str, total: int = 5000) -> list[dict]:
+    """Binance returns at most 1000 klines per call, so walk backwards in pages."""
+    out: list[dict] = []
+    end = None
+    while len(out) < total:
+        params = {"symbol": symbol, "interval": BINANCE_INTERVAL[tf], "limit": 1000}
+        if end:
+            params["endTime"] = end
+        resp = await client.get(BINANCE_URL, params=params, timeout=30)
+        resp.raise_for_status()
+        rows = resp.json()
+        if not rows:
+            break
+        page = [{"time": datetime.fromtimestamp(k[0] / 1000, timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                 "open": float(k[1]), "high": float(k[2]), "low": float(k[3]), "close": float(k[4]),
+                 "volume": float(k[5])} for k in rows]
+        out = page + out
+        end = rows[0][0] - 1
+        if len(rows) < 1000:
+            break
+    return out[-total:]
+
+
+async def fetch_history(api_key: str, symbol: str, style: str, source: str = "twelvedata") -> dict[str, list[dict]]:
     async with httpx.AsyncClient() as client:
         tfs = sorted(set(needed_timeframes(style)) | {"15min", "1h"}, key=TF_MIN.get)
-        return {tf: await fetch_candles(client, api_key, symbol, tf, outputsize=5000) for tf in tfs}
+        if source == "binance":
+            return {tf: await fetch_binance_history(client, symbol, tf) for tf in tfs}
+        return {tf: drop_closed(await fetch_candles(client, api_key, symbol, tf, outputsize=5000), tf) for tf in tfs}
 
 
 def main():

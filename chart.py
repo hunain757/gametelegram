@@ -93,7 +93,7 @@ def signal_chart(candles: list[dict], trade: dict, smc_read: dict, levels: dict,
     pad = (hi - lo) * 0.06
 
     order = f"{trade['direction']} {'NOW' if trade['entry_type'] == 'MARKET' else 'LIMIT'}"
-    fig, ax = _setup_axes(f"XAU/USD  {order}",
+    fig, ax = _setup_axes(f"{trade.get('symbol_name', 'XAU/USD')}  {order}",
                           f"{trade['style_label'][2:]}  ·  {tf_label} chart  ·  confidence {trade.get('confidence', 0)}%"
                           f"  ·  {trade.get('headline', '')}")
     _zones(ax, smc_read, offset, right, lo - pad, hi + pad)
@@ -125,7 +125,7 @@ def signal_chart(candles: list[dict], trade: dict, smc_read: dict, levels: dict,
     return _finish(fig)
 
 
-def market_chart(candles: list[dict], smc_read: dict, levels: dict, tf_label: str) -> bytes:
+def market_chart(candles: list[dict], smc_read: dict, levels: dict, tf_label: str, name: str = "XAU/USD") -> bytes:
     window = candles[-120:]
     offset = len(candles) - len(window)
     n = len(window)
@@ -135,7 +135,7 @@ def market_chart(candles: list[dict], smc_read: dict, levels: dict, tf_label: st
     pad = (hi - lo) * 0.05
     trend = smc_read.get("trend") or "ranging"
     price = window[-1]["close"]
-    fig, ax = _setup_axes(f"XAU/USD  {tf_label}  ·  {price:,.2f}",
+    fig, ax = _setup_axes(f"{name}  {tf_label}  ·  {price:,.2f}",
                           f"Structure: {trend}  ·  zone: {smc_read['range']['zone']}  ·  "
                           "green/red boxes = order blocks & FVGs, dotted = key levels, dashed = liquidity")
     _zones(ax, smc_read, offset, right, lo - pad, hi + pad)

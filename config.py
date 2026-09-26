@@ -12,6 +12,14 @@ def _list(raw: str) -> list[str]:
     return [x for x in raw.replace(" ", "").split(",") if x]
 
 
+def _markets(raw: str) -> list[str]:
+    keys = [k.upper().replace("/", "") for k in _list(raw)] or ["XAUUSD"]
+    unknown = set(keys) - {"XAUUSD", "BTCUSD"}
+    if unknown:
+        raise SystemExit(f"Unknown MARKETS in .env: {', '.join(unknown)} (use XAUUSD, BTCUSD)")
+    return list(dict.fromkeys(keys))
+
+
 @dataclass(frozen=True)
 class Config:
     telegram_token: str
@@ -44,6 +52,7 @@ class Config:
     dashboard_open: bool
     strict_mode: bool
     news_feeds: tuple
+    markets: list[str]
 
 
 def load_config() -> Config:
@@ -92,6 +101,7 @@ def load_config() -> Config:
         news_currencies=tuple(_list(os.getenv("NEWS_CURRENCIES", "USD"))),
         briefings=os.getenv("BRIEFINGS", "on").lower() not in ("0", "off", "false", "no"),
         news_feeds=tuple(_list(os.getenv("NEWS_FEEDS", "https://www.fxstreet.com/rss/news,https://www.forexlive.com/feed/news"))),
+        markets=_markets(os.getenv("MARKETS", "XAUUSD,BTCUSD")),
         strict_mode=os.getenv("STRICT_MODE", "on").lower() not in ("0", "off", "false", "no"),
         dashboard_port=int(os.getenv("DASHBOARD_PORT", "8080")),
         dashboard_host=os.getenv("DASHBOARD_HOST", "127.0.0.1"),

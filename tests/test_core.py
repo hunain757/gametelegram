@@ -21,6 +21,7 @@ from storage import Storage, stats
 
 # Test scenarios use random data; strict mode is tested on its own below.
 os.environ.setdefault("STRICT_MODE", "off")
+os.environ.setdefault("MARKETS", "XAUUSD")  # single market unless a test adds BTC itself
 
 SESSION = {"sessions": ["London"], "killzone": "London Open", "utc_time": "08:00"}
 
@@ -906,3 +907,98 @@ class OptimizeAndWeekendTests(InteractionTests):
         self.assertEqual(notes, ["Market closed"])
         self.assertIsNotNone(self.gb.market)
         self.assertIn("refreshed", self.gb.desk.monitor.log[-1]["text"])
+
+
+class MultiMarketTests(unittest.TestCase):
+    """Gold closed (weekend) while bitcoin trades: BTC is scanned, signalled and shown separately."""
+
+    def setUp(self):
+        os.environ.update(TELEGRAM_BOT_TOKEN="1:x", GEMINI_API_KEY="x", TWELVEDATA_API_KEY="x")
+        import bot as botmod
+        from config import load_config
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ.update(DATA_FILE=os.path.join(self.tmp.name, "d.json"), MARKETS="XAUUSD,BTCUSD")
+        try:
+            self.gb = botmod.GoldBot(load_config())
+        finally:
+            os.environ["MARKETS"] = "XAUUSD"
+            os.environ.pop("DATA_FILE")
+        self.gb.desk = fake_desk()
+        setup, market, data = first_setup()
+        btc = {tf: [dict(c, open=c["open"] * 25, high=c["high"] * 25, low=c["low"] * 25, close=c["close"] * 25,
+                         volume=100 + (i % 7) * 30) for i, c in enumerate(cs)] for tf, cs in data.items()}
+        self.style = setup["style"]
+
+        async def gold():
+            return data, {}
+
+        async def bitcoin():
+            return btc, btc
+        self.gb.feeds["XAUUSD"].get = gold
+        self.gb.feeds["BTCUSD"].get = bitcoin
+
+        async def no_news():
+            return None
+        self.gb.news.refresh = no_news
+        self.gb.headlines.refresh = no_news
+        self.sent = []
+        sent = self.sent
+
+        class FakeBot:
+            async def send_message(self, chat_id, text, **kw):
+                sent.append(text)
+                return types.SimpleNamespace(message_id=len(sent))
+
+            async def send_photo(self, chat_id, photo, caption=None, **kw):
+                sent.append(caption)
+                return types.SimpleNamespace(message_id=len(sent), photo=[types.SimpleNamespace(file_id="F")])
+        self.bot = FakeBot()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_btc_scanned_while_gold_closed(self):
+        import sessions as sess
+        orig = sess.is_market_open
+        sess.is_market_open = lambda now=None: False
+        try:
+            self.gb.storage.set_subscribed(5, True)
+            notes = asyncio.run(self.gb.scan(self.bot))
+        finally:
+            sess.is_market_open = orig
+        self.assertTrue(any("BTC/USD" in n for n in notes))
+        self.assertFalse(any("XAU/USD" in n and "signal" in n for n in notes))
+        trades = self.gb.storage.open_trades()
+        self.assertTrue(trades and all(t["instrument"] == "BTCUSD" and t["pip"] == 1.0 for t in trades))
+        self.assertTrue(any("BTC/USD" in (m or "") for m in self.sent))
+        self.assertIn("XAUUSD", self.gb.markets)  # closed gold still refreshed for the charts
+
+        st = self.gb.dashboard_state()
+        self.assertEqual({i["key"] for i in st["instruments"]}, {"XAUUSD", "BTCUSD"})
+        self.assertIsNotNone(st["markets"]["BTCUSD"])
+        cd = self.gb.chart_data("15min", "BTCUSD")
+        self.assertEqual(cd["symbol"], "BTC/USD")
+        self.assertTrue(cd["market_open"])
+        self.assertEqual(len({(m["time"], m["text"], m["position"]) for m in cd["markers"]}), len(cd["markers"]))
+        text, kb = asyncio.run(self.gb.screen("mkt:BTCUSD", 5, 5))
+        self.assertIn("BTC/USD", text)
+
+    def test_drop_closed_and_binance_pagination(self):
+        import backtest
+        from instruments import drop_closed
+        weekend = [candle("2026-09-26 03:00:00", 1, 1, 1, 1), candle("2026-09-25 20:55:00", 1, 2, 0, 1)]
+        self.assertEqual([c["time"] for c in drop_closed(weekend, "5min")], ["2026-09-25 20:55:00"])
+
+        pages = []
+
+        class Client:
+            async def get(self, url, params, timeout):
+                end = params.get("endTime", 1_790_000_000_000)
+                pages.append(end)
+                rows = [[t * 300_000, "1", "2", "0.5", "1.5", "10"] for t in range(max(0, end // 300_000 - 999),
+                                                                                    end // 300_000 + 1)]
+                return types.SimpleNamespace(raise_for_status=lambda: None, json=lambda: rows)
+        out = asyncio.run(backtest.fetch_binance_history(Client(), "BTCUSDT", "5min", total=1500))
+        self.assertEqual(len(out), 1500)
+        self.assertEqual(len(pages), 2)
+        self.assertTrue(all(a["time"] < b["time"] for a, b in zip(out, out[1:])))

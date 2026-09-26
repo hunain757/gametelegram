@@ -53,10 +53,12 @@ class Dashboard:
                     elif u.path == "/api/state":
                         self._send(200, json.dumps(dash.gb.dashboard_state(), default=str).encode(), "application/json")
                     elif u.path == "/api/candles":
-                        data = dash.gb.chart_data(parse_qs(u.query).get("tf", ["15min"])[0])
+                        q = parse_qs(u.query)
+                        data = dash.gb.chart_data(q.get("tf", ["15min"])[0], q.get("sym", [None])[0])
                         self._send(200, json.dumps(data, default=str).encode(), "application/json")
                     elif u.path == "/api/live":
-                        self._send(200, json.dumps(dash.gb.live_price(), default=str).encode(), "application/json")
+                        live = dash.gb.live_price(parse_qs(u.query).get("sym", [None])[0])
+                        self._send(200, json.dumps(live, default=str).encode(), "application/json")
                     elif u.path == "/static/lightweight-charts.js":
                         self._send(200, STATIC_JS.read_bytes(), "application/javascript")
                     elif u.path == "/api/chart.png":
@@ -78,7 +80,9 @@ class Dashboard:
                 if u.path not in actions:
                     self._send(404, b"not found", "text/plain")
                     return
-                asyncio.run_coroutine_threadsafe(actions[u.path](), dash.loop)
+                sym = parse_qs(u.query).get("sym", [None])[0]
+                coro = actions[u.path](sym) if u.path == "/api/practice" else actions[u.path]()
+                asyncio.run_coroutine_threadsafe(coro, dash.loop)
                 self._send(202, b'{"started": true}', "application/json")
 
         self.server = ThreadingHTTPServer((self.host, self.port), Handler)

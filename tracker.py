@@ -14,9 +14,9 @@ from datetime import datetime, timedelta, timezone
 MAX_ACTIVE_DAYS = 7
 
 
-def pips(diff: float) -> float:
-    """Gold: 1 pip = $0.10."""
-    return round(diff * 10, 1)
+def pips(diff: float, pip: float = 0.1) -> float:
+    """Price distance in pips (gold: 1 pip = $0.10, bitcoin: 1 pip = $1)."""
+    return round(diff / pip, 1)
 
 
 def new_trade(setup: dict, verdict: dict, candle_time: str, now: datetime | None = None) -> dict:
@@ -29,6 +29,10 @@ def new_trade(setup: dict, verdict: dict, candle_time: str, now: datetime | None
     active = setup["entry_type"] == "MARKET"
     return {
         "id": secrets.token_hex(4),
+        "instrument": setup.get("instrument", "XAUUSD"),
+        "symbol_name": setup.get("symbol_name", "XAU/USD"),
+        "pip": setup.get("pip", 0.1),
+        "contract": setup.get("contract", 100),
         "style": setup["style"],
         "style_label": setup["style_label"],
         "direction": setup["direction"],

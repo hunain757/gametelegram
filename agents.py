@@ -47,7 +47,7 @@ ANALYSTS = [
     },
     {
         "key": "volume", "name": "Volume Profile & Order Flow Analyst", "icon": "📊",
-        "focus": "Volume (PAXG/USDT, tokenized gold): relative volume, delta (buy/sell pressure), volume bubbles "
+        "focus": "Volume (Binance: PAXG/USDT for gold, spot volume for crypto): relative volume, delta (buy/sell pressure), volume bubbles "
                  "(institutional candles), POC and value area. Does volume confirm this move or show absorption "
                  "against it? If volume data is unavailable, say so and judge displacement only.",
     },
@@ -66,7 +66,7 @@ ANALYSTS = [
     {
         "key": "session_news", "name": "Session, News & Macro Analyst", "icon": "📰",
         "focus": "Timing and macro: session and killzone, ADR already used, the Asian range, upcoming high-impact "
-                 "USD news and the latest gold/USD/Fed headlines. Is this the right time for this trade?",
+                 "USD news and the latest gold/crypto/USD/Fed headlines. Is this the right time for this trade?",
     },
 ]
 
@@ -95,7 +95,7 @@ AUDITOR = {"key": "auditor", "name": "Signal Auditor", "icon": "✅"}
 PIPELINE = [("Stage 1 · Analysts", ANALYSTS), ("Stage 2 · Verifiers", VERIFIERS),
             ("Stage 3 · Decision", [HEAD]), ("Stage 4 · Final check", [AUDITOR])]
 
-SPECIALIST_PROMPT = """You are the {name} on a professional XAU/USD (gold) trading desk that trades Smart Money Concepts.
+SPECIALIST_PROMPT = """You are the {name} on a professional {instrument} trading desk that trades Smart Money Concepts.
 Your job: {focus}
 
 A rule-based engine proposed this setup:
@@ -111,7 +111,7 @@ Reply with JSON only:
 {{"vote": "TAKE" or "SKIP", "score": 0-100, "summary": "one short sentence", "points": ["up to 3 short points"]}}
 """
 
-HEAD_PROMPT = """You are the Head Trader of a professional XAU/USD (gold) desk that trades Smart Money Concepts.
+HEAD_PROMPT = """You are the Head Trader of a professional {instrument} desk that trades Smart Money Concepts.
 The engine proposed this setup:
 {setup}
 
@@ -135,7 +135,7 @@ Reply with JSON only:
   "reason": "1-2 short sentences in simple English"}}
 """
 
-DEBATE_PROMPT = """You are the {name} on a professional XAU/USD (gold) trading desk that trades Smart Money Concepts.
+DEBATE_PROMPT = """You are the {name} on a professional {instrument} trading desk that trades Smart Money Concepts.
 Your job: {focus}
 
 Setup:
@@ -155,7 +155,7 @@ supports you. Reply with JSON only:
   "reply": "one sentence answering the challenge", "summary": "your updated one-sentence view"}}
 """
 
-VERIFIER_PROMPT = """You are the {name} on a professional XAU/USD (gold) trading desk that trades Smart Money Concepts.
+VERIFIER_PROMPT = """You are the {name} on a professional {instrument} trading desk that trades Smart Money Concepts.
 Your job: {focus}
 
 The engine proposed this setup:
@@ -173,7 +173,7 @@ Be strict. Reply with JSON only:
 {{"vote": "TAKE" or "SKIP", "score": 0-100, "summary": "one short sentence", "points": ["up to 3 short points"]}}
 """
 
-AUDITOR_PROMPT = """You are the Signal Auditor, the last check before a XAU/USD (gold) signal is sent to traders.
+AUDITOR_PROMPT = """You are the Signal Auditor, the last check before a {instrument} signal is sent to traders.
 Setup from the engine:
 {setup}
 
@@ -190,7 +190,7 @@ Reply with JSON only:
 {{"approve": true or false, "issues": ["up to 3 short issues"], "note": "one short sentence"}}
 """
 
-MARKET_VIEW_PROMPT = """You are a senior XAU/USD (gold) analyst who trades Smart Money Concepts.
+MARKET_VIEW_PROMPT = """You are a senior {instrument} analyst who trades Smart Money Concepts.
 Market read (per timeframe):
 {market}
 
@@ -509,16 +509,16 @@ class TradingDesk:
         return list(results.values())
 
     async def review(self, setup: dict, market: dict, session: dict, history: str = "",
-                     practice: bool = False) -> dict:
+                     practice: bool = False, instrument: str = "XAU/USD (gold)") -> dict:
         """Run the whole desk on one setup. Returns a verdict dict with 'approved'."""
         ctx = {"setup": setup_brief(setup), "market": market_brief(market), "session": json.dumps(session),
-               "history": history}
+               "history": history, "instrument": instrument}
         mon = getattr(self, "monitor", None) or Monitor()
         mon.set_phase("ai_review")
         for a in VERIFIERS + [HEAD, AUDITOR]:
             mon.agent(a["key"], "waiting", summary="Waiting for reports…", vote=None, score=None, points=[])
         mon.event(("🧪 PRACTICE review (no signal will be sent): " if practice else "🧠 AI desk reviewing ")
-                  + f"{setup['style_label']} {setup['direction']} @ {setup['entry']} (engine score {setup['score']})")
+                  + f"{setup.get('symbol_name', 'XAU/USD')} {setup['style_label']} {setup['direction']} @ {setup['entry']} (engine score {setup['score']})")
         verdict = await self._review(setup, ctx, mon)
         mon.agent("head", "done" if not verdict.get("ai_down") else "error",
                   vote="TAKE" if verdict["approved"] else "SKIP", score=verdict["confidence"],
@@ -526,7 +526,7 @@ class TradingDesk:
         mon.event(f"👑 Head Trader: {'✅ APPROVED' if verdict['approved'] else '❌ REJECTED'} – "
                   f"{verdict.get('reject_reason') or verdict.get('headline') or verdict.get('reason')}",
                   "take" if verdict["approved"] else "skip")
-        mon.review({"practice": practice, "style": setup["style_label"], "direction": setup["direction"], "entry": setup["entry"],
+        mon.review({"practice": practice, "symbol": setup.get("symbol_name", "XAU/USD"), "style": setup["style_label"], "direction": setup["direction"], "entry": setup["entry"],
                     "score": setup["score"], "votes": verdict["votes"], "approved": verdict["approved"],
                     "confidence": verdict["confidence"], "reason": verdict.get("reject_reason") or verdict.get("reason"),
                     "reports": [{k: r.get(k) for k in ("icon", "name", "vote", "score", "changed")}
@@ -558,7 +558,7 @@ class TradingDesk:
             mon.agent(r["key"], "thinking", summary="Answering the verifiers' challenge…")
             try:
                 text, model = await self._ask(DEBATE_PROMPT.format(
-                    name=agent["name"], focus=agent["focus"], own=f"{r['vote']} {r['score']} – {r['summary']}",
+                    instrument=ctx.get("instrument", "XAU/USD (gold)"), name=agent["name"], focus=agent["focus"], own=f"{r['vote']} {r['score']} – {r['summary']}",
                     challenges=challenges, setup=ctx["setup"], market=ctx["market"]),
                     preferred=self.model_for(ANALYSTS.index(agent) + 1))
                 d = parse_json(text)
@@ -676,7 +676,7 @@ class TradingDesk:
         started = time.monotonic()
         try:
             text, model = await self._ask(AUDITOR_PROMPT.format(
-                setup=ctx["setup"], decision=json.dumps({k: head.get(k) for k in ("decision", "confidence", "reason")}),
+                instrument=ctx.get("instrument", "XAU/USD (gold)"), setup=ctx["setup"], decision=json.dumps({k: head.get(k) for k in ("decision", "confidence", "reason")}),
                 levels=json.dumps(final), reports=_reports_text(reports), min_rr=self.min_rr),
                 preferred=self.model_for(len(SPECIALISTS) + 1))
             audit = parse_json(text)
@@ -698,7 +698,8 @@ class TradingDesk:
             verdict["reject_reason"] = "vetoed by Signal Auditor: " + ("; ".join(issues) or note)
         return verdict
 
-    async def market_view(self, market: dict, session: dict) -> str:
-        text, _ = await self._ask(MARKET_VIEW_PROMPT.format(market=market_brief(market), session=json.dumps(session)),
+    async def market_view(self, market: dict, session: dict, instrument: str = "XAU/USD (gold)") -> str:
+        text, _ = await self._ask(MARKET_VIEW_PROMPT.format(market=market_brief(market), session=json.dumps(session),
+                                                            instrument=instrument),
                                   json_mode=False)
         return text.strip()

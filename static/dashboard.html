@@ -18,6 +18,7 @@ background:rgba(7,10,16,.92);backdrop-filter:blur(8px);border-bottom:1px solid v
 .ticker{display:flex;align-items:baseline;gap:8px;padding:6px 14px;border-radius:10px;background:var(--panel2);border:1px solid var(--line)}
 .ticker .px{font:700 22px/1 ui-monospace,Consolas,monospace;transition:color .3s}.ticker .src{font-size:11px;color:var(--mut)}
 .up{color:var(--green)!important}.down{color:var(--red)!important}
+.symtabs{display:flex;gap:6px}.symtabs button{padding:7px 12px;font-size:13px}
 .pills{display:flex;flex-wrap:wrap;gap:6px;flex:1;min-width:0}.pill{padding:4px 10px;border-radius:99px;background:var(--panel2);border:1px solid var(--line);font-size:12px}
 .ok{color:var(--green)}.bad{color:var(--red)}.warn{color:var(--amber)}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);margin-right:5px;box-shadow:0 0 8px var(--green);animation:blink 1.6s infinite}
@@ -77,7 +78,8 @@ background:var(--panel2);border:1px solid var(--line);font-size:13px;animation:f
 </head>
 <body>
 <header>
-  <div class="brand"><span style="font-size:24px">🏆</span><div><b>Gold AI Control Room</b><br><small>XAU/USD · 13-agent desk · local only</small></div></div>
+  <div class="brand"><span style="font-size:24px">🏆</span><div><b>Gold AI Control Room</b><br><small>Gold & Bitcoin · 13-agent desk · local only</small></div></div>
+  <div class="symtabs" id="symtabs"></div>
   <div class="ticker"><span class="px" id="px">—</span><span class="src" id="pxsrc">waiting for data</span></div>
   <div class="pills" id="pills"></div>
   <div style="display:flex;gap:8px">
@@ -99,9 +101,10 @@ background:var(--panel2);border:1px solid var(--line);font-size:13px;animation:f
       <span class="toggles"><label><input type="checkbox" id="onlySel"> only the selected agent</label></span></h2>
     <div id="chat" class="chat"></div></section>
   <div class="row">
-    <section><h2><span>📈 Live chart · XAU/USD</span>
+    <section><h2><span>📈 Live chart</span>
         <span class="tabs" id="tabs"></span></h2>
       <div class="toggles">
+        <button class="alt" style="padding:3px 10px;font-size:12px" onclick="resetView()">⟲ Reset view</button>
         <label><input type="checkbox" data-o="zones" checked> OB / Breaker / FVG</label>
         <label><input type="checkbox" data-o="levels" checked> Key levels</label>
         <label><input type="checkbox" data-o="liq" checked> Liquidity</label>
@@ -127,11 +130,12 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const TFS = [["5min","M5",300],["15min","M15",900],["1h","H1",3600],["4h","H4",14400],["1day","D1",86400]];
 let tf = "15min", tfSec = 900, chartVersion = "", state = null, selected = "head", lastFlowId = 0, lastPx = null;
+let sym = localStorage.getItem("sym") || "XAUUSD";
 const show = {zones:true, levels:true, liq:true, bubbles:true, profile:true, trades:true};
 
 async function act(what){
   const b = $({scan: "scanBtn", ping: "pingBtn", practice: "practiceBtn"}[what]); b.disabled = true;
-  try { await fetch("/api/" + what, {method: "POST"}); } finally { setTimeout(() => b.disabled = false, what === "practice" ? 20000 : 5000); }
+  try { await fetch("/api/" + what + (what === "practice" ? "?sym=" + sym : ""), {method: "POST"}); } finally { setTimeout(() => b.disabled = false, what === "practice" ? 20000 : 5000); }
 }
 
 /* ---------------- agent network ---------------- */
@@ -256,16 +260,20 @@ function clearLines(){ priceLines.forEach(l => series.removePriceLine(l)); price
 function line(price, color, title, style, axis){ priceLines.push(series.createPriceLine({price, color, lineWidth: 1,
   lineStyle: style ?? LightweightCharts.LineStyle.Dashed, axisLabelVisible: axis ?? false, title})); }
 async function loadChart(){
-  const r = await fetch("/api/candles?tf=" + tf); chartData = await r.json();
+  const r = await fetch(`/api/candles?tf=${tf}&sym=${sym}`); chartData = await r.json();
   if (!chartData) { $("legend").textContent = "No market data yet – press ⚡ Scan now"; series.setData([]); return; }
   series.setData(chartData.candles); series.setMarkers(chartData.markers);
   liveBar = Object.assign({}, chartData.candles[chartData.candles.length - 1]);
   drawLines();
   const n = chartData.candles.length;
   chart.timeScale().setVisibleLogicalRange({from: Math.max(n - 140, 0), to: n + 8});
-  $("legend").textContent = `${TFS.find(t => t[0] === tf)[1]} · ${chartData.candles.length} real candles` +
+  $("legend").textContent = `${chartData.symbol} · ${TFS.find(t => t[0] === tf)[1]} · ${chartData.candles.length} real candles` +
     (chartData.market_open ? " · live" : " · market closed (no live updates)") + " · arrows = BOS/CHoCH · ● = sweep";
   drawOverlay();
+}
+function resetView(){
+  chart.priceScale("right").applyOptions({autoScale: true});
+  if (chartData) { const n = chartData.candles.length; chart.timeScale().setVisibleLogicalRange({from: Math.max(n - 140, 0), to: n + 8}); }
 }
 function drawLines(){
   clearLines(); if (!chartData) return;
@@ -285,7 +293,7 @@ function drawOverlay(){
   if (show.zones) chartData.zones.forEach(z => {
     let x = ts.timeToCoordinate(z.from); if (x === null) x = 0; const y1 = Y(z.top), y2 = Y(z.bottom); if (y1 === null || y2 === null) return;
     const col = z.kind === "Breaker" ? [179,107,255] : z.dir === "bullish" ? [34,199,122] : [240,79,90];
-    const a = z.kind === "FVG" ? .10 : .18;
+    const a = z.kind === "FVG" ? .07 : .11;
     octx.fillStyle = `rgba(${col},${a})`; octx.fillRect(x, Math.min(y1, y2), right - x, Math.abs(y2 - y1) || 1);
     octx.strokeStyle = `rgba(${col},.45)`; octx.strokeRect(x, Math.min(y1, y2), right - x, Math.abs(y2 - y1) || 1);
     octx.fillStyle = `rgba(${col},.95)`; octx.font = "10px sans-serif"; octx.fillText(z.kind, x + 4, Math.min(y1, y2) + 11);
@@ -323,7 +331,7 @@ $("tabs").onclick = e => { const b = e.target.closest("button"); if (!b) return;
 function paintTabs(){ document.querySelectorAll("#tabs button").forEach(b => b.className = b.dataset.tf === tf ? "" : "alt"); }
 
 async function live(){
-  let v; try { v = await (await fetch("/api/live")).json(); } catch (e) { return; }
+  let v; try { v = await (await fetch("/api/live?sym=" + sym)).json(); } catch (e) { return; }
   if (!v) return;
   const px = v.price, el_ = $("px");
   el_.textContent = px.toFixed(2); el_.classList.remove("up", "down");
@@ -343,12 +351,16 @@ function pill(t, c){ return `<span class="pill ${c || ""}">${t}</span>`; }
 function render(){
   const s = state; if (!s) return; const st = s.status;
   const phase = {scanning: "🔎 Scanning market", ai_review: "🧠 AI desk working", idle: "💤 Waiting", starting: "⏳ Starting"}[s.phase] || s.phase;
-  const age = s.data_age;
+  const insts = s.instruments || [];
+  if (!insts.find(i => i.key === sym) && insts.length) sym = insts[0].key;
+  $("symtabs").innerHTML = insts.length > 1 ? insts.map(i => `<button class="${i.key === sym ? "" : "alt"}" onclick="setSym('${i.key}')">${i.icon} ${esc(i.label)}${i.open ? "" : " 💤"}</button>`).join("") : "";
+  const age = (s.data_ages || {})[sym] || s.data_age;
+  const mk = (s.markets || {})[sym] || s.market;
   $("pills").innerHTML = [
     pill('<span class="dot"></span>Bot running', "ok"),
-    pill(st.market_open ? "🟢 Market open" : "🔴 Market closed", st.market_open ? "ok" : "warn"),
+    pill(age && age.open === false ? "🔴 Market closed" : "🟢 Market open", age && age.open === false ? "warn" : "ok"),
     pill(phase, s.phase === "idle" ? "" : "warn"),
-    age ? pill(`🕯 Last candle ${age.last_candle} (${age.minutes} min ago)`, age.minutes > 20 && st.market_open ? "bad" : "") : pill("No data yet", "warn"),
+    age ? pill(`🕯 Last candle ${age.last_candle} (${age.minutes} min ago)`, age.minutes > 20 && age.open ? "bad" : "") : pill("No data yet", "warn"),
     s.next_scan_in != null ? pill("Next scan in " + s.next_scan_in + "s") : "",
     st.fail_count ? pill("⚠️ " + st.fail_count + " failed scans", "bad") : "",
   ].join("");
@@ -366,16 +378,16 @@ function render(){
       <td class="${r.approved ? "ok" : "bad"}">${r.approved ? "✅ SENT" : "❌ SKIPPED"}<br><span class="role">${esc(r.reason || "")}</span></td></tr>`).join("") + "</table>"
     : '<div class="empty">No setup reviewed yet. The desk only works when the engine finds a real setup.</div>';
   $("trades").innerHTML = s.trades.length ? `<table><tr><th>Trade</th><th>Entry</th><th>SL</th><th>TPs</th><th>Status</th></tr>` +
-    s.trades.map(t => `<tr><td>${t.direction}<br><span class="role">${esc(t.style_label)}</span></td><td>${t.entry}</td><td>${t.stop_loss}</td>
+    s.trades.map(t => `<tr><td>${esc(t.symbol || "")} ${t.direction}<br><span class="role">${esc(t.style_label)}</span></td><td>${t.entry}</td><td>${t.stop_loss}</td>
       <td>${t.tps.join("<br>")}</td><td>${t.status}<br>TP ${t.stage}/3</td></tr>`).join("") + "</table>" : '<div class="empty">No open trades.</div>';
   const cal = (s.calendar || []).map(e => `<div>${e.impact === "High" ? "🔴" : "🟠"} <b>${esc(e.time)}</b> ${esc(e.title)} <span class="role">${esc([e.forecast && "F " + e.forecast, e.previous && "P " + e.previous].filter(Boolean).join(" · "))}</span></div>`).join("");
   const hl = (s.headlines || []).map(h => `<div>${h.gold ? "🥇" : "🗞"} <span class="role">${esc(h.time)} ${esc(h.source)}</span><br>${h.link ? `<a href="${esc(h.link)}" target="_blank" rel="noopener">${esc(h.title)}</a>` : esc(h.title)}</div>`).join("");
   $("news").innerHTML = (cal ? "<b>📅 Next 48h (USD)</b>" + cal : '<div class="role">📅 No high/medium USD events in the next 48h.</div>') +
     (hl ? "<br><b>🗞 Headlines</b>" + hl : `<div class="role">🗞 ${s.news_error ? "Headlines unavailable: " + esc(s.news_error.slice(0, 140)) : "No gold/USD headlines in the last 24h yet."}</div>`);
-  $("market").innerHTML = s.market ? `<table><tr><th>TF</th><th>Trend</th><th>Last event</th><th>Zone</th><th>RSI</th><th>Candles</th></tr>` +
-    s.market.tfs.map(r => `<tr><td><b>${r.label}</b></td><td class="${r.trend === "bullish" ? "ok" : r.trend === "bearish" ? "bad" : ""}">${r.trend || "ranging"}</td>
+  $("market").innerHTML = mk ? `<table><tr><th>TF</th><th>Trend</th><th>Last event</th><th>Zone</th><th>RSI</th><th>Candles</th></tr>` +
+    mk.tfs.map(r => `<tr><td><b>${r.label}</b></td><td class="${r.trend === "bullish" ? "ok" : r.trend === "bearish" ? "bad" : ""}">${r.trend || "ranging"}</td>
       <td>${esc(r.event || "–")}</td><td>${r.zone}</td><td>${r.rsi ?? "–"}</td><td>${esc(r.patterns || "")}</td></tr>`).join("") + "</table>" +
-    `<div class="role" style="margin-top:6px">${Object.entries(s.market.levels).map(([k, v]) => k + " " + v).join(" · ")}${s.market.adr && s.market.adr.adr ? ` · ADR ${s.market.adr.adr} (${s.market.adr.used_pct}% used)` : ""}</div>`
+    `<div class="role" style="margin-top:6px">${Object.entries(mk.levels).map(([k, v]) => k + " " + v).join(" · ")}${mk.adr && mk.adr.adr ? ` · ADR ${mk.adr.adr} (${mk.adr.used_pct}% used)` : ""}</div>`
     : '<div class="empty">No market data yet.</div>';
   const kv = o => Object.entries(o).map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("");
   $("system").innerHTML = kv({"Uptime": st.uptime, "Price source": age ? esc(age.source) : "–", "Last candle": age ? `${age.last_candle} (${age.minutes} min ago)` : "–",
@@ -393,8 +405,9 @@ async function refresh(){
   catch (e) { $("pills").innerHTML = pill("❌ Bot not running – start it with start.bat", "bad"); return; }
   if (!Object.keys(pos).length || net.childElementCount === 0) buildNet(state.agents);
   render(); animateFlows(state.flows || []); renderChat(state.flows || []);
-  if (state.chart_version && state.chart_version + tf !== chartVersion) { chartVersion = state.chart_version + tf; loadChart(); }
+  if (state.chart_version && state.chart_version + tf + sym !== chartVersion) { chartVersion = state.chart_version + tf + sym; loadChart(); }
 }
+function setSym(k){ sym = k; try { localStorage.setItem("sym", k); } catch (e) {} lastPx = null; chartVersion = ""; liveBar = null; refresh(); live(); }
 paintTabs(); refresh(); live();
 setInterval(refresh, 2000); setInterval(live, 5000);
 </script>

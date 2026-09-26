@@ -1,8 +1,18 @@
-# 🏆 Gold SMC AI Signal Bot (Telegram)
+# 🏆 Gold & Bitcoin SMC AI Signal Bot (Telegram)
 
-A Telegram bot that scans **gold (XAU/USD)** around the clock with a **Smart Money Concepts engine**,
+A Telegram bot that scans **gold (XAU/USD)** and **bitcoin (BTC/USD)** around the clock with a **Smart Money Concepts engine**,
 **volume analysis** and a **13-agent Gemini AI desk**, sends **scalping / intraday / swing** signals
 with entry, SL and 3 TPs, and **tracks every trade live** (entry fill, TP1/TP2/TP3, SL, expiry).
+
+## Markets
+
+| Market | Candles | Volume | Hours |
+|---|---|---|---|
+| 🥇 Gold `XAUUSD` | Twelve Data (weekend/closed candles removed) | Binance PAXG/USDT | Sun 22:00 → Fri 21:00 UTC |
+| ₿ Bitcoin `BTCUSD` | Binance BTC/USDT (free, no key) | Binance (real) | 24/7 |
+
+Choose with `MARKETS=XAUUSD,BTCUSD` in `.env`. Every signal, chart, lot size (gold 1 lot = 100 oz, BTC 1 lot = 1 BTC),
+backtest and dashboard view is per market; the dashboard has Gold / Bitcoin tabs.
 
 ## How it works
 
