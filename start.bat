@@ -34,6 +34,7 @@ echo Mistral API key (console.mistral.ai/api-keys se) - sab se zyada free quota 
 set MK=
 set /p MK=Mistral API key paste karein (ya skip ke liye Enter): 
 if "%MK%"=="" goto run
+>> .env echo.
 >> .env echo MISTRAL_API_KEY=%MK%
 echo Mistral key save ho gayi.
 
