@@ -78,11 +78,45 @@ cp .env.example .env      # then paste your keys into .env
 python bot.py
 ```
 
-## 24/7
+## Run it 24/7 on a server
 
-The bot scans only while it is running. To keep it on all the time, run it on a machine that
-stays on (a small VPS or a hosting service). Gold is closed on weekends (Fri ~21:00 → Sun ~22:00 UTC),
-so the bot does not scan then.
+Only run **one** copy of the bot per token (close `start.bat` on your PC once the server is running),
+otherwise Telegram rejects the second copy. A server outside your country also means no VPN is needed.
+
+### Option A – Railway (easiest, everything in the browser)
+
+1. Merge the pull request so the code is on `main`.
+2. Go to https://railway.com → **Login with GitHub**.
+3. **New Project → Deploy from GitHub repo →** `hunain757/gametelegram`. Railway finds the `Dockerfile`
+   and `railway.json` (auto-restart) by itself.
+4. Open the service → **Variables** → add `TELEGRAM_BOT_TOKEN`, `GEMINI_API_KEY`, `TWELVEDATA_API_KEY`
+   (and optionally `ADMIN_IDS`, `CHANNEL_ID`, any setting from `.env.example`).
+5. **Settings → Volumes → Add volume**, mount path **`/data`** (keeps users, trades and stats across restarts).
+6. **Settings → Region**: pick a Europe or Asia region (Binance volume data is not available from US servers).
+7. **Deploy**. The **Logs** tab should show `Gold SMC AI bot started`.
+
+Every push to `main` redeploys automatically. Railway is a paid service after its trial (a bot this size
+fits the smallest plan); check their current pricing.
+
+### Option B – Any Ubuntu / Debian VPS (cheapest long-term)
+
+Rent a small Linux VPS (1 GB RAM is plenty; Hetzner, Contabo, DigitalOcean, Vultr, or Oracle Cloud's
+free tier), open its console / SSH and run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hunain757/gametelegram/main/deploy/setup_vps.sh | sudo bash
+```
+
+It installs everything, asks for your keys once, and runs the bot as a `goldbot` service that restarts
+on crashes and reboots. Run the same command again to update to the latest code.
+
+```bash
+sudo journalctl -u goldbot -f        # live logs
+sudo systemctl restart goldbot       # restart
+sudo nano /opt/goldbot/.env          # change keys/settings (then restart)
+```
+
+Gold is closed on weekends (Fri ~21:00 → Sun ~22:00 UTC), so the bot does not scan then.
 
 ## Free-plan limits (handled by the bot)
 

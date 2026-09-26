@@ -13,6 +13,8 @@ class Storage:
     def __init__(self, path: str):
         self.path = path
         self.data = {"users": {}, "trades": [], "seen": {}}
+        if os.path.dirname(path):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
         if os.path.exists(path):
             with open(path, encoding="utf-8") as f:
                 loaded = json.load(f)
