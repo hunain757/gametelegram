@@ -1,7 +1,7 @@
 # 🏆 Gold SMC AI Signal Bot (Telegram)
 
 A Telegram bot that scans **gold (XAU/USD)** around the clock with a **Smart Money Concepts engine**,
-**volume analysis** and a **desk of 6 Gemini AI agents**, sends **scalping / intraday / swing** signals
+**volume analysis** and a **desk of 9 Gemini AI agents**, sends **scalping / intraday / swing** signals
 with entry, SL and 3 TPs, and **tracks every trade live** (entry fill, TP1/TP2/TP3, SL, expiry).
 
 ## How it works
@@ -12,6 +12,7 @@ every 5 min ─► Twelve Data: XAU/USD M5 · M15 · H1 · H4 · D1   (+ Binance
                 ▼
         SMC ENGINE (per timeframe)
         • swings, BOS / CHoCH, trend, displacement strength
+        • candlestick patterns (engulfing, pin bar, stars, inside bar), double tops/bottoms, ADR
         • order blocks, fair value gaps
         • liquidity pools, equal highs/lows, liquidity sweeps
         • key levels: PDH/PDL, previous week high/low, Asian range, daily/weekly open
@@ -30,10 +31,11 @@ every 5 min ─► Twelve Data: XAU/USD M5 · M15 · H1 · H4 · D1   (+ Binance
                 │
                 ▼ (only setups with confluence score ≥ MIN_ENGINE_SCORE)
         AI DESK (Gemini, each agent on its own model, automatic fallback when one is busy)
-        🏗 Structure  💧 Liquidity/OB  📊 Volume  ⚙️ Momentum  🛡 Risk   → vote TAKE/SKIP
-        👑 Head Trader reads all 5 reports → final TAKE/SKIP, confidence, fine-tuned levels
+        🏗 Structure  💧 Liquidity/OB  📊 Volume  🕯 Price Action  ⚙️ Momentum
+        🕐 Session/ADR/News  🛡 Risk  😈 Devil's Advocate                 → vote TAKE/SKIP
+        👑 Head Trader reads all 8 reports → final TAKE/SKIP, confidence, fine-tuned levels
                 │
-                ▼ (Head Trader TAKE + confidence ≥ 70 + ≥ 3/5 agents agree)
+                ▼ (Head Trader TAKE + confidence ≥ 70 + ≥ 5/8 agents agree)
         TELEGRAM: 📈 chart + signal + 💰 your lot size ─► live tracking replies on the signal:
         ✅ entry filled · 🎯 TP1 (SL → breakeven) · 🎯 TP2 · 🏆 TP3 · 🛑 SL · ⌛ expired
 ```

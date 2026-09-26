@@ -11,6 +11,7 @@ import smc
 import volume
 from indicators import ema, macd, rsi
 from levels import BUY_SIDE, SELL_SIDE, key_levels
+from patterns import daily_range
 
 STYLES = {
     "scalp": {"label": "⚡ Scalping", "entry": "5min", "confirm": "15min", "bias": "1h",
@@ -46,6 +47,7 @@ def analyze_market(candles_by_tf: dict[str, list[dict]], volume_by_tf: dict[str,
             },
         }
     market["levels"] = key_levels(candles_by_tf.get("1day"), candles_by_tf.get("5min"))
+    market["adr"] = daily_range(candles_by_tf.get("1day"))
     return market
 
 
@@ -256,6 +258,19 @@ def find_setup(style: str, market: dict, session: dict, min_rr: float) -> dict |
             score -= 10
         elif (bull and 40 <= r <= 65) or (not bull and 35 <= r <= 60):
             score += 5
+
+    # Price-action confirmation on the entry timeframe.
+    pa = [x for x in es.get("patterns", []) if x["direction"] == want and x.get("age", 0) <= 2]
+    if pa:
+        score += 5
+        conf.append(f"{TF_LABEL[st['entry']]} {pa[-1]['name']}")
+    if any(x["direction"] == against and x.get("age", 0) <= 1 for x in es.get("patterns", [])):
+        score -= 5
+
+    # Most of the average daily range already used: less room left today.
+    adr = market.get("adr") or {}
+    if adr.get("used_pct") and adr["used_pct"] >= 120 and style != "swing":
+        score -= 10
 
     if session.get("killzone"):
         score += 5

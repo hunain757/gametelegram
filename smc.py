@@ -5,6 +5,7 @@ liquidity pools and sweeps, and premium / discount of the dealing range.
 """
 
 from indicators import atr
+from patterns import candle_patterns, double_tops_bottoms
 
 
 def find_swings(candles: list[dict], left: int = 2, right: int = 2) -> list[dict]:
@@ -192,6 +193,9 @@ def analyze(candles: list[dict]) -> dict:
         "fvgs": fair_value_gaps(candles, min_size=a * 0.1),
         "liquidity": liquidity(candles, swings, tolerance=a * 0.15),
         "range": dealing_range(candles),
+        "patterns": candle_patterns(candles) + double_tops_bottoms(swings, tolerance=a * 0.3),
+        "recent_candles": [{k: (round(c[k], 2) if k != "time" else c[k][5:16]) for k in ("time", "open", "high", "low", "close")}
+                           for c in candles[-8:]],
         "recent": {"high": max(c["high"] for c in candles[-10:]), "low": min(c["low"] for c in candles[-10:])},
         "n": n,
     }

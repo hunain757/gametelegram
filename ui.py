@@ -51,7 +51,7 @@ def signal_card(t: dict) -> str:
         lines.append(f"🧠 <b>AI Confidence:</b> {t['confidence']}%  {bar(t['confidence'])}")
         agents = "  ".join(f"{r['icon']}{'✅' if r['vote'] == 'TAKE' else '❌' if r['vote'] == 'SKIP' else '⚠️'}"
                            for r in t.get("reports", []))
-        lines.append(f"🤖 <b>AI Desk:</b> {t['votes']}/5 agents agree   {agents}")
+        lines.append(f"🤖 <b>AI Desk:</b> {t['votes']}/{len(t.get('reports', [])) or 8} agents agree   {agents}")
     lines.append("")
     lines.append("📌 <b>Confluences</b>")
     lines += [f"  • {escape(c)}" for c in t["confluences"][:7]]
@@ -114,7 +114,7 @@ def signal_caption(t: dict, lot: str = "") -> str:
         agents = "".join(f"{r['icon']}{'✅' if r['vote'] == 'TAKE' else '❌' if r['vote'] == 'SKIP' else '⚠️'} "
                          for r in t.get("reports", []))
         lines.append(f"🧠 Confidence {t['confidence']}% {bar(t['confidence'])}")
-        lines.append(f"🤖 {t['votes']}/5 agree  {agents}")
+        lines.append(f"🤖 {t['votes']}/{len(t.get('reports', [])) or 8} agree  {agents}")
     lines += [f"• {escape(c)}" for c in t["confluences"][:3]]
     if lot:
         lines.append(lot)
@@ -198,7 +198,7 @@ def main_menu(user: dict, is_admin: bool) -> tuple[str, InlineKeyboardMarkup]:
     text = (
         "🏆 <b>GOLD SMC AI SIGNALS</b> 🏆\n"
         f"{LINE}\n"
-        "🤖 6 AI agents scan <b>XAU/USD</b> 24/5 on M5 → D1\n"
+        "🤖 9 AI agents scan <b>XAU/USD</b> 24/5 on M5 → D1\n"
         "💧 Smart Money Concepts · 📊 Volume · 📰 News filter\n"
         "🎯 Auto TP/SL tracking · 📈 Charts · 💰 Lot sizes\n\n"
         f"🔔 Alerts: <b>{'ON' if user.get('subscribed') else 'OFF'}</b>\n"
@@ -334,6 +334,12 @@ def market_dashboard(market: dict | None, session: dict, is_open: bool, scanned_
         lines.append(f"POC {p(v['poc'])} · Value area {p(v['value_area_low'])} – {p(v['value_area_high'])}")
     else:
         lines.append("Not available right now")
+    pats = [x["name"] for x in market["15min"]["smc"].get("patterns", []) if x.get("age", 0) <= 2]
+    if pats:
+        lines += ["", f"🕯 <b>M15 candles:</b> {', '.join(pats[-3:])}"]
+    adr = market.get("adr") or {}
+    if adr.get("adr"):
+        lines.append(f"📏 ADR {adr['adr']:.2f} · today {adr['today_range']:.2f} ({adr['used_pct']}% used)")
     ind = market["1h"]["ind"]
     if ind["rsi"] is not None:
         lines += ["", f"⚙️ H1 RSI {ind['rsi']:.0f} · ATR(M15) {market['15min']['smc']['atr']:.2f}"]
@@ -349,7 +355,8 @@ HELP = (
     "PDH/PDL, weekly high/low, the Asian range, premium/discount, killzones and volume.\n"
     "3️⃣ A setup needs: higher-timeframe bias + a sweep or structure shift + an OB/FVG to enter from + "
     "a clear path to TP1.\n"
-    "4️⃣ <b>5 AI specialists</b> review it (🏗 Structure · 💧 Liquidity · 📊 Volume · ⚙️ Momentum · 🛡 Risk) "
+    "4️⃣ <b>8 AI specialists</b> review it (🏗 Structure · 💧 Liquidity · 📊 Volume · 🕯 Price Action · "
+    "⚙️ Momentum · 🕐 Session & News · 🛡 Risk · 😈 Devil's Advocate) "
     "and the 👑 <b>Head Trader AI</b> makes the final call.\n"
     "5️⃣ 📰 No new trades 30 min around high-impact USD news; you get a warning before it.\n"
     "6️⃣ Signals come with a 📈 chart, 💰 your lot size, and are <b>tracked live</b>: entry, TP1/TP2/TP3, "

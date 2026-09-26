@@ -277,9 +277,9 @@ class AgentTests(unittest.TestCase):
         desk = fake_desk()
         v = asyncio.run(desk.review(setup, market, SESSION))
         self.assertTrue(v["approved"])
-        self.assertEqual(v["votes"], 5)
+        self.assertEqual(v["votes"], 8)
         self.assertIsNone(v["levels"])  # head trader's levels were invalid -> engine levels
-        self.assertEqual(desk.fake.calls, 6)
+        self.assertEqual(desk.fake.calls, 9)  # 8 specialists + head trader
 
     def test_desk_skip_and_down(self):
         setup, market, _ = first_setup()
@@ -352,6 +352,19 @@ class LevelsAndEngineTests(unittest.TestCase):
                     between = s["entry"] < edge < s["tps"][0]["price"] if s["direction"] == "BUY" \
                         else s["tps"][0]["price"] < edge < s["entry"]
                     self.assertFalse(between, f"opposing zone at {edge} blocks TP1 in {s}")
+
+
+class PatternTests(unittest.TestCase):
+    def test_candle_patterns(self):
+        from patterns import candle_patterns, daily_range, double_tops_bottoms
+        engulf = [candle("1", 10, 10.5, 9, 9.2), candle("2", 9.2, 9.4, 8.8, 9.0), candle("3", 8.9, 10.8, 8.8, 10.6)]
+        self.assertIn("Bullish Engulfing", [x["name"] for x in candle_patterns(engulf)])
+        pin = [candle("1", 10, 10.5, 9, 9.2), candle("2", 9.2, 9.4, 8.8, 9.0), candle("3", 9.6, 9.75, 7.0, 9.7)]
+        self.assertIn("Bullish Pin Bar (hammer)", [x["name"] for x in candle_patterns(pin)])
+        swings = [{"type": "high", "price": 110.0}, {"type": "low", "price": 100}, {"type": "high", "price": 110.2}]
+        self.assertEqual(double_tops_bottoms(swings, 0.5)[0]["name"], "Double Top")
+        daily = [candle(str(i), 100, 110, 100, 105) for i in range(15)] + [candle("t", 100, 105, 100, 104)]
+        self.assertEqual(daily_range(daily)["used_pct"], 50)
 
 
 class NewsTests(unittest.TestCase):

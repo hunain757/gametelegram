@@ -70,7 +70,7 @@ def load_config() -> Config:
         scan_interval_minutes=int(os.getenv("SCAN_INTERVAL_MINUTES", "5")),
         min_engine_score=int(os.getenv("MIN_ENGINE_SCORE", "55")),
         min_confidence=int(os.getenv("MIN_CONFIDENCE", "70")),
-        min_agent_votes=int(os.getenv("MIN_AGENT_VOTES", "3")),
+        min_agent_votes=int(os.getenv("MIN_AGENT_VOTES", "5")),
         min_risk_reward=float(os.getenv("MIN_RISK_REWARD", "1.5")),
         engine_only_score=int(os.getenv("ENGINE_ONLY_SCORE", "85")),
         daily_report_hour=int(os.getenv("DAILY_REPORT_HOUR_UTC", "21")),

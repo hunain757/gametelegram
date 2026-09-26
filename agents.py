@@ -1,5 +1,5 @@
-"""AI trading desk: five specialist Gemini agents review a setup in parallel,
-then a Head Trader agent reads their reports and makes the final call."""
+"""AI trading desk: eight specialist Gemini agents review a setup in parallel,
+then a Head Trader agent reads their reports and makes the final call (9 agents in total)."""
 
 import asyncio
 import json
@@ -17,33 +17,51 @@ log = logging.getLogger("goldbot.agents")
 
 SPECIALISTS = [
     {
-        "key": "structure", "name": "Structure Analyst", "icon": "🏗",
-        "focus": "Market structure across timeframes: trend on each timeframe, BOS vs CHoCH, whether the "
+        "key": "structure", "name": "Market Structure Analyst", "icon": "🏗",
+        "focus": "Market structure across all timeframes: trend on each timeframe, BOS vs CHoCH, whether the "
                  "higher timeframes truly support this direction, and whether the entry-timeframe shift is real "
                  "or just noise inside a range.",
     },
     {
         "key": "liquidity", "name": "Liquidity & Order Block Hunter", "icon": "💧",
-        "focus": "Smart-money footprint: was liquidity swept before the move, is the order block / fair value gap "
-                 "fresh and valid, is there opposing liquidity or an opposing order block right in the path, and "
-                 "are the take-profits placed at real liquidity pools.",
+        "focus": "Smart-money footprint: was liquidity (swing lows/highs, equal highs/lows, PDH/PDL, Asia range) "
+                 "swept before the move, is the order block / fair value gap fresh and valid, is there opposing "
+                 "liquidity or an opposing order block in the path, and are the targets at real liquidity pools.",
     },
     {
         "key": "volume", "name": "Volume & Order Flow Analyst", "icon": "📊",
         "focus": "Volume (from PAXG/USDT, tokenized gold): relative volume, buy/sell pressure (delta), the "
-                 "volume spike candle, POC and value area. Does volume confirm this move? If volume data is "
-                 "unavailable, judge only from price displacement and say so.",
+                 "volume spike candle, POC and value area. Does volume confirm this move or show absorption against "
+                 "it? If volume data is unavailable, judge only from displacement and say so.",
+    },
+    {
+        "key": "price_action", "name": "Price Action & Chart Pattern Reader", "icon": "🕯",
+        "focus": "Read the candles like a chart: the last candles on each timeframe (recent_candles), candlestick "
+                 "patterns (engulfing, pin bars, stars, inside bars, dojis), double tops/bottoms, rejection wicks, "
+                 "and whether the chart shows real rejection from the entry zone or price slicing through it.",
     },
     {
         "key": "momentum", "name": "Momentum & Indicator Analyst", "icon": "⚙️",
-        "focus": "EMA 20/50/200 alignment, RSI (overbought/oversold, divergence risk), MACD histogram and "
-                 "volatility (ATR). Is momentum with the trade or exhausted?",
+        "focus": "EMA 20/50/200 alignment on each timeframe, RSI (overbought/oversold, divergence risk), MACD "
+                 "histogram and volatility (ATR). Is momentum with the trade, turning, or exhausted?",
+    },
+    {
+        "key": "session_news", "name": "Session, Timing & News Analyst", "icon": "🕐",
+        "focus": "Timing: current session and killzone, how much of the average daily range (ADR) is already used, "
+                 "the Asian range, and upcoming high-impact news. Is this a good time to open this trade and can it "
+                 "reach its targets before the session / news changes the market?",
     },
     {
         "key": "risk", "name": "Risk Manager", "icon": "🛡",
-        "focus": "Stop-loss placement (is it beyond the invalidation level and outside obvious stop hunts?), "
-                 "risk/reward of each target, trading session and killzone, volatility, and whether a limit "
-                 "entry is realistic to fill before expiry. Protect capital first.",
+        "focus": "Stop-loss placement (beyond the invalidation level and outside obvious stop hunts?), risk/reward "
+                 "of each target, volatility, and whether a limit entry is realistic to fill before expiry. "
+                 "Protect capital first.",
+    },
+    {
+        "key": "devil", "name": "Devil's Advocate", "icon": "😈",
+        "focus": "Your job is to attack this trade. Find the strongest reasons it will FAIL: a trap, a fake "
+                 "breakout, counter-trend risk, a better opposite setup, liquidity that will be taken against it. "
+                 "Vote TAKE only if you honestly cannot find a serious flaw.",
     },
 ]
 
@@ -72,7 +90,7 @@ Market read (per timeframe):
 
 Session and upcoming news: {session}
 
-Your five specialists reported:
+Your eight specialists reported:
 {reports}
 
 Make the final call. Only TAKE high-quality trades where structure, liquidity and risk line up; SKIP otherwise.
@@ -103,9 +121,9 @@ def _r(x, n=2):
 
 def market_brief(market: dict) -> str:
     """Compact JSON of the per-timeframe read, for prompts."""
-    out = {"key_levels": market.get("levels", {})}
+    out = {"key_levels": market.get("levels", {}), "average_daily_range": market.get("adr", {})}
     for tf, m in market.items():
-        if tf == "levels":
+        if tf in ("levels", "adr"):
             continue
         s, v, ind = m["smc"], m["volume"], m["ind"]
         out[TF_LABEL.get(tf, tf)] = {
@@ -122,6 +140,9 @@ def market_brief(market: dict) -> str:
             "equal_lows": s["liquidity"]["equal_lows"][-2:],
             "recent_sweeps": [f"{w['side']} swept @ {w['level']:.2f}" for w in s["liquidity"]["sweeps"][-2:]],
             "range": s["range"],
+            "candle_patterns": [f"{x['name']}" + (f" @ {x['level']}" if "level" in x else f" ({x['age']} candles ago)")
+                                for x in s.get("patterns", [])][-4:],
+            "recent_candles": s.get("recent_candles", [])[-6:],
             "indicators": {k: _r(val) for k, val in ind.items()},
             "volume": v if not v.get("available") else {k: v[k] for k in (
                 "relative_volume_last_closed", "delta", "pressure", "poc", "value_area_high", "value_area_low")},
@@ -266,9 +287,10 @@ class TradingDesk:
             takers = [r["score"] for r in reports if r["vote"] == "TAKE"]
             verdict["confidence"] = round(sum(takers) / len(takers)) if takers else 0
             verdict["reason"] = "Head trader offline – decided by specialist votes."
-            verdict["approved"] = votes >= max(self.min_votes, 4) and verdict["confidence"] >= self.min_confidence
+            need = max(self.min_votes, -(-3 * len(reports) // 4))  # a clear 75% majority without the head
+            verdict["approved"] = votes >= need and verdict["confidence"] >= self.min_confidence
             if not verdict["approved"]:
-                verdict["reject_reason"] = f"head trader offline and only {votes}/5 agents agree"
+                verdict["reject_reason"] = f"head trader offline and only {votes}/{len(reports)} agents agree"
             return verdict
 
         verdict["confidence"] = int(head.get("confidence") or 0)
@@ -294,7 +316,7 @@ class TradingDesk:
             verdict["reject_reason"] = (
                 "head trader said SKIP" if not take else
                 f"confidence {verdict['confidence']} < {self.min_confidence}"
-                if verdict["confidence"] < self.min_confidence else f"only {votes}/5 agents agree")
+                if verdict["confidence"] < self.min_confidence else f"only {votes}/{len(reports)} agents agree")
         return verdict
 
     async def market_view(self, market: dict, session: dict) -> str:
