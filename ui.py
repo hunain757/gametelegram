@@ -446,3 +446,48 @@ def backtest_report(r: dict) -> str:
     lines.append("\n<i>Past results do not guarantee future results. The live bot also filters with the AI desk"
                  " and news, which the backtest does not.</i>")
     return "\n".join(lines)
+
+
+def _cfg_text(c: dict) -> str:
+    tp1 = f"TP1 ≤ {c['tp1_max_r']:g}R" if c.get("tp1_max_r") else "TP1 at liquidity"
+    return f"score ≥ {c['min_score']} · min 1:{c['min_rr']:g} · {tp1}"
+
+
+def backtest_menu(params: dict) -> str:
+    lines = ["🧪 <b>Backtest & Optimize</b>", LINE,
+             "<b>Backtest</b> – replay the last weeks of real gold data with the current settings.",
+             f"<b>Optimize</b> – test {12} settings on the same data and apply the best one.", "",
+             "<b>Current settings</b>"]
+    for s, p_ in params.items():
+        state = "✅" if p_["enabled"] else "⛔ OFF"
+        lines.append(f"{state} {STYLES[s]['label']}: {_cfg_text(p_)}")
+    lines.append("\n<i>M5 history covers ~3 weeks, so scalping results use fewer days than swing.</i>")
+    return "\n".join(lines)
+
+
+def optimize_report(o: dict, current: dict) -> tuple[str, InlineKeyboardMarkup]:
+    if o.get("error"):
+        return f"🔧 Optimize failed: {escape(o['error'])}", back()
+    style = o["style"]
+    lines = [f"🔧 <b>Optimizer · {o['label']}</b>  (engine only)", LINE, f"📅 {o['start']} → {o['end']}",
+             f"Current: {_cfg_text(current)}", ""]
+    ranked = o["ranked"]
+    rows = []
+    if not ranked:
+        lines.append(f"Not enough trades (need ≥ {o['min_trades']}) in any setting to judge this style.")
+    medals = ["🥇", "🥈", "🥉", "4.", "5."]
+    for i, r in enumerate(ranked[:5]):
+        lines.append(f"{medals[i]} {_cfg_text(r['config'])}")
+        lines.append(f"    {r['trades']} trades · win {r['win_rate']}% · <b>{'+' if r['total_r'] >= 0 else ''}"
+                     f"{r['total_r']}R</b> · PF {r['profit_factor']:g} · DD {r['max_dd']}R")
+    best = ranked[0] if ranked else None
+    if best and best["total_r"] > 0:
+        lines += ["", "✅ Tap a button to use one of these settings for live signals."]
+        rows.append([Btn(f"Apply {medals[i]}", callback_data=f"apply:{style}:{i}") for i in range(min(3, len(ranked)))])
+    else:
+        lines += ["", "⚠️ <b>No profitable setting on this data.</b> Consider switching this style off for now."]
+    rows.append([Btn(f"⛔ Switch {STYLES[style]['label'][2:]} off", callback_data=f"soff:{style}"),
+                 Btn("↩️ Default settings", callback_data=f"son:{style}")])
+    lines.append("\n<i>Optimizing on a few weeks can over-fit. Prefer settings that are also good in the 2nd/3rd"
+                 " place, and re-check every week.</i>")
+    return "\n".join(lines), back(rows)

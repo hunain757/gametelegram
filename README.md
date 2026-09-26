@@ -69,7 +69,11 @@ python backtest.py intraday      # or scalp / swing   (also: /backtest in Telegr
 ```
 
 Replays the last weeks of gold data candle by candle (no look-ahead) through the same engine and tracker,
-and prints win rate, total/average R, max drawdown and profit factor. The AI desk and news filter are not
+and prints win rate, total/average R, max drawdown and profit factor.
+
+**Optimize** (Telegram → 🧪 Backtest → 🔧 Optimize, owner only) tests 12 settings per style (engine score,
+minimum R:R, TP1 cap) on the same data, ranks them, and lets you **apply** the best one or **switch a style
+off** with one tap. Applied settings are saved in `data.json` and used by live scans. The AI desk and news filter are not
 replayed. Use it to tune `MIN_ENGINE_SCORE`, `MIN_RISK_REWARD` and `STYLES` before trusting a style.
 
 ## 🖥 Live dashboard (only on your PC)

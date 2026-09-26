@@ -99,7 +99,7 @@ def validate_levels(direction: str, entry: float, sl: float, tps: list[float], p
     return True, "ok"
 
 
-def find_setup(style: str, market: dict, session: dict, min_rr: float) -> dict | None:
+def find_setup(style: str, market: dict, session: dict, min_rr: float, tp1_max_r: float | None = None) -> dict | None:
     st = STYLES[style]
     if any(tf not in market for tf in (st["entry"], st["confirm"], st["bias"])):
         return None
@@ -233,6 +233,10 @@ def find_setup(style: str, market: dict, session: dict, min_rr: float) -> dict |
     else:
         score += 5
         conf.append("Clear path to TP1")
+    # Optional cap: a closer TP1 is hit more often (1/3 is banked and the stop goes to breakeven).
+    if tp1_max_r and tp1_max_r >= min_rr and tps[0]["rr"] > tp1_max_r:
+        tp1 = entry + (tp1_max_r * risk if bull else -tp1_max_r * risk)
+        tps[0] = {"price": round(tp1, 2), "rr": round(tp1_max_r, 2), "source": "R-multiple"}
 
     # Premium / discount.
     zone = es["range"]["zone"]

@@ -727,3 +727,43 @@ class DashboardTests(unittest.TestCase):
             self.assertIsNone(before["market"])
             self.assertEqual(png[:4], b"\x89PNG")
             self.assertEqual(len(after["market"]["tfs"]), 5)
+
+
+class OptimizeAndWeekendTests(InteractionTests):
+    def test_optimize_apply_and_switch_off(self):
+        import backtest
+        self.gb.storage.claim_owner(111)
+        hist = synthetic_history(days=30)
+
+        async def fake_fetch(*a):
+            return hist
+        orig = backtest.fetch_history
+        backtest.fetch_history = fake_fetch
+        try:
+            asyncio.run(self.gb.run_optimize(self.bot, 111, "intraday"))
+        finally:
+            backtest.fetch_history = orig
+        self.assertIn("Optimizer", self.sent[-1][1])
+        ranked = self.gb.last_optimize["intraday"]["ranked"]
+        if ranked:
+            self.press("apply:intraday:0")
+            self.assertEqual(self.gb.style_params("intraday")["min_score"], ranked[0]["config"]["min_score"])
+        self.press("soff:scalp")
+        self.assertFalse(self.gb.style_params("scalp")["enabled"])
+        notes = asyncio.run(self.gb.scan(self.bot, manual=True))
+        self.assertTrue(any("switched off" in n for n in notes))
+        self.press("son:scalp")
+        self.assertTrue(self.gb.style_params("scalp")["enabled"])
+        self.press("bt")
+
+    def test_market_closed_still_refreshes_data(self):
+        import sessions as sess
+        orig = sess.is_market_open
+        sess.is_market_open = lambda now=None: False
+        try:
+            notes = asyncio.run(self.gb.scan(self.bot))
+        finally:
+            sess.is_market_open = orig
+        self.assertEqual(notes, ["Market closed"])
+        self.assertIsNotNone(self.gb.market)
+        self.assertIn("refreshed", self.gb.desk.monitor.log[-1]["text"])

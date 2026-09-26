@@ -83,6 +83,19 @@ class Storage:
                 if u.get("subscribed") and (style is None or style in u.get("styles", []))
                 and (flag is None or u.get(flag, True))]
 
+    # ---------- per-style strategy settings (owner) ----------
+
+    def style_settings(self, style: str) -> dict:
+        return dict(self.data.get("style_settings", {}).get(style, {}))
+
+    def set_style_settings(self, style: str, **values):
+        self.data.setdefault("style_settings", {}).setdefault(style, {}).update(values)
+        self.save()
+
+    def reset_style_settings(self, style: str):
+        self.data.setdefault("style_settings", {}).pop(style, None)
+        self.save()
+
     # ---------- trades ----------
 
     def add_trade(self, trade: dict):

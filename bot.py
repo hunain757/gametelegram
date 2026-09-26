@@ -75,6 +75,7 @@ class GoldBot:
         self._ai_view: tuple[float, str] = (0.0, "")
         self.backtest_running = False
         self.app_bot = None
+        self.last_optimize: dict[str, dict] = {}
 
     # ================= helpers =================
 
@@ -117,6 +118,9 @@ class GoldBot:
     async def scan(self, bot, manual: bool = False) -> list[str]:
         """One full cycle: data -> track trades -> news -> find & review setups -> publish."""
         if not manual and not sessions.is_market_open():
+            stale = not self.last_scan or datetime.now(timezone.utc) - self.last_scan > timedelta(hours=1)
+            if stale and not self.scan_lock.locked():
+                await self.refresh_market()
             return ["Market closed"]
         if self.scan_lock.locked():
             return ["A scan is already running"]
@@ -132,6 +136,24 @@ class GoldBot:
                 raise
             finally:
                 mon.set_phase("idle")
+
+    async def refresh_market(self):
+        """Market closed: keep charts, dashboard and menus up to date without looking for trades."""
+        async with self.scan_lock:
+            candles, volumes = await self.data.get()
+            self.candles = candles
+            self.market = analyze_market(candles, volumes)
+            self.last_scan = datetime.now(timezone.utc)
+            self.desk.monitor.event(f"💤 Market closed – chart & market data refreshed "
+                                    f"(XAU/USD {candles['5min'][-1]['close']:.2f})")
+
+    def style_params(self, style: str) -> dict:
+        """Per-style settings chosen by the owner (e.g. from the optimizer), else the .env defaults."""
+        ss = self.storage.style_settings(style)
+        return {"enabled": ss.get("enabled", True),
+                "min_score": ss.get("min_score", self.cfg.min_engine_score),
+                "min_rr": ss.get("min_rr", self.cfg.min_risk_reward),
+                "tp1_max_r": ss.get("tp1_max_r")}
 
     async def _scan(self, bot, mon) -> list[str]:
         if True:
@@ -177,11 +199,15 @@ class GoldBot:
             open_trades = self.storage.open_trades()
             for style in self.cfg.styles:
                 label = STYLES[style]["label"]
-                setup = find_setup(style, self.market, session, self.cfg.min_risk_reward)
+                sp = self.style_params(style)
+                if not sp["enabled"]:
+                    notes.append(f"{label}: switched off by owner")
+                    continue
+                setup = find_setup(style, self.market, session, sp["min_rr"], sp["tp1_max_r"])
                 if not setup:
                     notes.append(f"{label}: no setup")
                     continue
-                if setup["score"] < self.cfg.min_engine_score:
+                if setup["score"] < sp["min_score"]:
                     notes.append(f"{label}: weak {setup['direction']} setup ({setup['score']})")
                     continue
                 if self.storage.seen(setup["key"]):
@@ -396,14 +422,34 @@ class GoldBot:
             await bot.send_message(chat_id, f"🧪 Backtesting {STYLES[style]['label']} on the last few weeks of gold "
                                             "data… this takes 1–5 minutes.")
             data = await backtest.fetch_history(self.cfg.twelvedata_api_key, self.cfg.symbol, style)
-            result = await asyncio.to_thread(backtest.run, data, style, self.cfg.min_risk_reward,
-                                             self.cfg.min_engine_score)
+            sp = self.style_params(style)
+            result = await asyncio.to_thread(backtest.run, data, style, sp["min_rr"], sp["min_score"],
+                                             sp["tp1_max_r"])
         except Exception as e:
             log.exception("Backtest failed")
             result = {"error": str(e)[:200]}
         finally:
             self.backtest_running = False
         await bot.send_message(chat_id, ui.backtest_report(result), parse_mode=HTML)
+
+    async def run_optimize(self, bot, chat_id: int, style: str):
+        if self.backtest_running:
+            await bot.send_message(chat_id, "🧪 A backtest is already running, please wait.")
+            return
+        self.backtest_running = True
+        try:
+            await bot.send_message(chat_id, f"🔧 Optimizing {STYLES[style]['label']}: testing {len(backtest.GRID)} "
+                                            "settings on the same gold history… 2–6 minutes.")
+            data = await backtest.fetch_history(self.cfg.twelvedata_api_key, self.cfg.symbol, style)
+            result = await asyncio.to_thread(backtest.optimize, data, style)
+        except Exception as e:
+            log.exception("Optimize failed")
+            result = {"error": str(e)[:200]}
+        finally:
+            self.backtest_running = False
+        self.last_optimize[style] = result
+        text, kb = ui.optimize_report(result, self.style_params(style))
+        await bot.send_message(chat_id, text, parse_mode=HTML, reply_markup=kb)
 
     async def _manual_scan_text(self, bot) -> str:
         try:
@@ -459,9 +505,9 @@ class GoldBot:
             return ui.status_screen(self.status_info()), ui.back()
         if key == "bt" and self.is_admin(user_id):
             from telegram import InlineKeyboardButton as Btn
-            rows = [[Btn(STYLES[s]["label"], callback_data=f"bt:{s}") for s in STYLES]]
-            return ("🧪 <b>Backtest</b>\nReplay the last weeks of gold data through the SMC engine and see the "
-                    "win rate, R and drawdown. Choose a style:"), ui.back(rows)
+            rows = [[Btn(f"🧪 {STYLES[s]['label']}", callback_data=f"bt:{s}") for s in STYLES],
+                    [Btn(f"🔧 Optimize {STYLES[s]['label'][2:]}", callback_data=f"opt:{s}") for s in STYLES]]
+            return ui.backtest_menu({s: self.style_params(s) for s in STYLES}), ui.back(rows)
         if key == "help":
             return ui.HELP, ui.back()
         return ui.main_menu(user, self.is_admin(user_id))
@@ -500,6 +546,34 @@ class GoldBot:
             png = await asyncio.to_thread(chart.market_chart, self.candles[tf], self.market[tf]["smc"],
                                           self.market.get("levels", {}), TF_LABEL[tf])
             await q.message.reply_photo(png, caption=f"📈 XAU/USD {TF_LABEL[tf]} · {self.market[tf]['price']:,.2f}")
+            return
+
+        if data.startswith(("opt:", "apply:", "soff:", "son:")):
+            if not self.is_admin(user_id):
+                await q.answer("Only the owner can change strategy settings", show_alert=True)
+                return
+            kind, _, rest = data.partition(":")
+            if kind == "opt":
+                await q.answer("Optimizer started")
+                asyncio.create_task(self.run_optimize(context.bot, chat.id, rest))
+                return
+            style, _, idx = rest.partition(":")
+            if kind == "apply":
+                ranked = self.last_optimize.get(style, {}).get("ranked", [])
+                if not idx.isdigit() or int(idx) >= len(ranked):
+                    await q.answer("Run the optimizer again first", show_alert=True)
+                    return
+                cfg = ranked[int(idx)]["config"]
+                self.storage.set_style_settings(style, enabled=True, **cfg)
+                await q.answer("Settings applied ✅", show_alert=True)
+            elif kind == "soff":
+                self.storage.set_style_settings(style, enabled=False)
+                await q.answer(f"{STYLES[style]['label']} switched off", show_alert=True)
+            else:
+                self.storage.reset_style_settings(style)
+                await q.answer(f"{STYLES[style]['label']} back to default settings", show_alert=True)
+            text, kb = await self.screen("bt", chat.id, user_id)
+            await q.message.reply_text(text, parse_mode=HTML, reply_markup=kb)
             return
 
         if data.startswith("bt:"):
