@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gold AI Control Room</title>
+<link rel="icon" href="data:,">
+<script src="/static/lightweight-charts.js"></script>
+<style>
+:root{--bg:#070a10;--panel:#0f141e;--panel2:#141b28;--line:#1f2838;--text:#dde3ee;--mut:#8792a8;
+--gold:#f5c542;--gold2:#ffdd7a;--green:#22c77a;--red:#f04f5a;--amber:#ffab1a;--blue:#3d9bff;--violet:#b36bff}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 Inter,system-ui,Segoe UI,Roboto,sans-serif}
+a{color:var(--gold2)}
+header{position:sticky;top:0;z-index:20;display:flex;flex-wrap:wrap;gap:14px;align-items:center;padding:12px 20px;
+background:rgba(7,10,16,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:10px}.brand b{font-size:19px;color:var(--gold);letter-spacing:.4px}
+.brand small{color:var(--mut)}
+.ticker{display:flex;align-items:baseline;gap:8px;padding:6px 14px;border-radius:10px;background:var(--panel2);border:1px solid var(--line)}
+.ticker .px{font:700 22px/1 ui-monospace,Consolas,monospace;transition:color .3s}.ticker .src{font-size:11px;color:var(--mut)}
+.up{color:var(--green)!important}.down{color:var(--red)!important}
+.pills{display:flex;flex-wrap:wrap;gap:6px;flex:1;min-width:0}.pill{padding:4px 10px;border-radius:99px;background:var(--panel2);border:1px solid var(--line);font-size:12px}
+.ok{color:var(--green)}.bad{color:var(--red)}.warn{color:var(--amber)}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);margin-right:5px;box-shadow:0 0 8px var(--green);animation:blink 1.6s infinite}
+@keyframes blink{50%{opacity:.35}}
+button{background:linear-gradient(180deg,var(--gold2),var(--gold));color:#161100;border:0;border-radius:9px;padding:8px 14px;font-weight:800;cursor:pointer}
+button.alt{background:var(--panel2);color:var(--text);border:1px solid var(--line);font-weight:600}button:disabled{opacity:.5;cursor:wait}
+main{padding:16px 20px;display:grid;gap:16px}
+.row{display:grid;gap:16px;grid-template-columns:minmax(0,1fr) 380px}
+@media(max-width:1200px){.row{grid-template-columns:minmax(0,1fr)}}
+section{background:linear-gradient(180deg,var(--panel),#0c1119);border:1px solid var(--line);border-radius:14px;padding:14px;min-width:0;overflow:hidden}
+section h2{margin:0 0 10px;font-size:12px;text-transform:uppercase;letter-spacing:1.2px;color:var(--mut);display:flex;justify-content:space-between;align-items:center;gap:8px}
+.grid3{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+/* network */
+#net{width:100%;height:auto;display:block}
+.node rect{fill:#141b28;stroke:#2a3447;stroke-width:1.2;rx:10;transition:fill .3s,stroke .3s}
+.node text{fill:var(--text);font-size:12px}.node .sub{fill:var(--mut);font-size:10px}
+.node.thinking rect{stroke:var(--amber);fill:#2a2110;animation:glow 1s infinite}
+.node.waiting rect{stroke:var(--blue);fill:#101e33}
+.node.TAKE rect{stroke:var(--green);fill:#0f2a1f}.node.SKIP rect{stroke:var(--red);fill:#2b1217}.node.error rect{stroke:var(--red);fill:#3a0f14}
+.node.sel rect{stroke:var(--gold);stroke-width:2.4}
+.node{cursor:pointer}
+@keyframes glow{50%{fill:#3a2c10}}
+.edge{stroke:#1d2636;stroke-width:1.1;fill:none}.edge.hot{stroke:var(--gold);stroke-width:2;opacity:.9;transition:stroke .6s}
+.pulse{fill:var(--gold2);filter:drop-shadow(0 0 6px var(--gold))}
+.stage{fill:var(--mut);font-size:11px;letter-spacing:1px;text-transform:uppercase}
+#detail .nm{font-size:16px;font-weight:800}#detail .role{color:var(--mut);font-size:12px;margin:2px 0 8px}
+.badge{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;background:#263045;color:var(--mut);font-weight:800;text-transform:uppercase}
+.b-TAKE{background:var(--green);color:#03170d}.b-SKIP{background:#5a1f29;color:#ffc0c8}.b-thinking{background:var(--amber);color:#1a1000}.b-waiting{background:var(--blue);color:#fff}.b-error{background:var(--red);color:#fff}
+.bar{height:6px;background:#222b3c;border-radius:4px;overflow:hidden;margin:8px 0}.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--gold),var(--gold2))}
+ul.pts{margin:6px 0 0;padding-left:18px;color:var(--mut)}
+.mini{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;margin-top:12px}
+.mini div{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;cursor:pointer}
+/* chart */
+.tabs{display:flex;flex-wrap:wrap;gap:6px}.tabs button{padding:5px 10px;font-size:12px}
+.toggles{display:flex;flex-wrap:wrap;gap:10px;font-size:12px;color:var(--mut)}.toggles label{cursor:pointer}
+#chartWrap{position:relative;height:520px;margin-top:10px;border-radius:10px;overflow:hidden;border:1px solid var(--line)}
+#chart{position:absolute;inset:0}#overlay{position:absolute;inset:0;pointer-events:none;z-index:3}
+.legend{position:absolute;left:10px;top:8px;z-index:4;font-size:12px;color:var(--mut);background:rgba(7,10,16,.7);padding:4px 8px;border-radius:6px}
+/* feed */
+.log{height:600px;overflow:auto;font:12px/1.55 ui-monospace,Consolas,monospace}
+.log div{padding:3px 2px;border-bottom:1px dashed #19212f;animation:fade .5s}@keyframes fade{from{background:#2a2410}to{background:transparent}}
+.log .t{color:#5d6882;margin-right:6px}.k-take{color:var(--green)}.k-skip{color:#ff9aa8}.k-error{color:var(--red)}.k-signal{color:var(--gold);font-weight:700}
+table{width:100%;border-collapse:collapse;font-size:12.5px}td,th{padding:6px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{color:var(--mut);font-weight:600}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:5px 12px;font-size:13px}.kv span:nth-child(odd){color:var(--mut)}
+.empty{color:var(--mut);font-style:italic}.news div{padding:5px 0;border-bottom:1px dashed #19212f;font-size:13px}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><span style="font-size:24px">🏆</span><div><b>Gold AI Control Room</b><br><small>XAU/USD · 13-agent desk · local only</small></div></div>
+  <div class="ticker"><span class="px" id="px">—</span><span class="src" id="pxsrc">waiting for data</span></div>
+  <div class="pills" id="pills"></div>
+  <div style="display:flex;gap:8px">
+    <button id="scanBtn" onclick="act('scan')">⚡ Scan now</button>
+    <button class="alt" id="pingBtn" onclick="act('ping')">🩺 Test all agents</button>
+  </div>
+</header>
+<main>
+  <div class="row">
+    <section><h2><span>🧠 Agent network – how information flows</span><span id="phase"></span></h2>
+      <svg id="net" viewBox="0 0 1240 560"></svg>
+    </section>
+    <section id="detail"><h2>🔍 Agent details</h2><div id="detailBody" class="empty">Click any agent in the network.</div>
+      <div class="mini" id="mini"></div></section>
+  </div>
+  <div class="row">
+    <section><h2><span>📈 Live chart · XAU/USD</span>
+        <span class="tabs" id="tabs"></span></h2>
+      <div class="toggles">
+        <label><input type="checkbox" data-o="zones" checked> OB / Breaker / FVG</label>
+        <label><input type="checkbox" data-o="levels" checked> Key levels</label>
+        <label><input type="checkbox" data-o="liq" checked> Liquidity</label>
+        <label><input type="checkbox" data-o="bubbles" checked> Volume bubbles</label>
+        <label><input type="checkbox" data-o="profile" checked> Volume profile</label>
+        <label><input type="checkbox" data-o="trades" checked> Open trades</label>
+      </div>
+      <div id="chartWrap"><div id="chart"></div><canvas id="overlay"></canvas><div class="legend" id="legend"></div></div>
+    </section>
+    <section><h2>⚡ Live activity</h2><div class="log" id="log"></div></section>
+  </div>
+  <div class="grid3">
+    <section><h2>🧠 Last AI decisions</h2><div id="reviews"></div></section>
+    <section><h2>📡 Open trades</h2><div id="trades"></div></section>
+    <section><h2>📰 News & calendar</h2><div id="news" class="news"></div></section>
+    <section><h2>🌍 Market structure</h2><div id="market"></div></section>
+    <section><h2>🩺 System & data</h2><div class="kv" id="system"></div></section>
+    <section><h2>📊 Performance</h2><div class="kv" id="perf"></div></section>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const TFS = [["5min","M5",300],["15min","M15",900],["1h","H1",3600],["4h","H4",14400],["1day","D1",86400]];
+let tf = "15min", tfSec = 900, chartVersion = "", state = null, selected = "head", lastFlowId = 0, lastPx = null;
+const show = {zones:true, levels:true, liq:true, bubbles:true, profile:true, trades:true};
+
+async function act(what){
+  const b = $(what === "scan" ? "scanBtn" : "pingBtn"); b.disabled = true;
+  try { await fetch("/api/" + what, {method: "POST"}); } finally { setTimeout(() => b.disabled = false, 5000); }
+}
+
+/* ---------------- agent network ---------------- */
+const NS = "http://www.w3.org/2000/svg";
+const net = $("net");
+let pos = {};
+function el(tag, attrs, parent){ const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); (parent||net).appendChild(e); return e; }
+function layout(agents){
+  pos = {};
+  const col = {0: 75, 1: 330, 2: 640, 3: 870, 4: 1060};
+  pos.engine = {x: col[0], y: 280, w: 130, h: 54, icon: "⚙️", name: "SMC Engine", sub: "finds setups"};
+  const byStage = {}; agents.forEach(a => (byStage[a.stage] = byStage[a.stage] || []).push(a));
+  for (const st of [1,2,3,4]) {
+    const list = byStage[st] || [], gap = st === 1 ? 62 : 110, top = 280 - (list.length - 1) * gap / 2;
+    list.forEach((a, i) => pos[a.key] = {x: col[st], y: top + i * gap, w: st === 1 ? 210 : st === 2 ? 180 : 160, h: 48,
+      icon: a.icon, name: a.name.replace(" Analyst","").replace(" Specialist","").replace(" & Pattern Reader"," Reader"), sub: ""});
+  }
+  pos.telegram = {x: 1185, y: 280, w: 100, h: 48, icon: "📨", name: "Telegram", sub: "signal out"};
+}
+const EDGES = [];
+function buildNet(agents){
+  net.innerHTML = ""; EDGES.length = 0; layout(agents);
+  const stageNames = state.stages || [];
+  [[75,"Engine"],[330,stageNames[0]],[640,stageNames[1]],[870,stageNames[2]],[1060,stageNames[3]],[1185,"Output"]].forEach(([x,t]) =>
+    el("text", {x, y: 18, "text-anchor":"middle", class:"stage"}).textContent = (t || "").replace("Stage ", "S"));
+  const an = agents.filter(a => a.stage === 1).map(a => a.key), ve = agents.filter(a => a.stage === 2).map(a => a.key);
+  const pairs = [];
+  an.forEach(k => pairs.push(["engine", k]));
+  an.forEach(a => ve.forEach(v => pairs.push([a, v])));
+  an.concat(ve).forEach(k => pairs.push([k, "head"]));
+  pairs.push(["head","auditor"], ["auditor","telegram"]);
+  const g = el("g", {});
+  pairs.forEach(([a,b]) => {
+    const p = pos[a], q = pos[b]; if (!p || !q) return;
+    const x1 = p.x + p.w/2, y1 = p.y, x2 = q.x - q.w/2, y2 = q.y, mx = (x1 + x2) / 2;
+    const d = `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`;
+    EDGES.push({a, b, path: el("path", {d, class: "edge"}, g)});
+  });
+  for (const k in pos) {
+    const p = pos[k], n = el("g", {class: "node", id: "n-" + k, transform: `translate(${p.x - p.w/2},${p.y - p.h/2})`});
+    el("rect", {width: p.w, height: p.h, rx: 10}, n);
+    el("text", {x: 12, y: 21}, n).textContent = p.icon + "  " + p.name;
+    el("text", {x: 12, y: 38, class: "sub", id: "s-" + k}, n).textContent = p.sub;
+    n.onclick = () => { selected = k; render(); };
+  }
+}
+function paintNodes(agents){
+  const by = Object.fromEntries(agents.map(a => [a.key, a]));
+  for (const k in pos) {
+    const n = $("n-" + k); if (!n) continue; const a = by[k];
+    let cls = "node" + (k === selected ? " sel" : "");
+    let sub = pos[k].sub;
+    if (a) {
+      if (a.status === "done" && a.vote) { cls += " " + a.vote; sub = `${a.vote} · ${a.score ?? ""}${a.seconds != null ? " · " + a.seconds + "s" : ""}`; }
+      else { cls += " " + a.status; sub = a.status === "idle" ? "idle" : a.status + "…"; }
+    }
+    if (k === "engine") sub = state.phase === "scanning" ? "scanning…" : "finds setups";
+    n.setAttribute("class", cls); $("s-" + k).textContent = sub;
+  }
+}
+function animateFlows(flows){
+  const now = Date.now() / 1000;
+  const fresh = flows.filter(f => f.id > lastFlowId && now - f.ts < 30);
+  if (flows.length) lastFlowId = Math.max(lastFlowId, ...flows.map(f => f.id));
+  fresh.forEach((f, i) => setTimeout(() => {
+    const e = EDGES.find(x => x.a === f.from && x.b === f.to); if (!e) return;
+    e.path.classList.add("hot"); setTimeout(() => e.path.classList.remove("hot"), 1400);
+    const len = e.path.getTotalLength(), dot = el("circle", {r: 5, class: "pulse"}); const t0 = performance.now();
+    (function step(t){ const k = Math.min((t - t0) / 900, 1), pt = e.path.getPointAtLength(len * k);
+      dot.setAttribute("cx", pt.x); dot.setAttribute("cy", pt.y); if (k < 1) requestAnimationFrame(step); else dot.remove(); })(t0);
+  }, i * 70));
+}
+function renderDetail(agents){
+  const a = agents.find(x => x.key === selected);
+  if (!a) { $("detailBody").innerHTML = '<span class="empty">The SMC engine scans M5→D1 every few minutes and hands real setups to the analysts.</span>'; }
+  else {
+    const badge = a.status === "done" && a.vote ? a.vote : a.status;
+    $("detailBody").innerHTML = `<div class="nm">${a.icon} ${esc(a.name)}</div><div class="role">Stage ${a.stage} · ${esc(a.role)}</div>
+      <span class="badge b-${esc(badge)}">${esc(badge)}${a.score != null && a.status === "done" ? " " + a.score : ""}</span>
+      ${a.score != null ? `<div class="bar"><i style="width:${Math.max(0, Math.min(100, a.score))}%"></i></div>` : ""}
+      <div style="margin-top:8px">${esc(a.summary) || '<span class="empty">Waiting for the next setup.</span>'}</div>
+      ${(a.points||[]).length ? `<ul class="pts">${a.points.map(p => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
+      <div class="role" style="margin-top:8px">${[a.model, a.seconds != null ? a.seconds + "s" : "", a.at ? a.at + " UTC" : ""].filter(Boolean).map(esc).join(" · ")}</div>`;
+  }
+  $("mini").innerHTML = agents.map(x => `<div onclick="selected='${x.key}';render()">${x.icon} ${esc(x.name.split(" ")[0])}
+     <span class="badge b-${x.status === "done" && x.vote ? x.vote : x.status}" style="float:right">${x.status === "done" && x.vote ? x.vote : x.status}</span></div>`).join("");
+}
+
+/* ---------------- live chart ---------------- */
+const wrap = $("chartWrap"), overlay = $("overlay"), octx = overlay.getContext("2d");
+const chart = LightweightCharts.createChart($("chart"), {autoSize: true,
+  layout: {background: {type: "solid", color: "#0a0e16"}, textColor: "#8792a8"},
+  grid: {vertLines: {color: "#141b28"}, horzLines: {color: "#141b28"}},
+  rightPriceScale: {borderColor: "#1f2838"}, timeScale: {borderColor: "#1f2838", timeVisible: true, secondsVisible: false},
+  crosshair: {mode: 0}});
+const series = chart.addCandlestickSeries({upColor: "#22c77a", downColor: "#f04f5a", wickUpColor: "#22c77a",
+  wickDownColor: "#f04f5a", borderVisible: false});
+let chartData = null, priceLines = [], liveBar = null;
+function clearLines(){ priceLines.forEach(l => series.removePriceLine(l)); priceLines = []; }
+function line(price, color, title, style){ priceLines.push(series.createPriceLine({price, color, lineWidth: 1,
+  lineStyle: style ?? LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title})); }
+async function loadChart(){
+  const r = await fetch("/api/candles?tf=" + tf); chartData = await r.json();
+  if (!chartData) { $("legend").textContent = "No market data yet – press ⚡ Scan now"; series.setData([]); return; }
+  series.setData(chartData.candles); series.setMarkers(chartData.markers);
+  liveBar = Object.assign({}, chartData.candles[chartData.candles.length - 1]);
+  drawLines(); chart.timeScale().scrollToRealTime();
+  $("legend").textContent = `${TFS.find(t => t[0] === tf)[1]} · ${chartData.candles.length} candles · BOS/CHoCH arrows · ● sweeps`;
+  drawOverlay();
+}
+function drawLines(){
+  clearLines(); if (!chartData) return;
+  if (show.levels) for (const [k, v] of Object.entries(chartData.levels)) if (/PDH|PDL|PWH|PWL|Asia/.test(k)) line(v, "#6b7894", k, LightweightCharts.LineStyle.Dotted);
+  if (show.liq) { chartData.liquidity.buy.forEach(v => line(v, "#f5c54288", "BSL")); chartData.liquidity.sell.forEach(v => line(v, "#f5c54288", "SSL")); }
+  if (show.trades) chartData.trades.forEach(t => { line(t.entry, "#3d9bff", t.direction + " entry", 0); line(t.stop_loss, "#f04f5a", "SL", 0);
+    t.tps.forEach((p, i) => line(p, "#22c77a", "TP" + (i + 1), i ? 2 : 0)); });
+  if (chartData.poc && show.profile) line(chartData.poc, "#b36bff", "POC", 2);
+}
+function drawOverlay(){
+  const w = wrap.clientWidth, h = wrap.clientHeight, dpr = devicePixelRatio || 1;
+  overlay.width = w * dpr; overlay.height = h * dpr; overlay.style.width = w + "px"; overlay.style.height = h + "px";
+  octx.setTransform(dpr, 0, 0, dpr, 0, 0); octx.clearRect(0, 0, w, h);
+  if (!chartData) return;
+  const ps = chart.priceScale("right").width(), right = w - ps, ts = chart.timeScale();
+  const Y = p => series.priceToCoordinate(p);
+  if (show.zones) chartData.zones.forEach(z => {
+    let x = ts.timeToCoordinate(z.from); if (x === null) x = 0; const y1 = Y(z.top), y2 = Y(z.bottom); if (y1 === null || y2 === null) return;
+    const col = z.kind === "Breaker" ? [179,107,255] : z.dir === "bullish" ? [34,199,122] : [240,79,90];
+    const a = z.kind === "FVG" ? .10 : .18;
+    octx.fillStyle = `rgba(${col},${a})`; octx.fillRect(x, Math.min(y1, y2), right - x, Math.abs(y2 - y1) || 1);
+    octx.strokeStyle = `rgba(${col},.45)`; octx.strokeRect(x, Math.min(y1, y2), right - x, Math.abs(y2 - y1) || 1);
+    octx.fillStyle = `rgba(${col},.95)`; octx.font = "10px sans-serif"; octx.fillText(z.kind, x + 4, Math.min(y1, y2) + 11);
+  });
+  if (show.bubbles) chartData.bubbles.forEach(b => {
+    const x = ts.timeToCoordinate(b.time), y = Y(b.price); if (x === null || y === null) return;
+    const r = Math.min(4 + b.x * 3, 22);
+    octx.beginPath(); octx.arc(x, y, r, 0, Math.PI * 2);
+    octx.fillStyle = b.dir === "up" ? "rgba(34,199,122,.28)" : "rgba(240,79,90,.28)"; octx.fill();
+    octx.strokeStyle = b.dir === "up" ? "#22c77a" : "#f04f5a"; octx.stroke();
+    octx.fillStyle = "#dde3ee"; octx.font = "9px sans-serif"; octx.fillText(b.x + "x", x - 7, y + 3);
+  });
+  if (show.profile && chartData.profile.length) {
+    const max = Math.max(...chartData.profile.map(p => p.volume)) || 1, step = Math.abs(Y(chartData.profile[0].price) - Y(chartData.profile[1] ? chartData.profile[1].price : chartData.profile[0].price + 1)) || 4;
+    chartData.profile.forEach(p => { const y = Y(p.price); if (y === null) return; const len = 110 * p.volume / max;
+      octx.fillStyle = "rgba(179,107,255,.22)"; octx.fillRect(right - len, y - step / 2, len, Math.max(step - 1, 1)); });
+  }
+}
+chart.timeScale().subscribeVisibleLogicalRangeChange(() => requestAnimationFrame(drawOverlay));
+new ResizeObserver(() => requestAnimationFrame(drawOverlay)).observe(wrap);
+document.querySelectorAll(".toggles input").forEach(c => c.onchange = () => { show[c.dataset.o] = c.checked; drawLines(); drawOverlay(); });
+$("tabs").innerHTML = TFS.map(([k, l]) => `<button class="alt" data-tf="${k}">${l}</button>`).join("");
+$("tabs").onclick = e => { const b = e.target.closest("button"); if (!b) return; tf = b.dataset.tf; tfSec = TFS.find(t => t[0] === tf)[2]; paintTabs(); loadChart(); };
+function paintTabs(){ document.querySelectorAll("#tabs button").forEach(b => b.className = b.dataset.tf === tf ? "" : "alt"); }
+
+async function live(){
+  let v; try { v = await (await fetch("/api/live")).json(); } catch (e) { return; }
+  if (!v) return;
+  const px = v.price, el_ = $("px");
+  el_.textContent = px.toFixed(2); el_.classList.remove("up", "down");
+  if (lastPx !== null && px !== lastPx) el_.classList.add(px > lastPx ? "up" : "down");
+  lastPx = px; $("pxsrc").textContent = v.source + (v.offset != null ? ` (offset ${v.offset})` : "");
+  if (liveBar && chartData) {
+    const now = Math.floor(Date.now() / 1000), start = Math.floor(now / tfSec) * tfSec;
+    if (start > liveBar.time) liveBar = {time: start, open: liveBar.close, high: px, low: px, close: px};
+    else { liveBar.close = px; liveBar.high = Math.max(liveBar.high, px); liveBar.low = Math.min(liveBar.low, px); }
+    try { series.update(liveBar); } catch (e) {}
+  }
+}
+
+/* ---------------- panels ---------------- */
+function pill(t, c){ return `<span class="pill ${c || ""}">${t}</span>`; }
+function render(){
+  const s = state; if (!s) return; const st = s.status;
+  const phase = {scanning: "🔎 Scanning market", ai_review: "🧠 AI desk working", idle: "💤 Waiting", starting: "⏳ Starting"}[s.phase] || s.phase;
+  const age = s.data_age;
+  $("pills").innerHTML = [
+    pill('<span class="dot"></span>Bot running', "ok"),
+    pill(st.market_open ? "🟢 Market open" : "🔴 Market closed", st.market_open ? "ok" : "warn"),
+    pill(phase, s.phase === "idle" ? "" : "warn"),
+    age ? pill(`🕯 Last candle ${age.last_candle} (${age.minutes} min ago)`, age.minutes > 20 && st.market_open ? "bad" : "") : pill("No data yet", "warn"),
+    s.next_scan_in != null ? pill("Next scan in " + s.next_scan_in + "s") : "",
+    st.fail_count ? pill("⚠️ " + st.fail_count + " failed scans", "bad") : "",
+  ].join("");
+  $("phase").textContent = phase;
+  paintNodes(s.agents); renderDetail(s.agents);
+  $("log").innerHTML = s.log.map(l => `<div class="k-${l.kind}"><span class="t">${l.t}</span>${esc(l.text)}</div>`).join("") || '<div class="empty">Waiting for the first scan…</div>';
+  $("reviews").innerHTML = s.reviews.length ? `<table><tr><th>Time</th><th>Setup</th><th>Desk</th><th>Result</th></tr>` +
+    s.reviews.map(r => `<tr><td>${r.t}</td><td>${esc(r.style)} ${r.direction} @ ${r.entry}<br><span class="role">engine ${r.score}</span></td>
+      <td>${r.reports.map(x => x.icon + (x.vote === "TAKE" ? "✅" : x.vote === "SKIP" ? "❌" : "⚠️")).join(" ")}<br><span class="role">${r.votes}/${r.reports.length}</span></td>
+      <td class="${r.approved ? "ok" : "bad"}">${r.approved ? "✅ SENT" : "❌ SKIPPED"}<br><span class="role">${esc(r.reason || "")}</span></td></tr>`).join("") + "</table>"
+    : '<div class="empty">No setup reviewed yet. The desk only works when the engine finds a real setup.</div>';
+  $("trades").innerHTML = s.trades.length ? `<table><tr><th>Trade</th><th>Entry</th><th>SL</th><th>TPs</th><th>Status</th></tr>` +
+    s.trades.map(t => `<tr><td>${t.direction}<br><span class="role">${esc(t.style_label)}</span></td><td>${t.entry}</td><td>${t.stop_loss}</td>
+      <td>${t.tps.join("<br>")}</td><td>${t.status}<br>TP ${t.stage}/3</td></tr>`).join("") + "</table>" : '<div class="empty">No open trades.</div>';
+  const cal = (s.calendar || []).map(e => `<div>${e.impact === "High" ? "🔴" : "🟠"} <b>${esc(e.time)}</b> ${esc(e.title)} <span class="role">${esc([e.forecast && "F " + e.forecast, e.previous && "P " + e.previous].filter(Boolean).join(" · "))}</span></div>`).join("");
+  const hl = (s.headlines || []).map(h => `<div>${h.gold ? "🥇" : "🗞"} <span class="role">${esc(h.time)} ${esc(h.source)}</span><br>${h.link ? `<a href="${esc(h.link)}" target="_blank" rel="noopener">${esc(h.title)}</a>` : esc(h.title)}</div>`).join("");
+  $("news").innerHTML = (cal ? "<b>📅 Next 48h (USD)</b>" + cal : "") + (hl ? "<br><b>🗞 Headlines</b>" + hl : "") || '<span class="empty">No news loaded yet.</span>';
+  $("market").innerHTML = s.market ? `<table><tr><th>TF</th><th>Trend</th><th>Last event</th><th>Zone</th><th>RSI</th><th>Candles</th></tr>` +
+    s.market.tfs.map(r => `<tr><td><b>${r.label}</b></td><td class="${r.trend === "bullish" ? "ok" : r.trend === "bearish" ? "bad" : ""}">${r.trend || "ranging"}</td>
+      <td>${esc(r.event || "–")}</td><td>${r.zone}</td><td>${r.rsi ?? "–"}</td><td>${esc(r.patterns || "")}</td></tr>`).join("") + "</table>" +
+    `<div class="role" style="margin-top:6px">${Object.entries(s.market.levels).map(([k, v]) => k + " " + v).join(" · ")}${s.market.adr && s.market.adr.adr ? ` · ADR ${s.market.adr.adr} (${s.market.adr.used_pct}% used)` : ""}</div>`
+    : '<div class="empty">No market data yet.</div>';
+  const kv = o => Object.entries(o).map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("");
+  $("system").innerHTML = kv({"Uptime": st.uptime, "Price source": age ? esc(age.source) : "–", "Last candle": age ? `${age.last_candle} (${age.minutes} min ago)` : "–",
+    "Scans today": st.scans_today, "Twelve Data": st.td_requests + " / 800 requests", "Gemini": `${st.ai_calls} calls (${st.ai_failures} retried)`,
+    "Volume feed": st.volume_ok ? "✅ OK" : "⚠️ unavailable", "News calendar": st.news_ok ? "✅ OK" : "⚠️ unavailable", "Telegram users": st.users,
+    "Signal types": s.settings.styles.join(", "), "Rules": `conf ≥ ${s.settings.min_confidence}%, ≥ ${s.settings.min_votes}/8 analysts, ≥ 2/3 verifiers, auditor OK`,
+    "Last error": st.last_error ? `<span class="bad">${esc(st.last_error.slice(0, 160))}</span>` : "none"});
+  const p = s.performance;
+  $("perf").innerHTML = p.trades ? kv({"Finished trades": p.trades, "Win rate (TP1+)": p.win_rate + "%", "Total": p.total_r + "R",
+    "Wins / losses": p.wins + " / " + p.losses, "Hit TP3": p.tp3}) : '<span class="empty">No finished trades yet</span>';
+}
+async function refresh(){
+  try { state = await (await fetch("/api/state")).json(); }
+  catch (e) { $("pills").innerHTML = pill("❌ Bot not running – start it with start.bat", "bad"); return; }
+  if (!Object.keys(pos).length || net.childElementCount === 0) buildNet(state.agents);
+  render(); animateFlows(state.flows || []);
+  if (state.chart_version && state.chart_version + tf !== chartVersion) { chartVersion = state.chart_version + tf; loadChart(); }
+}
+paintTabs(); refresh(); live();
+setInterval(refresh, 2000); setInterval(live, 5000);
+</script>
+</body>
+</html>

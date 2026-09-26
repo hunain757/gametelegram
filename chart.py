@@ -45,6 +45,8 @@ def _draw_candles(ax, candles):
 def _zones(ax, smc_read, offset, right, lo, hi):
     for z in smc_read.get("order_blocks", [])[-4:]:
         _zone(ax, z, offset, right, lo, hi, UP if z["direction"] == "bullish" else DOWN, 0.20, "OB")
+    for z in smc_read.get("breakers", [])[-3:]:
+        _zone(ax, z, offset, right, lo, hi, "#ab47bc", 0.16, "BRK")
     for z in smc_read.get("fvgs", [])[-4:]:
         _zone(ax, z, offset, right, lo, hi, "#66bb6a" if z["direction"] == "bullish" else "#ff8a65", 0.11, "FVG")
 

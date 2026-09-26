@@ -1,5 +1,10 @@
-"""AI trading desk: eight specialist Gemini agents review a setup in parallel,
-then a Head Trader agent reads their reports and makes the final call (9 agents in total)."""
+"""AI trading desk: a 4-stage pipeline of 13 Gemini agents that pass their findings on.
+
+  Stage 1  8 analysts, each an expert in one thing, study the setup in parallel
+  Stage 2  3 verifiers read ALL analyst reports and cross-check them (confluence, risk, devil's advocate)
+  Stage 3  the Head Trader reads everything and decides TAKE/SKIP with final levels
+  Stage 4  the Signal Auditor checks the final signal before it is sent (can veto)
+"""
 
 import asyncio
 import json
@@ -16,7 +21,7 @@ from setups import TF_LABEL, validate_levels
 
 log = logging.getLogger("goldbot.agents")
 
-SPECIALISTS = [
+ANALYSTS = [
     {
         "key": "structure", "name": "Market Structure Analyst", "icon": "🏗",
         "focus": "Market structure across all timeframes: trend on each timeframe, BOS vs CHoCH, whether the "
@@ -24,47 +29,70 @@ SPECIALISTS = [
                  "or just noise inside a range.",
     },
     {
-        "key": "liquidity", "name": "Liquidity & Order Block Hunter", "icon": "💧",
-        "focus": "Smart-money footprint: was liquidity (swing lows/highs, equal highs/lows, PDH/PDL, Asia range) "
-                 "swept before the move, is the order block / fair value gap fresh and valid, is there opposing "
-                 "liquidity or an opposing order block in the path, and are the targets at real liquidity pools.",
+        "key": "liquidity", "name": "Liquidity & Sweep Hunter", "icon": "💧",
+        "focus": "Liquidity: which pools (swing highs/lows, equal highs/lows, PDH/PDL, PWH/PWL, Asia range) were "
+                 "swept before this move, which are still resting as targets, and whether the stop sits where "
+                 "liquidity will be hunted.",
     },
     {
-        "key": "volume", "name": "Volume & Order Flow Analyst", "icon": "📊",
-        "focus": "Volume (from PAXG/USDT, tokenized gold): relative volume, buy/sell pressure (delta), the "
-                 "volume spike candle, POC and value area. Does volume confirm this move or show absorption against "
-                 "it? If volume data is unavailable, judge only from displacement and say so.",
+        "key": "orderblocks", "name": "Order Block & Breaker Specialist", "icon": "🧱",
+        "focus": "Order blocks and breaker blocks: is the entry zone a fresh, untested OB or a valid breaker, did it "
+                 "create a real break of structure, is there an opposing OB/breaker between entry and TP1?",
     },
     {
-        "key": "price_action", "name": "Price Action & Chart Pattern Reader", "icon": "🕯",
-        "focus": "Read the candles like a chart: the last candles on each timeframe (recent_candles), candlestick "
-                 "patterns (engulfing, pin bars, stars, inside bars, dojis), double tops/bottoms, rejection wicks, "
-                 "and whether the chart shows real rejection from the entry zone or price slicing through it.",
+        "key": "imbalance", "name": "FVG & Imbalance Analyst", "icon": "⚡",
+        "focus": "Fair value gaps and imbalances: is there an unfilled FVG supporting the entry, are opposing FVGs "
+                 "in the path, and is price in premium or discount of the dealing range?",
     },
     {
-        "key": "momentum", "name": "Momentum & Indicator Analyst", "icon": "⚙️",
-        "focus": "EMA 20/50/200 alignment on each timeframe, RSI (overbought/oversold, divergence risk), MACD "
-                 "histogram and volatility (ATR). Is momentum with the trade, turning, or exhausted?",
+        "key": "volume", "name": "Volume Profile & Order Flow Analyst", "icon": "📊",
+        "focus": "Volume (PAXG/USDT, tokenized gold): relative volume, delta (buy/sell pressure), volume bubbles "
+                 "(institutional candles), POC and value area. Does volume confirm this move or show absorption "
+                 "against it? If volume data is unavailable, say so and judge displacement only.",
     },
     {
-        "key": "session_news", "name": "Session, Timing & News Analyst", "icon": "🕐",
-        "focus": "Timing: current session and killzone, how much of the average daily range (ADR) is already used, "
-                 "the Asian range, and upcoming high-impact news. Is this a good time to open this trade and can it "
-                 "reach its targets before the session / news changes the market?",
+        "key": "price_action", "name": "Price Action & Pattern Reader", "icon": "🕯",
+        "focus": "Read the candles: recent_candles on each timeframe, candlestick patterns (engulfing, pin bars, "
+                 "stars, inside bars, dojis), double tops/bottoms, rejection wicks. Is there real rejection from "
+                 "the entry zone or is price slicing through it?",
+    },
+    {
+        "key": "indicators", "name": "Indicator & Momentum Analyst", "icon": "⚙️",
+        "focus": "Indicators on each timeframe: EMA 20/50/200 alignment, RSI, MACD histogram, ADX trend strength "
+                 "and +DI/-DI, Supertrend direction, Stochastic RSI, Bollinger Band position and VWAP. Do they "
+                 "confirm the trade or warn of exhaustion / chop?",
+    },
+    {
+        "key": "session_news", "name": "Session, News & Macro Analyst", "icon": "📰",
+        "focus": "Timing and macro: session and killzone, ADR already used, the Asian range, upcoming high-impact "
+                 "USD news and the latest gold/USD/Fed headlines. Is this the right time for this trade?",
+    },
+]
+
+VERIFIERS = [
+    {
+        "key": "confluence", "name": "Confluence Verifier", "icon": "🔗",
+        "focus": "Cross-check the 8 analyst reports against each other AND against the market data: do they agree, "
+                 "did any analyst claim something the data does not show, which contradictions matter most?",
     },
     {
         "key": "risk", "name": "Risk Manager", "icon": "🛡",
-        "focus": "Stop-loss placement (beyond the invalidation level and outside obvious stop hunts?), risk/reward "
-                 "of each target, volatility, and whether a limit entry is realistic to fill before expiry. "
-                 "Protect capital first.",
+        "focus": "Using the analysts' findings, verify the stop loss (beyond invalidation, outside stop hunts), "
+                 "risk/reward of each target, volatility and whether a limit entry can fill. Protect capital first.",
     },
     {
         "key": "devil", "name": "Devil's Advocate", "icon": "😈",
-        "focus": "Your job is to attack this trade. Find the strongest reasons it will FAIL: a trap, a fake "
-                 "breakout, counter-trend risk, a better opposite setup, liquidity that will be taken against it. "
-                 "Vote TAKE only if you honestly cannot find a serious flaw.",
+        "focus": "Attack the trade using everything the analysts found: the strongest reasons it will FAIL "
+                 "(trap, fake breakout, counter-trend, liquidity that will be taken against it). Vote TAKE only if "
+                 "you honestly cannot find a serious flaw.",
     },
 ]
+
+SPECIALISTS = ANALYSTS + VERIFIERS
+HEAD = {"key": "head", "name": "Head Trader", "icon": "👑"}
+AUDITOR = {"key": "auditor", "name": "Signal Auditor", "icon": "✅"}
+PIPELINE = [("Stage 1 · Analysts", ANALYSTS), ("Stage 2 · Verifiers", VERIFIERS),
+            ("Stage 3 · Decision", [HEAD]), ("Stage 4 · Final check", [AUDITOR])]
 
 SPECIALIST_PROMPT = """You are the {name} on a professional XAU/USD (gold) trading desk that trades Smart Money Concepts.
 Your job: {focus}
@@ -91,7 +119,7 @@ Market read (per timeframe):
 
 Session and upcoming news: {session}
 
-Your eight specialists reported:
+Your 8 analysts and 3 verifiers reported:
 {reports}
 
 Make the final call. Only TAKE high-quality trades where structure, liquidity and risk line up; SKIP otherwise.
@@ -102,6 +130,41 @@ Reply with JSON only:
   "tp1": number, "tp2": number, "tp3": number,
   "headline": "max 8 words, e.g. 'Sweep + H1 OB retest in discount'",
   "reason": "1-2 short sentences in simple English"}}
+"""
+
+VERIFIER_PROMPT = """You are the {name} on a professional XAU/USD (gold) trading desk that trades Smart Money Concepts.
+Your job: {focus}
+
+The engine proposed this setup:
+{setup}
+
+Market read (per timeframe):
+{market}
+
+Session and upcoming news: {session}
+
+The 8 analysts sent you their reports:
+{reports}
+
+Be strict. Reply with JSON only:
+{{"vote": "TAKE" or "SKIP", "score": 0-100, "summary": "one short sentence", "points": ["up to 3 short points"]}}
+"""
+
+AUDITOR_PROMPT = """You are the Signal Auditor, the last check before a XAU/USD (gold) signal is sent to traders.
+Setup from the engine:
+{setup}
+
+Final decision from the head of the desk: {decision}
+Final levels: {levels}
+
+Desk reports (analysts and verifiers):
+{reports}
+
+Check that the signal is consistent: direction matches the reasons, the stop is beyond the invalidation level,
+TP1 is realistic (not behind an opposing zone), R:R at least 1:{min_rr}, and nothing in the reports is a clear
+reason to stop it. Veto only for a concrete problem.
+Reply with JSON only:
+{{"approve": true or false, "issues": ["up to 3 short issues"], "note": "one short sentence"}}
 """
 
 MARKET_VIEW_PROMPT = """You are a senior XAU/USD (gold) analyst who trades Smart Money Concepts.
@@ -120,6 +183,16 @@ def _r(x, n=2):
     return round(x, n) if isinstance(x, (int, float)) else x
 
 
+def _indicators(ind: dict) -> dict:
+    out = {}
+    for k, v in ind.items():
+        if isinstance(v, dict):
+            out[k] = {kk: _r(vv) for kk, vv in v.items()}
+        else:
+            out[k] = _r(v)
+    return out
+
+
 def market_brief(market: dict) -> str:
     """Compact JSON of the per-timeframe read, for prompts."""
     out = {"key_levels": market.get("levels", {}), "average_daily_range": market.get("adr", {})}
@@ -135,6 +208,7 @@ def market_brief(market: dict) -> str:
             "order_blocks": [f"{z['direction']} {z['bottom']:.2f}-{z['top']:.2f}{' (tested)' if z['touched'] else ''}"
                              for z in s["order_blocks"][-3:]],
             "fvgs": [f"{z['direction']} {z['bottom']:.2f}-{z['top']:.2f}" for z in s["fvgs"][-3:]],
+            "breaker_blocks": [f"{z['direction']} {z['bottom']:.2f}-{z['top']:.2f}" for z in s.get("breakers", [])[-3:]],
             "buy_side_liquidity": s["liquidity"]["buy_side"][:3],
             "sell_side_liquidity": s["liquidity"]["sell_side"][:3],
             "equal_highs": s["liquidity"]["equal_highs"][-2:],
@@ -144,9 +218,9 @@ def market_brief(market: dict) -> str:
             "candle_patterns": [f"{x['name']}" + (f" @ {x['level']}" if "level" in x else f" ({x['age']} candles ago)")
                                 for x in s.get("patterns", [])][-4:],
             "recent_candles": s.get("recent_candles", [])[-6:],
-            "indicators": {k: _r(val) for k, val in ind.items()},
+            "indicators": _indicators(ind),
             "volume": v if not v.get("available") else {k: v[k] for k in (
-                "relative_volume_last_closed", "delta", "pressure", "poc", "value_area_high", "value_area_low")},
+                "relative_volume_last_closed", "delta", "pressure", "poc", "value_area_high", "value_area_low", "bubbles")},
         }
     return json.dumps(out, indent=1)
 
@@ -155,6 +229,10 @@ def setup_brief(setup: dict) -> str:
     keep = ("style_label", "direction", "entry_type", "entry", "stop_loss", "tps", "price", "atr",
             "score", "confluences", "poi", "timeframes", "expiry_min")
     return json.dumps({k: setup[k] for k in keep}, indent=1)
+
+
+def _reports_text(reports: list[dict]) -> str:
+    return "\n".join(f"- {r['name']}: {r['vote']} ({r['score']}) - {r['summary']} {r['points']}" for r in reports)
 
 
 def parse_json(text: str) -> dict:
@@ -248,16 +326,20 @@ class TradingDesk:
                 self.pool.penalize(model, e)
                 log.warning("Gemini %s failed: %s", model, str(e)[:120])
 
-    async def _specialist(self, i: int, agent: dict, ctx: dict) -> dict:
+    async def _specialist(self, i: int, agent: dict, ctx: dict, template: str = SPECIALIST_PROMPT,
+                          sources: tuple = ()) -> dict:
         mon = getattr(self, "monitor", None) or Monitor()
         mon.agent(agent["key"], "thinking", vote=None, score=None, summary="Analysing the setup…", points=[])
         started = time.monotonic()
         try:
-            text, model = await self._ask(SPECIALIST_PROMPT.format(name=agent["name"], focus=agent["focus"], **ctx),
+            for src in sources:
+                mon.message(src, agent["key"])
+            text, model = await self._ask(template.format(name=agent["name"], focus=agent["focus"], **ctx),
                                           preferred=self.model_for(i + 1))
             data = parse_json(text)
             vote = str(data.get("vote", "SKIP")).upper()
             report = {"key": agent["key"], "name": agent["name"], "icon": agent["icon"], "model": model,
+                      "stage": 2 if agent in VERIFIERS else 1,
                       "vote": "TAKE" if vote == "TAKE" else "SKIP", "score": int(data.get("score") or 0),
                       "summary": str(data.get("summary", ""))[:200],
                       "points": [str(p)[:150] for p in (data.get("points") or [])][:3]}
@@ -271,12 +353,12 @@ class TradingDesk:
             mon.agent(agent["key"], "error", summary=str(e)[:160], seconds=round(time.monotonic() - started, 1))
             mon.event(f"{agent['icon']} {agent['name']} failed: {str(e)[:120]}", "error")
             return {"key": agent["key"], "name": agent["name"], "icon": agent["icon"], "vote": "ERROR",
-                    "score": 0, "summary": "unavailable", "points": []}
+                    "stage": 2 if agent in VERIFIERS else 1, "score": 0, "summary": "unavailable", "points": []}
 
     async def ping(self) -> list[dict]:
         """Health check: every agent sends a tiny request on its own model."""
         mon = self.monitor
-        mon.event("🩺 Testing all 9 agents…")
+        mon.event(f"🩺 Testing all {len(SPECIALISTS) + 2} agents…")
 
         async def one(i: int, key: str, name: str):
             mon.agent(key, "thinking", summary="Health check…", vote=None, score=None, points=[])
@@ -293,9 +375,10 @@ class TradingDesk:
                 return {"agent": name, "ok": False, "error": str(e)[:160]}
 
         jobs = [one(0, "head", "Head Trader")] + [one(i + 1, a["key"], a["name"]) for i, a in enumerate(SPECIALISTS)]
+        jobs.append(one(len(SPECIALISTS) + 1, "auditor", "Signal Auditor"))
         results = await asyncio.gather(*jobs)
         ok = sum(r["ok"] for r in results)
-        mon.event(f"🩺 Agent test finished: {ok}/9 online", "take" if ok == 9 else "error")
+        mon.event(f"🩺 Agent test finished: {ok}/{len(results)} online", "take" if ok == len(results) else "error")
         return results
 
     async def review(self, setup: dict, market: dict, session: dict) -> dict:
@@ -303,7 +386,8 @@ class TradingDesk:
         ctx = {"setup": setup_brief(setup), "market": market_brief(market), "session": json.dumps(session)}
         mon = getattr(self, "monitor", None) or Monitor()
         mon.set_phase("ai_review")
-        mon.agent("head", "waiting", summary="Waiting for the 8 specialist reports…", vote=None, score=None, points=[])
+        for a in VERIFIERS + [HEAD, AUDITOR]:
+            mon.agent(a["key"], "waiting", summary="Waiting for reports…", vote=None, score=None, points=[])
         mon.event(f"🧠 AI desk reviewing {setup['style_label']} {setup['direction']} @ {setup['entry']} "
                   f"(engine score {setup['score']})")
         verdict = await self._review(setup, ctx, mon)
@@ -321,34 +405,48 @@ class TradingDesk:
         return verdict
 
     async def _review(self, setup: dict, ctx: dict, mon: Monitor) -> dict:
-        reports = await asyncio.gather(*(self._specialist(i, a, ctx) for i, a in enumerate(SPECIALISTS)))
-        votes = sum(r["vote"] == "TAKE" for r in reports)
-        errors = sum(r["vote"] == "ERROR" for r in reports)
-        verdict = {"reports": reports, "votes": votes, "errors": errors, "approved": False,
+        # Stage 1: analysts in parallel (the engine hands each of them the setup and market read).
+        mon.event("📤 Stage 1: engine → 8 analysts")
+        analysts = await asyncio.gather(*(self._specialist(i, a, ctx, sources=("engine",))
+                                          for i, a in enumerate(ANALYSTS)))
+        verdict = {"reports": list(analysts), "votes": 0, "errors": 0, "approved": False,
                    "confidence": 0, "headline": "", "reason": "", "levels": None}
-        if errors == len(reports):
+        if all(r["vote"] == "ERROR" for r in analysts):
             verdict["reason"] = "AI unavailable"
             verdict["ai_down"] = True
             return verdict
 
-        reports_text = "\n".join(f"- {r['name']}: {r['vote']} ({r['score']}) - {r['summary']} {r['points']}"
-                                 for r in reports)
-        mon.agent("head", "thinking", summary="Reading all reports and making the final call…")
+        # Stage 2: verifiers receive every analyst report.
+        mon.event("📤 Stage 2: analyst reports → Confluence Verifier, Risk Manager, Devil's Advocate")
+        vctx = dict(ctx, reports=_reports_text(analysts))
+        keys = tuple(a["key"] for a in ANALYSTS)
+        verifiers = await asyncio.gather(*(self._specialist(len(ANALYSTS) + i, v, vctx, VERIFIER_PROMPT, keys)
+                                           for i, v in enumerate(VERIFIERS)))
+        reports = list(analysts) + list(verifiers)
+        a_votes = sum(r["vote"] == "TAKE" for r in analysts)
+        v_votes = sum(r["vote"] == "TAKE" for r in verifiers)
+        verdict.update(reports=reports, votes=a_votes + v_votes, analyst_votes=a_votes, verifier_votes=v_votes,
+                       errors=sum(r["vote"] == "ERROR" for r in reports))
+
+        # Stage 3: the Head Trader reads everything.
+        for r in reports:
+            mon.message(r["key"], "head")
+        mon.event("📤 Stage 3: all 11 reports → 👑 Head Trader")
+        mon.agent("head", "thinking", summary="Reading all 11 reports and making the final call…")
         try:
-            text, _ = await self._ask(HEAD_PROMPT.format(reports=reports_text, min_rr=self.min_rr, **ctx),
+            text, _ = await self._ask(HEAD_PROMPT.format(reports=_reports_text(reports), min_rr=self.min_rr, **ctx),
                                       preferred=self.model_for(0))
             head = parse_json(text)
         except Exception as e:
-            # Specialists did answer, so this is not "AI down": decide on their votes alone,
-            # and only when a clear majority says TAKE.
+            # Reports did arrive, so this is not "AI down": decide on the votes alone, with a clear majority.
             log.warning("Head trader failed: %s", e)
             takers = [r["score"] for r in reports if r["vote"] == "TAKE"]
             verdict["confidence"] = round(sum(takers) / len(takers)) if takers else 0
-            verdict["reason"] = "Head trader offline – decided by specialist votes."
-            need = max(self.min_votes, -(-3 * len(reports) // 4))  # a clear 75% majority without the head
-            verdict["approved"] = votes >= need and verdict["confidence"] >= self.min_confidence
+            verdict["reason"] = "Head trader offline – decided by the desk's votes."
+            need = max(self.min_votes, -(-3 * len(ANALYSTS) // 4))
+            verdict["approved"] = a_votes >= need and v_votes >= 2 and verdict["confidence"] >= self.min_confidence
             if not verdict["approved"]:
-                verdict["reject_reason"] = f"head trader offline and only {votes}/{len(reports)} agents agree"
+                verdict["reject_reason"] = f"head trader offline and only {a_votes}/{len(ANALYSTS)} analysts agree"
             return verdict
 
         verdict["confidence"] = int(head.get("confidence") or 0)
@@ -369,12 +467,46 @@ class TradingDesk:
         except (KeyError, TypeError, ValueError):
             pass
 
-        verdict["approved"] = take and verdict["confidence"] >= self.min_confidence and votes >= self.min_votes
-        if not verdict["approved"]:
-            verdict["reject_reason"] = (
-                "head trader said SKIP" if not take else
-                f"confidence {verdict['confidence']} < {self.min_confidence}"
-                if verdict["confidence"] < self.min_confidence else f"only {votes}/{len(reports)} agents agree")
+        reasons = []
+        if not take:
+            reasons.append("head trader said SKIP")
+        if verdict["confidence"] < self.min_confidence:
+            reasons.append(f"confidence {verdict['confidence']} < {self.min_confidence}")
+        if a_votes < self.min_votes:
+            reasons.append(f"only {a_votes}/{len(ANALYSTS)} analysts agree")
+        if v_votes < 2:
+            reasons.append(f"only {v_votes}/{len(VERIFIERS)} verifiers agree")
+        if reasons:
+            verdict["reject_reason"] = "; ".join(reasons)
+            return verdict
+
+        # Stage 4: the Signal Auditor checks the final signal and can veto it.
+        mon.message("head", "auditor")
+        mon.event("📤 Stage 4: Head Trader's signal → ✅ Signal Auditor")
+        mon.agent("auditor", "thinking", summary="Checking the final signal…")
+        final = verdict["levels"] or {"entry": setup["entry"], "stop_loss": setup["stop_loss"],
+                                      "tps": [t["price"] for t in setup["tps"]]}
+        started = time.monotonic()
+        try:
+            text, model = await self._ask(AUDITOR_PROMPT.format(
+                setup=ctx["setup"], decision=json.dumps({k: head.get(k) for k in ("decision", "confidence", "reason")}),
+                levels=json.dumps(final), reports=_reports_text(reports), min_rr=self.min_rr),
+                preferred=self.model_for(len(SPECIALISTS) + 1))
+            audit = parse_json(text)
+            approve = audit.get("approve") is True or str(audit.get("approve")).lower() == "true"
+            note = str(audit.get("note", ""))[:200]
+            issues = [str(x)[:150] for x in (audit.get("issues") or [])][:3]
+            mon.agent("auditor", "done", vote="TAKE" if approve else "SKIP", score=100 if approve else 0,
+                      summary=note, points=issues, model=model, seconds=round(time.monotonic() - started, 1))
+        except Exception as e:
+            # The auditor is a final safety net; if it is unreachable the desk's decision stands.
+            log.warning("Signal auditor failed: %s", e)
+            approve, note, issues = True, "auditor offline – desk decision stands", []
+            mon.agent("auditor", "error", summary=note)
+        verdict["audit"] = {"approve": approve, "note": note, "issues": issues}
+        verdict["approved"] = approve
+        if not approve:
+            verdict["reject_reason"] = "vetoed by Signal Auditor: " + ("; ".join(issues) or note)
         return verdict
 
     async def market_view(self, market: dict, session: dict) -> str:

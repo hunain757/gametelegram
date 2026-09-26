@@ -178,7 +178,11 @@ def ai_report(t: dict) -> str:
     if t.get("engine_only") or not t.get("reports"):
         return "🤖 This signal came from the rule engine only (AI desk was offline)."
     lines = [f"🧠 <b>AI Desk Report</b> · XAU/USD {t['direction']} · {t['style_label']}", LINE]
+    last_stage = None
     for r in t["reports"]:
+        if r.get("stage") != last_stage:
+            last_stage = r.get("stage")
+            lines.append({1: "<b>Stage 1 · Analysts</b>", 2: "<b>Stage 2 · Verifiers</b>"}.get(last_stage, ""))
         vote = {"TAKE": "✅ TAKE", "SKIP": "❌ SKIP"}.get(r["vote"], "⚠️ N/A")
         model = f"  <i>[{escape(r['model'])}]</i>" if r.get("model") else ""
         lines.append(f"{r['icon']} <b>{escape(r['name'])}</b> — {vote} ({r['score']}){model}")
@@ -187,6 +191,10 @@ def ai_report(t: dict) -> str:
         lines.append("")
     lines.append(f"👑 <b>Head Trader</b> — confidence {t['confidence']}%")
     lines.append(f"<i>{escape(t.get('reason', ''))}</i>")
+    if t.get("audit"):
+        lines.append(f"\n✅ <b>Signal Auditor</b> — {'approved' if t['audit']['approve'] else 'vetoed'}")
+        if t["audit"].get("note"):
+            lines.append(f"<i>{escape(t['audit']['note'])}</i>")
     return "\n".join(lines)
 
 
@@ -198,7 +206,7 @@ def main_menu(user: dict, is_admin: bool) -> tuple[str, InlineKeyboardMarkup]:
     text = (
         "🏆 <b>GOLD SMC AI SIGNALS</b> 🏆\n"
         f"{LINE}\n"
-        "🤖 9 AI agents scan <b>XAU/USD</b> 24/5 on M5 → D1\n"
+        "🤖 13 AI agents scan <b>XAU/USD</b> 24/5 on M5 → D1\n"
         "💧 Smart Money Concepts · 📊 Volume · 📰 News filter\n"
         "🎯 Auto TP/SL tracking · 📈 Charts · 💰 Lot sizes\n\n"
         f"🔔 Alerts: <b>{'ON' if user.get('subscribed') else 'OFF'}</b>\n"
@@ -355,9 +363,9 @@ HELP = (
     "PDH/PDL, weekly high/low, the Asian range, premium/discount, killzones and volume.\n"
     "3️⃣ A setup needs: higher-timeframe bias + a sweep or structure shift + an OB/FVG to enter from + "
     "a clear path to TP1.\n"
-    "4️⃣ <b>8 AI specialists</b> review it (🏗 Structure · 💧 Liquidity · 📊 Volume · 🕯 Price Action · "
-    "⚙️ Momentum · 🕐 Session & News · 🛡 Risk · 😈 Devil's Advocate) "
-    "and the 👑 <b>Head Trader AI</b> makes the final call.\n"
+    "4️⃣ A <b>13-agent AI desk</b> works as a pipeline: 8 analysts (structure, liquidity, order blocks, FVGs, "
+    "volume, price action, indicators, news) → 3 verifiers who cross-check their reports (confluence, risk, "
+    "devil's advocate) → 👑 Head Trader → ✅ Signal Auditor.\n"
     "5️⃣ 📰 No new trades 30 min around high-impact USD news; you get a warning before it.\n"
     "6️⃣ Signals come with a 📈 chart, 💰 your lot size, and are <b>tracked live</b>: entry, TP1/TP2/TP3, "
     "SL, expiry – as replies on the signal.\n"
@@ -378,7 +386,7 @@ def market_keyboard() -> InlineKeyboardMarkup:
                  [Btn("🔄 Refresh", callback_data="mkt")]])
 
 
-def news_screen(events: list[dict], blackout: dict | None, error: str | None) -> str:
+def news_screen(events: list[dict], blackout: dict | None, error: str | None, headlines: list | None = None) -> str:
     now = datetime.now(timezone.utc)
     lines = ["📰 <b>Economic Calendar · USD</b>", LINE]
     if blackout:
@@ -398,6 +406,11 @@ def news_screen(events: list[dict], blackout: dict | None, error: str | None) ->
                                        f"P {e['previous']}" if e["previous"] else "") if x)
         lines.append(f"{'🔴' if e['impact'] == 'High' else '🟠'} {e['time'].strftime('%H:%M')}  {escape(e['title'])}"
                      + (f"  <i>{extra}</i>" if extra else "") + (f"  ⏰ {when}" if when else ""))
+    if headlines:
+        lines += ["", "<b>🗞 Latest gold / USD headlines</b>"]
+        lines += [f"{'🥇' if h['gold'] else '•'} {h['time'].strftime('%H:%M') if h['time'] else ''} "
+                  f"<a href=\"{escape(h['link'])}\">{escape(h['title'])}</a>" if h["link"] else f"• {escape(h['title'])}"
+                  for h in headlines]
     lines += ["", "<i>🔴 high impact: the bot pauses new signals 30 min before/after</i>"]
     return "\n".join(lines)
 
@@ -450,13 +463,14 @@ def backtest_report(r: dict) -> str:
 
 def _cfg_text(c: dict) -> str:
     tp1 = f"TP1 ≤ {c['tp1_max_r']:g}R" if c.get("tp1_max_r") else "TP1 at liquidity"
-    return f"score ≥ {c['min_score']} · min 1:{c['min_rr']:g} · {tp1}"
+    mode = "🛡 strict" if c.get("strict") else "normal"
+    return f"{mode} · score ≥ {c['min_score']} · min 1:{c['min_rr']:g} · {tp1}"
 
 
 def backtest_menu(params: dict) -> str:
     lines = ["🧪 <b>Backtest & Optimize</b>", LINE,
              "<b>Backtest</b> – replay the last weeks of real gold data with the current settings.",
-             f"<b>Optimize</b> – test {12} settings on the same data and apply the best one.", "",
+             "<b>Optimize</b> – test 16 settings (strict/normal, score, R:R, TP1) on the same data and apply the best.", "",
              "<b>Current settings</b>"]
     for s, p_ in params.items():
         state = "✅" if p_["enabled"] else "⛔ OFF"

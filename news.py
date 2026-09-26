@@ -4,8 +4,11 @@ The bot pauses new signals around high-impact events and warns users shortly bef
 """
 
 import logging
+import re
 import time
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 
 import httpx
 
@@ -84,3 +87,67 @@ class NewsCalendar:
         return [f"{e['impact']} {e['country']} {e['title']} at {e['time'].strftime('%H:%M UTC')}"
                 f" (in {int((e['time'] - now).total_seconds() // 60)} min)"
                 for e in self.upcoming(now, hours)]
+
+
+# ---------------- headlines ----------------
+
+DEFAULT_FEEDS = ("https://www.fxstreet.com/rss/news", "https://www.forexlive.com/feed/news")
+KEYWORDS = re.compile(r"\b(gold|xau|bullion|fed|fomc|powell|inflation|cpi|pce|nfp|payrolls|jobs|dollar|usd|dxy|"
+                      r"yields?|treasur(?:y|ies)|rate cuts?|rate hikes?|geopolit\w*|war|tariffs?)\b", re.I)
+
+
+def parse_rss(xml_text: str, source: str) -> list[dict]:
+    out = []
+    root = ET.fromstring(xml_text)
+    for item in root.iter("item"):
+        title = (item.findtext("title") or "").strip()
+        if not title or not KEYWORDS.search(title):
+            continue
+        try:
+            when = parsedate_to_datetime(item.findtext("pubDate") or "").astimezone(timezone.utc)
+        except (TypeError, ValueError):
+            when = None
+        out.append({"title": title, "time": when, "source": source, "link": (item.findtext("link") or "").strip(),
+                    "gold": bool(re.search(r"\b(gold|xau|bullion)\b", title, re.I))})
+    return out
+
+
+class Headlines:
+    def __init__(self, feeds: tuple[str, ...] = DEFAULT_FEEDS, ttl: int = 900):
+        self.feeds = feeds
+        self.ttl = ttl
+        self.items: list[dict] = []
+        self.error: str | None = None
+        self._fetched = 0.0
+
+    async def refresh(self):
+        if not self.feeds or time.time() - self._fetched < self.ttl:
+            return
+        self._fetched = time.time()
+        items, errors = [], []
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            for url in self.feeds:
+                try:
+                    resp = await client.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0 goldbot"})
+                    resp.raise_for_status()
+                    items += parse_rss(resp.text, re.sub(r"^https?://(www\.)?([^/]+).*", r"\2", url))
+                except Exception as e:
+                    errors.append(f"{url}: {str(e)[:80]}")
+        if items:
+            seen, uniq = set(), []
+            for it in sorted(items, key=lambda x: x["time"] or datetime.min.replace(tzinfo=timezone.utc), reverse=True):
+                if it["title"].lower() not in seen:
+                    seen.add(it["title"].lower())
+                    uniq.append(it)
+            self.items = uniq[:25]
+        self.error = "; ".join(errors) if errors and not items else None
+        if errors:
+            log.warning("Headline feeds: %s", "; ".join(errors))
+
+    def latest(self, n: int = 8, hours: float = 24) -> list[dict]:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+        return [h for h in self.items if not h["time"] or h["time"] >= cutoff][:n]
+
+    def brief(self, n: int = 6) -> list[str]:
+        return [f"{h['time'].strftime('%H:%M') if h['time'] else '--:--'} UTC {h['source']}: {h['title']}"
+                for h in self.latest(n)]

@@ -27,6 +27,12 @@ def analyze(candles: list[dict] | None, xau_price: float | None = None, lookback
     # Biggest-volume candle recently: where the "smart money" traded.
     spike = max(recent, key=lambda c: c["volume"])
 
+    # Volume bubbles: candles with unusually high volume (institutional activity).
+    base = sum(vols[-61:-1]) / max(len(vols[-61:-1]), 1)
+    bubbles = [{"time": c["time"], "price": round(c["close"] + ((xau_price - candles[-1]["close"]) if xau_price else 0), 2),
+                "x_avg": round(c["volume"] / base, 1), "direction": "up" if c["close"] >= c["open"] else "down"}
+               for c in candles[-60:] if base and c["volume"] >= 2 * base][-8:]
+
     profile = volume_profile(candles[-120:])
     shift = (xau_price - candles[-1]["close"]) if xau_price else 0.0
 
@@ -41,6 +47,8 @@ def analyze(candles: list[dict] | None, xau_price: float | None = None, lookback
         "poc": round(profile["poc"] + shift, 2),
         "value_area_high": round(profile["vah"] + shift, 2),
         "value_area_low": round(profile["val"] + shift, 2),
+        "bubbles": bubbles,
+        "profile": [{"price": round(pr + shift, 2), "volume": round(v, 1)} for pr, v in profile["bins"]],
     }
 
 
@@ -66,4 +74,5 @@ def volume_profile(candles: list[dict], bins: int = 40) -> dict:
             lo -= 1
             area += buckets[lo]
     mid = lambda i: low + (i + 0.5) * step  # noqa: E731
-    return {"poc": mid(poc_i), "vah": low + (hi + 1) * step, "val": low + lo * step}
+    return {"poc": mid(poc_i), "vah": low + (hi + 1) * step, "val": low + lo * step,
+            "bins": [(mid(i), buckets[i]) for i in range(bins)]}

@@ -19,6 +19,9 @@ from sessions import is_market_open
 from setups import analyze_market, find_setup, pick_targets, validate_levels
 from storage import Storage, stats
 
+# Test scenarios use random data; strict mode is tested on its own below.
+os.environ.setdefault("STRICT_MODE", "off")
+
 SESSION = {"sessions": ["London"], "killzone": "London Open", "utc_time": "08:00"}
 
 
@@ -244,13 +247,16 @@ class MarketHoursTests(unittest.TestCase):
 
 
 class FakeModels:
-    def __init__(self, head_decision="TAKE", fail=False):
-        self.head_decision, self.fail, self.calls = head_decision, fail, 0
+    def __init__(self, head_decision="TAKE", fail=False, veto=False):
+        self.head_decision, self.fail, self.calls, self.veto = head_decision, fail, 0, veto
 
     async def generate_content(self, model, contents, config):
         self.calls += 1
         if self.fail:
             raise RuntimeError("quota")
+        if "Signal Auditor" in contents:
+            return types.SimpleNamespace(text=json.dumps({"approve": not self.veto, "issues": ["SL inside PDL pool"],
+                                                          "note": "consistent" if not self.veto else "stop too tight"}))
         if "Head Trader" in contents:
             return types.SimpleNamespace(text=json.dumps({
                 "decision": self.head_decision, "confidence": 81, "entry": "bad", "headline": "Sweep + OB retest",
@@ -279,9 +285,19 @@ class AgentTests(unittest.TestCase):
         desk = fake_desk()
         v = asyncio.run(desk.review(setup, market, SESSION))
         self.assertTrue(v["approved"])
-        self.assertEqual(v["votes"], 8)
+        self.assertEqual(v["votes"], 11)       # 8 analysts + 3 verifiers
+        self.assertTrue(v["audit"]["approve"])
         self.assertIsNone(v["levels"])  # head trader's levels were invalid -> engine levels
-        self.assertEqual(desk.fake.calls, 9)  # 8 specialists + head trader
+        self.assertEqual(desk.fake.calls, 13)  # 8 analysts + 3 verifiers + head trader + auditor
+        flows = list(desk.monitor.flows)
+        self.assertTrue(any(f["from"] == "structure" and f["to"] == "confluence" for f in flows))
+        self.assertTrue(any(f["from"] == "head" and f["to"] == "auditor" for f in flows))
+
+    def test_auditor_can_veto(self):
+        setup, market, _ = first_setup()
+        v = asyncio.run(fake_desk(veto=True).review(setup, market, SESSION))
+        self.assertFalse(v["approved"])
+        self.assertIn("Signal Auditor", v["reject_reason"])
 
     def test_desk_skip_and_down(self):
         setup, market, _ = first_setup()
@@ -369,6 +385,29 @@ class PatternTests(unittest.TestCase):
         self.assertEqual(daily_range(daily)["used_pct"], 50)
 
 
+class StrictModeTests(unittest.TestCase):
+    def test_strict_is_a_stricter_subset(self):
+        normal = strict = 0
+        for seed in range(80):
+            market = analyze_market(random_market(seed))
+            for style in setups.STYLES:
+                a = find_setup(style, market, SESSION, 1.5)
+                b = find_setup(style, market, SESSION, 1.5, strict=True)
+                normal += a is not None
+                strict += b is not None
+                if b:
+                    self.assertIsNotNone(a)
+                    self.assertIn("Strict mode", " ".join(b["confluences"]))
+        self.assertLess(strict, normal)
+
+    def test_new_indicators_in_market_read(self):
+        _, market, _ = first_setup()
+        ind = market["15min"]["ind"]
+        for key in ("adx", "supertrend", "stoch_rsi", "bollinger", "vwap"):
+            self.assertIn(key, ind)
+        self.assertIn(ind["supertrend"]["direction"], ("bullish", "bearish"))
+
+
 class NewsTests(unittest.TestCase):
     def test_parse_blackout_and_alerts(self):
         from news import NewsCalendar, parse
@@ -389,6 +428,22 @@ class NewsTests(unittest.TestCase):
         self.assertEqual(len(cal.due_alerts(at)), 1)
         self.assertEqual(cal.due_alerts(at), [])  # only once
         self.assertIn("Non-Farm", ui.news_screen(cal.upcoming(at, 48), None, None))
+
+
+class HeadlineTests(unittest.TestCase):
+    def test_parse_rss_filters_gold_news(self):
+        from news import parse_rss
+        xml = """<rss><channel>
+          <item><title>Gold climbs as Fed rate cut bets grow</title><pubDate>Mon, 21 Sep 2026 10:00:00 GMT</pubDate>
+                <link>https://x/1</link></item>
+          <item><title>Japanese stocks close flat</title><pubDate>Mon, 21 Sep 2026 09:00:00 GMT</pubDate></item>
+          <item><title>US CPI beats expectations, dollar jumps</title><pubDate>bad date</pubDate></item>
+        </channel></rss>"""
+        items = parse_rss(xml, "test")
+        self.assertEqual([i["title"][:4] for i in items], ["Gold", "US C"])
+        self.assertTrue(items[0]["gold"])
+        self.assertEqual(items[0]["time"], datetime(2026, 9, 21, 10, tzinfo=timezone.utc))
+        self.assertIsNone(items[1]["time"])
 
 
 class LotAndCaptionTests(unittest.TestCase):
@@ -718,12 +773,17 @@ class DashboardTests(unittest.TestCase):
                 gb.candles, gb.market = data, market
                 gb.last_scan = datetime.now(timezone.utc)
                 png = await asyncio.to_thread(fetch, "/api/chart.png?tf=1h")
+                candles = json.loads(await asyncio.to_thread(fetch, "/api/candles?tf=15min"))
+                js = await asyncio.to_thread(fetch, "/static/lightweight-charts.js")
+                self.assertEqual(len(candles["candles"]), 300)
+                self.assertIn(b"Lightweight Charts", js[:300])
                 after = json.loads(await asyncio.to_thread(fetch, "/api/state"))
                 dash.server.shutdown()
                 return page, before, png, after
             page, before, png, after = asyncio.run(run())
             self.assertIn(b"Gold AI Control Room", page)
-            self.assertEqual(len(before["agents"]), 9)
+            self.assertIn(b"Agent network", page)
+            self.assertEqual(len(before["agents"]), 13)
             self.assertIsNone(before["market"])
             self.assertEqual(png[:4], b"\x89PNG")
             self.assertEqual(len(after["market"]["tfs"]), 5)

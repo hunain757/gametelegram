@@ -71,7 +71,7 @@ def _summary(style: str, steps: list, trades: list, open_trades: list) -> dict:
 def run_many(candles_by_tf: dict[str, list[dict]], style: str, configs: list[dict]) -> list[dict]:
     """Replay once and evaluate several settings side by side (the market analysis is shared).
 
-    Each config: {"min_score": int, "min_rr": float, "tp1_max_r": float | None}.
+    Each config: {"min_score": int, "min_rr": float, "tp1_max_r": float | None, "strict": bool}.
     """
     st = STYLES[style]
     tfs = [tf for tf in needed_timeframes(style) if candles_by_tf.get(tf)]
@@ -115,7 +115,7 @@ def run_many(candles_by_tf: dict[str, list[dict]], style: str, configs: list[dic
         # 3) each config decides on its own
         for acc in accounts:
             c = acc["cfg"]
-            setup = find_setup(style, market, session, c["min_rr"], c.get("tp1_max_r"))
+            setup = find_setup(style, market, session, c["min_rr"], c.get("tp1_max_r"), c.get("strict", False))
             if not setup or setup["score"] < c["min_score"] or setup["key"] in acc["seen"]:
                 continue
             if any(t["direction"] == setup["direction"] for t in acc["open"]):
@@ -129,12 +129,13 @@ def run_many(candles_by_tf: dict[str, list[dict]], style: str, configs: list[dic
 
 
 def run(candles_by_tf: dict[str, list[dict]], style: str, min_rr: float = 1.5, min_score: int = 55,
-        tp1_max_r: float | None = None) -> dict:
-    return run_many(candles_by_tf, style, [{"min_score": min_score, "min_rr": min_rr, "tp1_max_r": tp1_max_r}])[0]
+        tp1_max_r: float | None = None, strict: bool = False) -> dict:
+    cfg = {"min_score": min_score, "min_rr": min_rr, "tp1_max_r": tp1_max_r, "strict": strict}
+    return run_many(candles_by_tf, style, [cfg])[0]
 
 
-GRID = [{"min_score": s, "min_rr": r, "tp1_max_r": c}
-        for s in (55, 65, 75) for r in (1.5, 2.0) for c in (None, 2.0)]
+GRID = [{"min_score": s, "min_rr": r, "tp1_max_r": c, "strict": k}
+        for k in (True, False) for s in (55, 70) for r in (1.5, 2.0) for c in (None, 2.0)]
 
 
 def optimize(candles_by_tf: dict[str, list[dict]], style: str, min_trades: int = 8) -> dict:

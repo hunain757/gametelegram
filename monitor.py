@@ -1,9 +1,11 @@
 """Live activity feed and agent status, shown on the local dashboard."""
 
+import time
 from collections import deque
 from datetime import datetime, timezone
 
-AGENT_KEYS = ("structure", "liquidity", "volume", "price_action", "momentum", "session_news", "risk", "devil", "head")
+AGENT_KEYS = ("structure", "liquidity", "orderblocks", "imbalance", "volume", "price_action", "indicators",
+              "session_news", "confluence", "risk", "devil", "head", "auditor")
 
 
 def _now() -> str:
@@ -14,6 +16,8 @@ class Monitor:
     def __init__(self):
         self.log: deque = deque(maxlen=400)
         self.reviews: deque = deque(maxlen=25)
+        self.flows: deque = deque(maxlen=200)
+        self._seq = 0
         self.phase = "starting"
         self.agents = {k: {"status": "idle", "vote": None, "score": None, "summary": "", "points": [],
                            "model": None, "at": None, "seconds": None} for k in AGENT_KEYS}
@@ -30,3 +34,8 @@ class Monitor:
 
     def review(self, entry: dict):
         self.reviews.appendleft({"t": _now(), **entry})
+
+    def message(self, src: str, dst: str):
+        """Information passed from one agent (or the engine) to another; drawn as a moving line."""
+        self._seq += 1
+        self.flows.append({"id": self._seq, "from": src, "to": dst, "t": _now(), "ts": time.time()})

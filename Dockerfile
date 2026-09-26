@@ -8,6 +8,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 COPY *.py ./
+COPY static ./static
 
 # Mount a volume here so users, trades and stats survive restarts and redeploys.
 VOLUME /data

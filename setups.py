@@ -9,7 +9,7 @@ Each trading style uses three timeframes:
 
 import smc
 import volume
-from indicators import ema, macd, rsi
+from indicators import adx, bollinger, ema, macd, rsi, stoch_rsi, supertrend, vwap
 from levels import BUY_SIDE, SELL_SIDE, key_levels
 from patterns import daily_range
 
@@ -44,6 +44,11 @@ def analyze_market(candles_by_tf: dict[str, list[dict]], volume_by_tf: dict[str,
                 "ema200": ema(closes, 200)[-1],
                 "rsi": rsi(closes),
                 "macd_hist": m["histogram"] if m else None,
+                "adx": adx(candles),
+                "supertrend": supertrend(candles),
+                "stoch_rsi": stoch_rsi(closes),
+                "bollinger": bollinger(closes),
+                "vwap": vwap(candles, volume_by_tf.get(tf)) if tf in ("5min", "15min") else None,
             },
         }
     market["levels"] = key_levels(candles_by_tf.get("1day"), candles_by_tf.get("5min"))
@@ -99,7 +104,8 @@ def validate_levels(direction: str, entry: float, sl: float, tps: list[float], p
     return True, "ok"
 
 
-def find_setup(style: str, market: dict, session: dict, min_rr: float, tp1_max_r: float | None = None) -> dict | None:
+def find_setup(style: str, market: dict, session: dict, min_rr: float, tp1_max_r: float | None = None,
+               strict: bool = False) -> dict | None:
     st = STYLES[style]
     if any(tf not in market for tf in (st["entry"], st["confirm"], st["bias"])):
         return None
@@ -163,13 +169,14 @@ def find_setup(style: str, market: dict, session: dict, min_rr: float, tp1_max_r
     # Point of interest to enter from.
     pois = [dict(z, kind="Order Block") for z in es["order_blocks"] if z["direction"] == want]
     pois += [dict(z, kind="Fair Value Gap") for z in es["fvgs"] if z["direction"] == want]
+    pois += [dict(z, kind="Breaker Block") for z in es.get("breakers", []) if z["direction"] == want]
     pois = [z for z in pois if _in_or_near(z, price, a, bull)]
     if not pois:
         return None
     poi = min(pois, key=lambda z: abs(price - (z["top"] if bull else z["bottom"])))
     kinds = {z["kind"] for z in pois}
-    score += 10 if "Order Block" in kinds else 5
-    if len(kinds) == 2:
+    score += 10 if kinds & {"Order Block", "Breaker Block"} else 5
+    if len(kinds) >= 2:
         score += 5
     conf.append(f"{TF_LABEL[st['entry']]} {' + '.join(sorted(kinds))} at {poi['bottom']:.2f}–{poi['top']:.2f}")
 
@@ -214,7 +221,8 @@ def find_setup(style: str, market: dict, session: dict, min_rr: float, tp1_max_r
     tps = pick_targets(entry, risk, targets, bull, min_rr)
 
     # Clear path: an opposing order block / FVG before TP1 would stall the move.
-    opposing = [z for z in es["order_blocks"] + cs["order_blocks"] if z["direction"] == against]
+    opposing = [z for z in es["order_blocks"] + cs["order_blocks"] + es.get("breakers", []) + cs.get("breakers", [])
+                if z["direction"] == against]
     opposing += [z for z in cs["fvgs"] if z["direction"] == against]
     edges = []
     for z in opposing:
@@ -270,6 +278,51 @@ def find_setup(style: str, market: dict, session: dict, min_rr: float, tp1_max_r
         conf.append(f"{TF_LABEL[st['entry']]} {pa[-1]['name']}")
     if any(x["direction"] == against and x.get("age", 0) <= 1 for x in es.get("patterns", [])):
         score -= 5
+
+    # Indicator confluence.
+    ci, bi, ei = c["ind"], b["ind"], e["ind"]
+    ema_ok = None
+    if bi.get("ema50") is not None and bi.get("ema200") is not None:
+        ema_ok = (bi["ema50"] > bi["ema200"]) == bull
+        score += 5 if ema_ok else -5
+        if ema_ok:
+            conf.append(f"{TF_LABEL[st['bias']]} EMA 50/200 aligned")
+    st_ok = None
+    if ci.get("supertrend"):
+        st_ok = ci["supertrend"]["direction"] == want
+        score += 5 if st_ok else -5
+        if st_ok:
+            conf.append(f"{TF_LABEL[st['confirm']]} Supertrend {want}")
+    adx_v = (ci.get("adx") or {}).get("adx")
+    if adx_v is not None:
+        di_ok = (ci["adx"]["plus_di"] > ci["adx"]["minus_di"]) == bull
+        if adx_v >= 20 and di_ok:
+            score += 5
+            conf.append(f"{TF_LABEL[st['confirm']]} ADX {adx_v:.0f} – trending")
+        elif adx_v < 15:
+            score -= 5
+    srsi = ei.get("stoch_rsi")
+    if srsi is not None:
+        if (bull and srsi <= 30) or (not bull and srsi >= 70):
+            score += 5
+            conf.append(f"{TF_LABEL[st['entry']]} StochRSI {'oversold' if bull else 'overbought'} ({srsi:.0f})")
+        elif (bull and srsi >= 90) or (not bull and srsi <= 10):
+            score -= 5
+    bb = ei.get("bollinger")
+    if bb and ((bull and bb["position"] <= 0.25) or (not bull and bb["position"] >= 0.75)):
+        score += 3
+    vw = ei.get("vwap")
+    if vw and ((bull and price >= vw) or (not bull and price <= vw)):
+        score += 3
+
+    # Strict mode: every major filter must agree (fewer but cleaner trades).
+    if strict:
+        displaced = bool(struct_trigger and ev.get("body", 0) >= a)
+        confirmed = bool(pa) or displaced
+        if ema_ok is False or st_ok is False or (adx_v is not None and adx_v < 18) \
+                or not (sweep or key_sweep) or not confirmed:
+            return None
+        conf.append("🛡 Strict mode: all filters agree")
 
     # Most of the average daily range already used: less room left today.
     adr = market.get("adr") or {}

@@ -24,7 +24,7 @@ import ui
 from agents import TradingDesk
 from config import Config, load_config
 from market_data import MarketData
-from news import NewsCalendar
+from news import Headlines, NewsCalendar
 from setups import STYLES, TF_LABEL, analyze_market, find_setup
 from storage import Storage, stats
 
@@ -62,9 +62,12 @@ class GoldBot:
                                 cfg.min_confidence, cfg.min_agent_votes, cfg.gemini_fallback_models,
                                 cfg.gemini_rpm_per_model)
         self.news = NewsCalendar(cfg.news_currencies)
+        self.headlines = Headlines(cfg.news_feeds)
         self.scan_lock = asyncio.Lock()
         self.started = time.time()
         self.candles: dict | None = None
+        self.volumes: dict = {}
+        self._live: tuple[float, dict | None] = (0.0, None)
         self.market: dict | None = None
         self.last_scan: datetime | None = None
         self.last_notes: list[str] = []
@@ -141,7 +144,7 @@ class GoldBot:
         """Market closed: keep charts, dashboard and menus up to date without looking for trades."""
         async with self.scan_lock:
             candles, volumes = await self.data.get()
-            self.candles = candles
+            self.candles, self.volumes = candles, volumes
             self.market = analyze_market(candles, volumes)
             self.last_scan = datetime.now(timezone.utc)
             self.desk.monitor.event(f"💤 Market closed – chart & market data refreshed "
@@ -153,12 +156,13 @@ class GoldBot:
         return {"enabled": ss.get("enabled", True),
                 "min_score": ss.get("min_score", self.cfg.min_engine_score),
                 "min_rr": ss.get("min_rr", self.cfg.min_risk_reward),
-                "tp1_max_r": ss.get("tp1_max_r")}
+                "tp1_max_r": ss.get("tp1_max_r"),
+                "strict": ss.get("strict", self.cfg.strict_mode)}
 
     async def _scan(self, bot, mon) -> list[str]:
         if True:
             candles, volumes = await self.data.get()
-            self.candles = candles
+            self.candles, self.volumes = candles, volumes
             self.market = analyze_market(candles, volumes)
             now = datetime.now(timezone.utc)
             self.last_scan = now
@@ -166,8 +170,10 @@ class GoldBot:
                 self.scans = {"day": date.today(), "count": 0}
             self.scans["count"] += 1
             await self.news.refresh()
+            await self.headlines.refresh()
             session = sessions.current(now)
             session["news"] = self.news.brief(now)
+            session["headlines"] = self.headlines.brief()
             m5 = candles["5min"]
             mon.event(f"📥 Data loaded: M5→D1, XAU/USD {m5[-1]['close']:.2f} · "
                       f"volume {'✓' if self.data.volume_ok else '✗'} · news {'✓' if self.news.error is None else '✗'}")
@@ -203,7 +209,7 @@ class GoldBot:
                 if not sp["enabled"]:
                     notes.append(f"{label}: switched off by owner")
                     continue
-                setup = find_setup(style, self.market, session, sp["min_rr"], sp["tp1_max_r"])
+                setup = find_setup(style, self.market, session, sp["min_rr"], sp["tp1_max_r"], sp["strict"])
                 if not setup:
                     notes.append(f"{label}: no setup")
                     continue
@@ -424,7 +430,7 @@ class GoldBot:
             data = await backtest.fetch_history(self.cfg.twelvedata_api_key, self.cfg.symbol, style)
             sp = self.style_params(style)
             result = await asyncio.to_thread(backtest.run, data, style, sp["min_rr"], sp["min_score"],
-                                             sp["tp1_max_r"])
+                                             sp["tp1_max_r"], sp["strict"])
         except Exception as e:
             log.exception("Backtest failed")
             result = {"error": str(e)[:200]}
@@ -500,7 +506,9 @@ class GoldBot:
         if key == "news":
             await self.news.refresh()
             now = datetime.now(timezone.utc)
-            return ui.news_screen(self.news.upcoming(now, 24 * 7), self.news.blackout(now), self.news.error), ui.back()
+            await self.headlines.refresh()
+            return ui.news_screen(self.news.upcoming(now, 24 * 7), self.news.blackout(now), self.news.error,
+                                  self.headlines.latest(6)), ui.back()
         if key == "status" and self.is_admin(user_id):
             return ui.status_screen(self.status_info()), ui.back()
         if key == "bt" and self.is_admin(user_id):
@@ -632,20 +640,26 @@ class GoldBot:
 
     # ================= local dashboard =================
 
-    ROLES = {"structure": "Trend, BOS/CHoCH on every timeframe", "liquidity": "Sweeps, order blocks, FVGs, targets",
-             "volume": "Volume spikes, delta, POC, absorption", "price_action": "Candles, patterns, rejections",
-             "momentum": "EMA, RSI, MACD, volatility", "session_news": "Killzone, ADR used, upcoming news",
-             "risk": "Stop placement, R:R, stop-hunt risk", "devil": "Hunts for reasons the trade fails",
-             "head": "Reads all 8 reports → final TAKE/SKIP, confidence, levels"}
+    ROLES = {"structure": "Trend, BOS/CHoCH on every timeframe", "liquidity": "Sweeps, resting liquidity, stop hunts",
+             "orderblocks": "Order blocks & breaker blocks", "imbalance": "FVGs, imbalance, premium/discount",
+             "volume": "Volume profile, delta, volume bubbles", "price_action": "Candles, patterns, rejections",
+             "indicators": "EMA, RSI, MACD, ADX, Supertrend, StochRSI, BB, VWAP",
+             "session_news": "Killzone, ADR, calendar & headlines",
+             "confluence": "Cross-checks all 8 analyst reports", "risk": "Verifies stop, targets, R:R",
+             "devil": "Attacks the trade with the analysts' findings",
+             "head": "Reads all 11 reports → TAKE/SKIP, confidence, levels",
+             "auditor": "Final check of the signal – can veto"}
 
     def dashboard_state(self) -> dict:
-        from agents import SPECIALISTS
+        from agents import PIPELINE
 
         mon = self.desk.monitor
-        meta = {a["key"]: a for a in SPECIALISTS}
-        meta["head"] = {"name": "Head Trader", "icon": "👑"}
-        agents = [{"key": k, "name": meta[k]["name"], "icon": meta[k]["icon"], "role": self.ROLES.get(k, ""),
-                   **dict(mon.agents.get(k, {}))} for k in [a["key"] for a in SPECIALISTS] + ["head"]]
+        agents = [{"key": a["key"], "name": a["name"], "icon": a["icon"], "role": self.ROLES.get(a["key"], ""),
+                   "stage": stage_no, **dict(mon.agents.get(a["key"], {}))}
+                  for stage_no, (_, members) in enumerate(PIPELINE, 1) for a in members]
+        stages = [name for name, _ in PIPELINE]
+        now_ts = time.time()
+        flows = [f for f in list(mon.flows) if now_ts - f["ts"] < 120]
         market = None
         if self.market:
             tfs = []
@@ -670,6 +684,14 @@ class GoldBot:
             "phase": mon.phase,
             "next_scan_in": next_in if sessions.is_market_open() else None,
             "agents": agents,
+            "stages": stages,
+            "flows": flows,
+            "data_age": self.data_age(),
+            "calendar": [{"title": e["title"], "impact": e["impact"], "time": e["time"].strftime("%a %H:%M UTC"),
+                          "forecast": e["forecast"], "previous": e["previous"]}
+                         for e in self.news.upcoming(datetime.now(timezone.utc), 48)][:10],
+            "headlines": [{"title": h["title"], "source": h["source"], "link": h["link"], "gold": h["gold"],
+                           "time": h["time"].strftime("%H:%M UTC") if h["time"] else ""} for h in self.headlines.latest(10)],
             "log": list(mon.log)[::-1][:200],
             "reviews": list(mon.reviews),
             "market": market,
@@ -680,6 +702,89 @@ class GoldBot:
                          "min_votes": self.cfg.min_agent_votes},
             "chart_version": str(self.last_scan) if self.last_scan else "",
         }
+
+    def live_price(self) -> dict | None:
+        """Near real-time gold price for the dashboard (called from the dashboard thread, cached 5 s).
+
+        Twelve Data's free plan only allows a candle refresh every few minutes, so between scans the price
+        is moved with PAXG/USDT (Binance, tokenized gold) calibrated to the last XAU/USD M5 close.
+        """
+        cached_at, value = self._live
+        if time.time() - cached_at < 5 and value:
+            return value
+        if not self.candles or not self.candles.get("5min"):
+            return None
+        xau = self.candles["5min"][-1]
+        value = {"price": round(xau["close"], 2), "source": "Twelve Data (last scan)", "time": xau["time"]}
+        paxg = (self.volumes or {}).get("5min")
+        if self.cfg.volume_symbol and paxg:
+            try:
+                import httpx
+                r = httpx.get("https://data-api.binance.vision/api/v3/ticker/price",
+                              params={"symbol": self.cfg.volume_symbol}, timeout=4)
+                r.raise_for_status()
+                ref = next((c for c in reversed(paxg) if c["time"] == xau["time"]), paxg[-1])
+                offset = xau["close"] - ref["close"]
+                value = {"price": round(float(r.json()["price"]) + offset, 2), "source": "live (PAXG-calibrated)",
+                         "time": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), "offset": round(offset, 2)}
+            except Exception as e:
+                log.debug("Live price unavailable: %s", e)
+        self._live = (time.time(), value)
+        return value
+
+    def chart_data(self, tf: str) -> dict | None:
+        """Candles and SMC overlays for the dashboard's live chart."""
+        if not self.candles or tf not in self.candles or not self.market or tf not in self.market:
+            return None
+
+        def ts(t: str) -> int:
+            return int(datetime.strptime(t[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp())
+
+        candles = self.candles[tf][-300:]
+        smc_read = self.market[tf]["smc"]
+        offset = len(self.candles[tf]) - len(candles)
+        first = ts(candles[0]["time"])
+
+        def zone(z, kind):
+            i = max(z["idx"] - offset, 0)
+            return {"kind": kind, "dir": z["direction"], "top": z["top"], "bottom": z["bottom"],
+                    "from": ts(candles[min(i, len(candles) - 1)]["time"])}
+
+        zones = [zone(z, "OB") for z in smc_read["order_blocks"]] + [zone(z, "FVG") for z in smc_read["fvgs"]]
+        zones += [zone(z, "Breaker") for z in smc_read.get("breakers", [])]
+        markers = [{"time": ts(e["time"]), "position": "belowBar" if e["direction"] == "bullish" else "aboveBar",
+                    "color": "#26c281" if e["direction"] == "bullish" else "#ef5350",
+                    "shape": "arrowUp" if e["direction"] == "bullish" else "arrowDown", "text": e["type"]}
+                   for e in smc_read["events"] if ts(e["time"]) >= first]
+        markers += [{"time": ts(w["time"]), "position": "belowBar" if w["direction"] == "bullish" else "aboveBar",
+                     "color": "#f5c542", "shape": "circle", "text": "sweep"}
+                    for w in smc_read["liquidity"]["sweeps"] if ts(w["time"]) >= first]
+        vol = self.market[tf]["volume"]
+        bubbles = [{"time": ts(b["time"]), "price": b["price"], "x": b["x_avg"], "dir": b["direction"]}
+                   for b in vol.get("bubbles", []) if ts(b["time"]) >= first] if vol.get("available") else []
+        return {
+            "tf": tf,
+            "candles": [{"time": ts(c["time"]), "open": c["open"], "high": c["high"], "low": c["low"],
+                         "close": c["close"]} for c in candles],
+            "markers": sorted(markers, key=lambda m: m["time"]),
+            "zones": zones,
+            "levels": self.market.get("levels", {}),
+            "liquidity": {"buy": smc_read["liquidity"]["buy_side"][:3], "sell": smc_read["liquidity"]["sell_side"][:3]},
+            "bubbles": bubbles,
+            "profile": vol.get("profile", []) if vol.get("available") else [],
+            "poc": vol.get("poc"),
+            "trades": [{k: t[k] for k in ("direction", "entry", "stop_loss", "tps", "style_label")}
+                       for t in self.storage.open_trades()],
+        }
+
+    def data_age(self) -> dict | None:
+        """How fresh the market data is: last closed M5 candle vs now (UTC)."""
+        if not self.candles or not self.candles.get("5min"):
+            return None
+        last = datetime.strptime(self.candles["5min"][-1]["time"][:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        return {"last_candle": last.strftime("%Y-%m-%d %H:%M UTC"),
+                "minutes": int((datetime.now(timezone.utc) - last).total_seconds() // 60),
+                "source": f"Twelve Data {self.cfg.symbol}"}
 
     async def dashboard_scan(self):
         try:

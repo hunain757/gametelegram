@@ -1,7 +1,7 @@
 # 🏆 Gold SMC AI Signal Bot (Telegram)
 
 A Telegram bot that scans **gold (XAU/USD)** around the clock with a **Smart Money Concepts engine**,
-**volume analysis** and a **desk of 9 Gemini AI agents**, sends **scalping / intraday / swing** signals
+**volume analysis** and a **13-agent Gemini AI desk**, sends **scalping / intraday / swing** signals
 with entry, SL and 3 TPs, and **tracks every trade live** (entry fill, TP1/TP2/TP3, SL, expiry).
 
 ## How it works
@@ -12,7 +12,9 @@ every 5 min ─► Twelve Data: XAU/USD M5 · M15 · H1 · H4 · D1   (+ Binance
                 ▼
         SMC ENGINE (per timeframe)
         • swings, BOS / CHoCH, trend, displacement strength
-        • candlestick patterns (engulfing, pin bar, stars, inside bar), double tops/bottoms, ADR
+        • order blocks, breaker blocks, candlestick patterns, double tops/bottoms, ADR
+        • indicators: EMA 20/50/200, RSI, MACD, ADX, Supertrend, Stochastic RSI, Bollinger, VWAP
+        • 🛡 strict mode: trend + Supertrend + ADX + liquidity sweep + confirmation candle must all agree
         • order blocks, fair value gaps
         • liquidity pools, equal highs/lows, liquidity sweeps
         • key levels: PDH/PDL, previous week high/low, Asian range, daily/weekly open
@@ -30,12 +32,14 @@ every 5 min ─► Twelve Data: XAU/USD M5 · M15 · H1 · H4 · D1   (+ Binance
         📰 NEWS FILTER – no new trades 30 min around high-impact USD news (ForexFactory calendar)
                 │
                 ▼ (only setups with confluence score ≥ MIN_ENGINE_SCORE)
-        AI DESK (Gemini, each agent on its own model, automatic fallback when one is busy)
-        🏗 Structure  💧 Liquidity/OB  📊 Volume  🕯 Price Action  ⚙️ Momentum
-        🕐 Session/ADR/News  🛡 Risk  😈 Devil's Advocate                 → vote TAKE/SKIP
-        👑 Head Trader reads all 8 reports → final TAKE/SKIP, confidence, fine-tuned levels
+        AI DESK – 13 Gemini agents in a 4-stage pipeline (each on its own model, automatic fallback)
+        Stage 1  8 analysts: 🏗 Structure · 💧 Liquidity · 🧱 Order/Breaker blocks · ⚡ FVG · 📊 Volume profile
+                 · 🕯 Price action · ⚙️ Indicators (EMA/RSI/MACD/ADX/Supertrend/StochRSI/BB/VWAP) · 📰 News & macro
+        Stage 2  3 verifiers read ALL analyst reports: 🔗 Confluence · 🛡 Risk · 😈 Devil's Advocate
+        Stage 3  👑 Head Trader reads all 11 reports → TAKE/SKIP, confidence, final levels
+        Stage 4  ✅ Signal Auditor checks the final signal and can veto it
                 │
-                ▼ (Head Trader TAKE + confidence ≥ 70 + ≥ 5/8 agents agree)
+                ▼ (Head TAKE + confidence ≥ 70 + ≥ 5/8 analysts + ≥ 2/3 verifiers + auditor OK)
         TELEGRAM: 📈 chart + signal + 💰 your lot size ─► live tracking replies on the signal:
         ✅ entry filled · 🎯 TP1 (SL → breakeven) · 🎯 TP2 · 🏆 TP3 · 🛑 SL · ⌛ expired
 ```
@@ -78,18 +82,21 @@ replayed. Use it to tune `MIN_ENGINE_SCORE`, `MIN_RISK_REWARD` and `STYLES` befo
 
 ## 🖥 Live dashboard (only on your PC)
 
-When the bot starts it opens **http://localhost:8080** in your browser (it listens on this computer only).
-You can watch everything live:
+When the bot starts it opens **http://localhost:8080** (it listens on this computer only):
 
-- the **9 AI agents** as cards: *thinking* (flashing), their vote (TAKE / SKIP), score, reasoning, the Gemini model
-  used and how long it took
-- the **live activity feed**: every scan step, setups found, each agent's answer, the Head Trader's decision,
-  signals sent and TP/SL hits
-- the **chart** (M5 → D1) with order blocks, FVGs, liquidity and key levels, plus market structure per timeframe
-- the **last AI decisions**, open trades, performance and system health (data feeds, API usage, errors)
-- buttons: **⚡ Scan now** and **🩺 Test all 9 agents** (each agent answers on its own model, so you see they are online)
+- **Agent network**: the engine, 8 analysts, 3 verifiers, Head Trader, Signal Auditor and Telegram as a live
+  graph. Every time information is passed on, a glowing dot runs along the line. Nodes flash while an agent
+  thinks and turn green/red with its vote. Click a node for its full reasoning, model and timing.
+- **Live chart** (M5 → D1, TradingView Lightweight Charts): candles with BOS/CHoCH arrows, liquidity sweeps,
+  order blocks, breaker blocks, FVGs, key levels (PDH/PDL/PWH/PWL/Asia), buy/sell-side liquidity, volume
+  bubbles, volume profile + POC and your open trades. Toggle each layer.
+- **Live price** every 5 s (PAXG/USDT calibrated to the last XAU/USD candle between scans) and the time of the
+  last real candle, so you can see how fresh the data is.
+- Live activity feed, last AI decisions, open trades, news calendar + headlines, market structure, system
+  health and performance. Buttons: **⚡ Scan now** and **🩺 Test all agents**.
 
 Set `DASHBOARD_PORT=0` to turn it off, or `DASHBOARD_OPEN=off` to stop it opening the browser.
+`static/lightweight-charts.js` is TradingView Lightweight Charts™ (Apache 2.0, see `static/LICENSE-lightweight-charts`).
 
 ## Keys you need
 

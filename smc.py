@@ -55,7 +55,8 @@ def market_structure(candles: list[dict], swings: list[dict], right: int = 2) ->
     return {"trend": trend, "events": events}
 
 
-def order_blocks(candles: list[dict], events: list[dict], max_blocks: int = 5) -> list[dict]:
+def order_blocks(candles: list[dict], events: list[dict], max_blocks: int = 5,
+                 breakers: list | None = None) -> list[dict]:
     """The last opposite candle before the move that broke structure; kept while not invalidated."""
     blocks = []
     for ev in events:
@@ -73,22 +74,53 @@ def order_blocks(candles: list[dict], events: list[dict], max_blocks: int = 5) -
 
         # Invalidate on a close through the block; note if price came back into it.
         valid = True
-        for c in candles[ev["idx"] + 1 :]:
+        broken_at = None
+        for j in range(ev["idx"] + 1, len(candles)):
+            c = candles[j]
             if ev["direction"] == "bullish":
                 if c["close"] < block["bottom"]:
-                    valid = False
+                    valid, broken_at = False, j
                     break
                 if c["low"] <= block["top"]:
                     block["touched"] = True
             else:
                 if c["close"] > block["top"]:
-                    valid = False
+                    valid, broken_at = False, j
                     break
                 if c["high"] >= block["bottom"]:
                     block["touched"] = True
         if valid and all(b["idx"] != ob_idx for b in blocks):
             blocks.append(block)
+        elif broken_at is not None and breakers is not None:
+            breakers.append(dict(block, broken_at=broken_at))
     return blocks[-max_blocks:]
+
+
+def breaker_blocks(candles: list[dict], failed: list[dict], max_blocks: int = 4) -> list[dict]:
+    """A failed order block flips sides: a broken bullish OB becomes bearish resistance and vice versa.
+
+    Kept while price has not closed back through it after the break.
+    """
+    out = []
+    for ob in failed:
+        direction = "bearish" if ob["direction"] == "bullish" else "bullish"
+        z = {"direction": direction, "top": ob["top"], "bottom": ob["bottom"], "idx": ob["broken_at"],
+             "time": candles[ob["broken_at"]]["time"], "touched": False}
+        valid = True
+        for c in candles[ob["broken_at"] + 1:]:
+            if direction == "bearish":
+                if c["close"] > z["top"]:
+                    valid = False
+                    break
+                z["touched"] = z["touched"] or c["high"] >= z["bottom"]
+            else:
+                if c["close"] < z["bottom"]:
+                    valid = False
+                    break
+                z["touched"] = z["touched"] or c["low"] <= z["top"]
+        if valid and all(o["idx"] != z["idx"] for o in out):
+            out.append(z)
+    return out[-max_blocks:]
 
 
 def fair_value_gaps(candles: list[dict], min_size: float = 0.0, max_gaps: int = 6) -> list[dict]:
@@ -180,6 +212,7 @@ def analyze(candles: list[dict]) -> dict:
     swings = find_swings(candles)
     structure = market_structure(candles, swings)
     events = structure["events"]
+    failed: list[dict] = []
     n = len(candles)
     return {
         "atr": a,
@@ -189,7 +222,8 @@ def analyze(candles: list[dict]) -> dict:
         "last_event": events[-1] if events else None,
         "last_event_age": (n - 1 - events[-1]["idx"]) if events else None,
         "swings": swings[-12:],
-        "order_blocks": order_blocks(candles, events),
+        "order_blocks": order_blocks(candles, events, breakers=failed),
+        "breakers": breaker_blocks(candles, failed),
         "fvgs": fair_value_gaps(candles, min_size=a * 0.1),
         "liquidity": liquidity(candles, swings, tolerance=a * 0.15),
         "range": dealing_range(candles),

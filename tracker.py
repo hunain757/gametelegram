@@ -56,6 +56,7 @@ def new_trade(setup: dict, verdict: dict, candle_time: str, now: datetime | None
         "headline": verdict.get("headline", ""),
         "reason": verdict.get("reason", ""),
         "reports": verdict.get("reports", []),
+        "audit": verdict.get("audit"),
         "engine_only": verdict.get("engine_only", False),
         "timeframes": setup["timeframes"],
         "messages": {},
