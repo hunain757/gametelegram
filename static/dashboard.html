@@ -101,6 +101,10 @@ section h2{border-left:3px solid var(--gold);padding-left:9px}
 .brow{padding:5px 0;border-bottom:1px dashed #19212f;font-size:12.5px}.vchip{margin-right:4px}
 .ncat{font-size:10px;padding:0 6px;border-radius:99px;background:#263045;color:var(--mut);margin-right:4px;text-transform:uppercase}
 .ncat.world{background:#3a1f12;color:#ffb38a}.ncat.macro{background:#12283a;color:#8cc8ff}.ncat.gold{background:#3a2c10;color:var(--gold2)}.ncat.crypto{background:#2a1a3a;color:#d9b3ff}
+/* explanation */
+.explain{margin-top:10px;padding:10px 12px;border-radius:10px;background:#0d1320;border:1px solid var(--line);font-size:13px;line-height:1.5}
+.exp{margin-bottom:6px}.evid{margin:4px 0 6px;padding-left:18px}.evid .pro{color:#8ff0bf}.evid .con{color:#ffb0ba}
+.kvx{margin-top:4px;color:#b8c3d8}.kvx b{color:var(--gold);font-size:11px;text-transform:uppercase;letter-spacing:.8px;margin-right:6px}
 /* live review + model health */
 .stages{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin:10px 0}
 .stg{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px}
@@ -499,7 +503,7 @@ function render(){
     s.reviews.map(r => `<tr><td>${r.t}</td><td>${esc(r.style)} ${r.direction} @ ${r.entry}<br><span class="role">engine ${r.score}</span></td>
       <td>${[1, 2, 3].map(st => { const l = r.reports.filter(x => (x.stage || 1) === st); return l.length ? `${["", "Analysts", "Leads", "Verifiers"][st]} <b>${l.filter(x => x.vote === "TAKE").length}/${l.length}</b>` : ""; }).filter(Boolean).join("<br>")}
         ${r.board ? `<br><span class="role">strategies ${esc(r.board)}</span>` : ""}</td>
-      <td class="${r.approved ? "ok" : "bad"}">${r.approved ? "SENT" : "SKIPPED"}<br><span class="role">${esc(r.reason || "")}</span></td></tr>`).join("") + "</table>"
+      <td class="${r.approved ? "ok" : "bad"}">${r.approved ? "SENT" : "SKIPPED"}<br><span class="role">${esc(r.reason || "")}</span>${r.explain ? `<div class="role" style="margin-top:4px;color:#b8c3d8">${esc(r.explain.slice(0, 220))}</div>` : ""}</td></tr>`).join("") + "</table>"
     : '<div class="empty">No setup reviewed yet. The desk only works when the engine finds a real setup.</div>';
   H.trades = s.trades.length ? `<table><tr><th>Trade</th><th>Entry</th><th>SL</th><th>TPs</th><th>Status</th></tr>` +
     s.trades.map(t => `<tr><td>${esc(t.symbol || "")} ${t.direction}<br><span class="role">${esc(t.style_label)}</span></td><td>${t.entry}</td><td>${t.stop_loss}</td>
@@ -542,6 +546,18 @@ function renderKpis(s, mk, models){
     k("Model slots", models.length ? ready + "/" + models.length : "–", esc((s.key_names || []).join(" · ") || "1 API key"), models.length && !ready ? "bad" : "ok"),
   ].join("");
 }
+function explainBox(c){
+  if (!c) return "";
+  const li = (xs, cls) => (xs || []).map(x => `<li class="${cls}">${esc(x)}</li>`).join("");
+  const parts = [];
+  if (c.explain) parts.push(`<div class="exp">${esc(c.explain)}</div>`);
+  if ((c.for || []).length || (c.against || []).length) parts.push(`<ul class="evid">${li(c.for, "pro")}${li(c.against, "con")}</ul>`);
+  if (c.invalidation) parts.push(`<div class="kvx"><b>Invalidation</b> ${esc(c.invalidation)}</div>`);
+  if (c.management) parts.push(`<div class="kvx"><b>Management</b> ${esc(c.management)}</div>`);
+  if ((c.risks || []).length) parts.push(`<div class="kvx"><b>Risks</b> ${c.risks.map(esc).join(" · ")}</div>`);
+  if (c.reject_reason) parts.push(`<div class="kvx bad"><b>Rejected because</b> ${esc(c.reject_reason)}</div>`);
+  return parts.length ? `<div class="explain">${parts.join("")}</div>` : "";
+}
 function renderLive(s){
   const cur = s.current;
   const stages = (s.stages || []).map((n, i) => [n.replace(/^Stage \d+ · /, ""), s.agents.filter(a => a.stage === i + 1)]);
@@ -558,7 +574,7 @@ function renderLive(s){
         return `<span>${esc(v.name.split(" ")[0])} <b>${m.filter(a => a.status === "done" && a.vote === "TAKE").length}/${m.length}</b></span>`; }).join("")}</div>
     <div class="tally" style="margin-top:6px"><span class="ok">TAKE <b>${take}</b></span><span class="bad">SKIP <b>${skip}</b></span><span>NEUTRAL <b>${neu}</b></span><span class="warn">errors <b>${err}</b></span></div>` +
     (cur ? (cur.end == null ? `<div class="verdict run">Desk is working…</div>`
-      : `<div class="verdict ${cur.approved ? "take" : "skip"}">${cur.approved ? "APPROVED – signal " + (cur.practice ? "(practice, not sent)" : "sent") : "REJECTED – no signal"}</div>`) : "");
+      : `<div class="verdict ${cur.approved ? "take" : "skip"}">${cur.approved ? "APPROVED – signal " + (cur.practice ? "(practice, not sent)" : "sent") : "REJECTED – no signal"}</div>` + explainBox(cur)) : "");
   H.live_review = html;
 }
 function renderKeys(models){

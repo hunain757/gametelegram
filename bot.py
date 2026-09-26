@@ -71,6 +71,7 @@ class GoldBot:
                                 cfg.min_confidence, cfg.min_agent_votes, cfg.gemini_fallback_models,
                                 cfg.gemini_rpm_per_model, providers=cfg.ai_providers)
         self.desk.pool.restore(self.storage.data.get("ai_pool"))
+        self.desk.language = cfg.explain_language
         self.news = NewsCalendar(cfg.news_currencies)
         self.headlines = Headlines(cfg.news_feeds)
         self.scan_lock = asyncio.Lock()

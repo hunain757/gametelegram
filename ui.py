@@ -108,8 +108,17 @@ def signal_card(t: dict) -> str:
     if t.get("headline"):
         lines.append(f"<i>{escape(t['headline'])}</i>")
     lines += [_levels_block(t), "<b>DESK VERDICT</b>", _desk_block(t)]
-    if t.get("reason"):
-        lines += ["<b>RATIONALE</b>", f"<blockquote>{escape(t['reason'])}</blockquote>"]
+    if t.get("explain") or t.get("reason"):
+        lines += ["<b>WHY THIS TRADE</b>", f"<blockquote>{escape(t.get('explain') or t['reason'])}</blockquote>"]
+    ev = [f"+ {escape(x)}" for x in t.get("evidence_for") or []] + [f"− {escape(x)}" for x in t.get("evidence_against") or []]
+    if ev:
+        lines += ["<b>EVIDENCE</b>"] + ev
+    if t.get("invalidation"):
+        lines += ["<b>INVALIDATION</b>", escape(t["invalidation"])]
+    if t.get("management"):
+        lines += ["<b>MANAGEMENT</b>", escape(t["management"])]
+    if t.get("risks"):
+        lines += ["<b>RISKS</b>"] + [f"– {escape(x)}" for x in t["risks"]]
     lines.append("<b>CONFLUENCE</b>")
     lines += [f"– {escape(plain(c))}" for c in t["confluences"][:7]]
     lines += ["", f"Timeframes  {TF_LABEL[tfs['bias']]} › {TF_LABEL[tfs['confirm']]} › {TF_LABEL[tfs['entry']]}",
@@ -161,6 +170,8 @@ def signal_caption(t: dict, lot: str = "") -> str:
         lines.append(f"<b>Confidence {t['confidence']}%</b>  {bar(t['confidence'])}")
         lines.append(desk_line(t))
     lines += [f"– {escape(plain(c))}" for c in t["confluences"][:3]]
+    if t.get("invalidation"):
+        lines.append(f"<i>Invalid if: {escape(t['invalidation'][:150])}</i>")
     if lot:
         lines.append(lot)
     if t["entry_type"] == "LIMIT":
@@ -242,7 +253,11 @@ def ai_report(t: dict) -> str:
         lines += [f"  – {escape(plain(pt))}" for pt in r["points"]]
         if r.get("debate"):
             lines.append(f"  Debate: <i>{escape(r['debate'])}</i>" + (" (changed vote)" if r.get("changed") else ""))
-    lines += ["", f"<b>HEAD TRADER</b>  confidence {t['confidence']}%", f"<i>{escape(t.get('reason', ''))}</i>"]
+    lines += ["", f"<b>HEAD TRADER</b>  confidence {t['confidence']}%", f"<i>{escape(t.get('explain') or t.get('reason', ''))}</i>"]
+    lines += [f"  + {escape(x)}" for x in t.get("evidence_for") or []]
+    lines += [f"  − {escape(x)}" for x in t.get("evidence_against") or []]
+    if t.get("invalidation"):
+        lines.append(f"  Invalidation: {escape(t['invalidation'])}")
     if t.get("audit"):
         lines.append(f"\n<b>SIGNAL AUDITOR</b>  {'approved' if t['audit']['approve'] else 'vetoed'}")
         if t["audit"].get("note"):

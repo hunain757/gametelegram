@@ -262,7 +262,10 @@ class FakeModels:
         if "Head Trader" in contents:
             return types.SimpleNamespace(text=json.dumps({
                 "decision": self.head_decision, "confidence": 81, "entry": "bad", "headline": "Sweep + OB retest",
-                "reason": "All desks aligned."}))
+                "reason": "All desks aligned.", "explain": "Price swept the lows and is back in the order block.",
+                "for": ["H1 bullish BOS @ 2617.9", "sell-side swept @ 2613.0"], "against": ["ADR 80% used"],
+                "invalidation": "A close below 2605 ends the idea.", "management": "Move stop to entry at TP1.",
+                "risks": ["CPI tomorrow"]}))
         return types.SimpleNamespace(text='```json\n{"vote": "TAKE", "score": 75, "summary": "fine", "points": ["a"]}\n```')
 
 
@@ -298,7 +301,15 @@ class AgentTests(unittest.TestCase):
         self.assertTrue(any(f["from"] == "world" and f["to"] == "macro_lead" for f in flows))
         self.assertTrue(any(f["from"] == "strategy_lead" and f["to"] == "confluence" for f in flows))
         self.assertTrue(any(f["from"] == "head" and f["to"] == "auditor" for f in flows))
+        self.assertEqual(v["invalidation"], "A close below 2605 ends the idea.")
+        self.assertEqual(len(v["for"]), 2)
+        t = tracker.new_trade(dict(setup, symbol_name="XAU/USD"), v, "2026-09-22 08:00:00")
+        card = ui.signal_card(t)
+        for part in ("WHY THIS TRADE", "EVIDENCE", "INVALIDATION", "MANAGEMENT", "RISKS", "swept the lows"):
+            self.assertIn(part, card)
+        self.assertIn("Invalid if", ui.signal_caption(t))
         cur = desk.monitor.current  # live-review panel: which setup, when it started/ended and the outcome
+        self.assertIn("swept", cur["explain"])
         self.assertIn(setup["direction"], cur["label"])
         self.assertTrue(cur["approved"])
         self.assertGreaterEqual(cur["end"], cur["ts"])

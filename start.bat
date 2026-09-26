@@ -27,6 +27,15 @@ set /p GX=Aur Gemini keys (optional, comma se alag, warna Enter):
 echo Keys save ho gayin.
 
 :extras
+rem Explanation language for signals (sirf ek dafa poochha jata hai).
+findstr /b /c:"EXPLAIN_LANGUAGE=" .env >nul 2>nul
+if not errorlevel 1 goto mistral
+set EL=
+set /p EL=Signal ki explanation kis zaban mein? (Enter = Roman Urdu, ya likhein English): 
+if "%EL%"=="" set EL=Roman Urdu
+>> .env echo.
+>> .env echo EXPLAIN_LANGUAGE=%EL%
+:mistral
 rem Mistral: sab se bada free quota. Agar .env mein nahi hai to ek dafa poochho.
 findstr /b /c:"MISTRAL_API_KEY=" .env >nul 2>nul
 if not errorlevel 1 goto run

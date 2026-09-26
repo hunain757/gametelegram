@@ -51,6 +51,7 @@ class Config:
     gemini_fallback_models: list[str]
     gemini_rpm_per_model: int
     ai_providers: list
+    explain_language: str
     symbol: str
     volume_symbol: str
     styles: list[str]
@@ -111,6 +112,8 @@ def load_config() -> Config:
                                                            "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-flash-lite-latest")),
         gemini_rpm_per_model=int(os.getenv("GEMINI_RPM_PER_MODEL", "4")),
         ai_providers=_providers(),
+        # Language of the AI's plain explanation on signals and market views, e.g. "Roman Urdu" or "English".
+        explain_language=os.getenv("EXPLAIN_LANGUAGE", "simple English"),
         symbol=os.getenv("SYMBOL", "XAU/USD"),
         volume_symbol=os.getenv("VOLUME_SYMBOL", "PAXGUSDT"),
         styles=styles,

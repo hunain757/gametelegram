@@ -334,13 +334,23 @@ Each agent's own record on past signals (trust the reliable ones more): {records
 
 Make the final call. Only TAKE a trade when technicals, strategies and macro line up and the risk is clean;
 SKIP otherwise - a missed trade costs nothing, a bad one costs money.
+Before deciding, weigh the evidence: name the two strongest findings FOR the trade and the strongest AGAINST it,
+each with the exact number from the desks. If the strongest AGAINST point is concrete and unanswered, SKIP.
 You may fine-tune entry / stop loss / targets (keep the same direction; TP1 must be at least 1:{min_rr}),
 or keep the engine's levels. confidence is 0-100 and must be honest.
+
+Then explain the decision to a trader who is not an expert, in {language}. Keep every price exact.
 Reply with JSON only:
 {{"decision": "TAKE" or "SKIP", "confidence": 0-100, "entry": number, "stop_loss": number,
   "tp1": number, "tp2": number, "tp3": number,
-  "headline": "max 8 words, e.g. 'Sweep + H1 OB retest in discount'",
-  "reason": "1-2 short sentences in simple English"}}
+  "for": ["strongest finding for, with its number", "second finding for"],
+  "against": ["strongest finding against, with its number"],
+  "headline": "max 8 words in English, e.g. 'Sweep + H1 OB retest in discount'",
+  "reason": "1-2 short sentences in simple English",
+  "explain": "3-4 simple sentences in {language}: what the market is doing, why this entry, and what the desk decided and why",
+  "invalidation": "one sentence in {language}: the exact price or event that proves the idea wrong",
+  "management": "one sentence in {language}: what to do at TP1 / TP2 and when to exit early",
+  "risks": ["the 2 biggest risks, in {language}"]}}
 """
 
 AUDITOR_PROMPT = """You are the Signal Auditor, the last check before a {instrument} signal is sent to traders.
@@ -366,7 +376,7 @@ Market read (per timeframe):
 
 Session: {session}
 
-Write a short market outlook for traders on Telegram (max 90 words, simple English, no markdown symbols):
+Write a short market outlook for traders on Telegram in {language} (max 110 words, no markdown symbols, no emoji):
 overall bias per timeframe, key liquidity above and below, the nearest order blocks / FVGs to watch,
 and what would make you buy or sell. Do not invent prices that are not in the data.
 """
@@ -1158,9 +1168,15 @@ class TradingDesk:
                          practice)
         verdict = await self._review(setup, ctx, mon)
         mon.review_end(verdict["approved"])
+        if mon.current:
+            mon.current.update({k: verdict.get(k) for k in ("explain", "invalidation", "management", "risks", "for",
+                                                            "against", "reason", "reject_reason", "confidence")})
         mon.agent("head", "done" if not verdict.get("ai_down") else "error",
                   vote="TAKE" if verdict["approved"] else "SKIP", score=verdict["confidence"],
-                  summary=verdict.get("reason") or verdict.get("reject_reason") or "")
+                  summary=verdict.get("explain") or verdict.get("reason") or verdict.get("reject_reason") or "",
+                  points=[f"For: {x}" for x in verdict.get("for") or []]
+                  + [f"Against: {x}" for x in verdict.get("against") or []]
+                  + ([f"Invalidation: {verdict['invalidation']}"] if verdict.get("invalidation") else []))
         mon.event(f"Head Trader: {'APPROVED' if verdict['approved'] else 'REJECTED'} – "
                   f"{verdict.get('reject_reason') or verdict.get('headline') or verdict.get('reason')}",
                   "take" if verdict["approved"] else "skip")
@@ -1169,6 +1185,8 @@ class TradingDesk:
                     "score": setup["score"], "votes": verdict["votes"], "approved": verdict["approved"],
                     "confidence": verdict["confidence"], "reason": verdict.get("reject_reason") or verdict.get("reason"),
                     "board": f"{board['agrees']}/{board['agrees'] + board['against']}",
+                    "explain": verdict.get("explain") or "", "invalidation": verdict.get("invalidation") or "",
+                    "for": verdict.get("for") or [], "against": verdict.get("against") or [],
                     "reports": [{k: r.get(k) for k in ("icon", "name", "vote", "score", "changed", "stage")}
                                 for r in verdict["reports"]]})
         mon.set_phase("idle")
@@ -1262,6 +1280,7 @@ class TradingDesk:
                 board_summary=board_summary, tally=tally, desks=_reports_text(leads),
                 verifiers=_reports_text(verifiers), history=ctx.get("history") or "no closed trades yet",
                 records=records_text(records, ANALYSTS + LEADS + VERIFIERS),
+                language=getattr(self, "language", None) or "simple English",
                 min_rr=self.min_rr), preferred=self.slots_for("head"))
             head = parse_json(text)
         except Exception as e:
@@ -1283,6 +1302,17 @@ class TradingDesk:
         verdict["confidence"] = int(head.get("confidence") or 0)
         verdict["headline"] = str(head.get("headline", ""))[:80]
         verdict["reason"] = str(head.get("reason", ""))[:400]
+
+        def _lst(x, n):
+            return [str(v)[:180] for v in (x if isinstance(x, list) else [x] if x else [])][:n]
+        verdict["explain"] = str(head.get("explain") or "")[:700]
+        verdict["invalidation"] = str(head.get("invalidation") or "")[:240]
+        verdict["management"] = str(head.get("management") or "")[:240]
+        verdict["risks"] = _lst(head.get("risks"), 2)
+        verdict["for"] = _lst(head.get("for"), 2)
+        verdict["against"] = _lst(head.get("against"), 2)
+        mon.agent("head", "thinking", summary=verdict["reason"] or "Deciding…",
+                  points=[f"For: {x}" for x in verdict["for"]] + [f"Against: {x}" for x in verdict["against"]])
         take = str(head.get("decision", "")).upper() == "TAKE"
 
         # Use the head trader's levels only if they pass the same checks as the engine's.
@@ -1356,7 +1386,8 @@ class TradingDesk:
 
     async def market_view(self, market: dict, session: dict, instrument: str = "XAU/USD (gold)") -> str:
         text, _ = await self._ask(MARKET_VIEW_PROMPT.format(market=market_brief(market), session=json.dumps(session),
-                                                            instrument=instrument),
+                                                            instrument=instrument,
+                                                            language=getattr(self, "language", None) or "simple English"),
                                   preferred=self.slots_for("head"),
                                   json_mode=False)
         return text.strip()
