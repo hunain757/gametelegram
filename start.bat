@@ -12,11 +12,12 @@ if errorlevel 1 goto failed
 
 if exist .env goto extras
 echo.
-echo Pehli baar: apni 3 keys paste karein (right-click = paste).
+echo Pehli baar: apni keys paste karein (right-click = paste).
 echo Ye sirf aapke PC par .env file mein save hongi, GitHub par nahi jayengi.
 echo.
 set /p TG=Telegram bot token (BotFather se): 
-set /p GM=Gemini API key (aistudio.google.com se): 
+set GM=
+set /p GM=Gemini API key (optional - Mistral ho to Enter): 
 set /p TD=Twelve Data API key (twelvedata.com se): 
 set /p GX=Aur Gemini keys (optional, comma se alag, warna Enter): 
 > .env echo TELEGRAM_BOT_TOKEN=%TG%

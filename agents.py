@@ -720,7 +720,7 @@ class TradingDesk:
         models = [model] + [m for m in (fallback_models or []) if m != model]
         # Every model on every key is its own "slot" with its own free quota. Neighbouring agents get
         # different keys, so one key's limits never stop the whole desk.
-        slots = [f"{m}#{k + 1}" for m in models for k in range(len(keys))] if multi else models
+        slots = ([f"{m}#{k + 1}" for m in models for k in range(len(keys))] if multi else models) if keys else []
         slots += [f"{m}#{k + 1}" for k, ms in extra for m in ms]
         self.pool = ModelPool(slots, rpm_per_model)
         for k, ms in extra:  # these providers limit per account (spaced in _generate), not per model
@@ -745,7 +745,8 @@ class TradingDesk:
     def _make_plan(models: list[str], n_keys: int, extra=(), multi: bool | None = None) -> dict[str, list[str]]:
         """With other providers (Mistral/Groq) configured they go first – they have far bigger free quotas –
         and the Gemini plan below becomes the fallback."""
-        base = TradingDesk._gemini_plan(models, n_keys, n_keys > 1 if multi is None else multi)
+        base = (TradingDesk._gemini_plan(models, n_keys, n_keys > 1 if multi is None else multi) if n_keys
+                else {a["key"]: [] for a in ALL_AGENTS})
         ex = [f"{m}#{k + 1}" for k, ms in extra for m in ms]
         if not ex:
             return base

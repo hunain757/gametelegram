@@ -159,7 +159,8 @@ Set `DASHBOARD_PORT=0` to turn it off, or `DASHBOARD_OPEN=off` to stop it openin
 **Which AI does the desk use?** With a Mistral (or Groq) key the 18 analysts run on the small/medium models
 and the desk leads, verifiers, Head Trader and Auditor on the largest model; Gemini becomes the automatic
 fallback. Requests to one Mistral key are spaced about 1 per second, which is its free limit. Without those keys
-everything runs on Gemini as before. Limits are per account – a second key helps only if it comes from another
+everything runs on Gemini as before. Gemini is optional: leave `GEMINI_API_KEY` empty (or set
+`USE_GEMINI=off`) to run only on Mistral / Groq. Limits are per account – a second key helps only if it comes from another
 account.
 
 Volume comes from Binance's public PAXG/USDT market data, which needs no key.

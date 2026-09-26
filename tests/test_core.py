@@ -1270,3 +1270,31 @@ class ProviderTests(unittest.TestCase):
             os.environ.pop("MISTRAL_API_KEY")
         self.assertEqual([(p["name"], p["key"]) for p in provs], [("Mistral", "abc")])
         self.assertIn("mistral-large-latest", provs[0]["models"])
+
+
+class NoGeminiTests(unittest.TestCase):
+    def test_desk_runs_on_mistral_only(self):
+        from agents import ALL_AGENTS, TradingDesk
+        prov = [{"name": "Mistral", "base": "https://m.test/v1", "key": "mk",
+                 "models": ["mistral-large-latest", "mistral-small-latest"], "interval": 0}]
+        desk = TradingDesk([], "gem-a", 1.5, 70, 5, ["gem-lite"], providers=prov)
+        self.assertEqual(desk.pool.models, ["mistral-large-latest#1", "mistral-small-latest#1"])
+        self.assertTrue(all(desk.slots_for(a["key"]) for a in ALL_AGENTS))
+        self.assertTrue(all("gem" not in x for a in ALL_AGENTS for x in desk.slots_for(a["key"])))
+        self.assertEqual(desk.key_names(), ["Mistral 1"])
+
+    def test_config_without_gemini(self):
+        import config
+        env = {"TELEGRAM_BOT_TOKEN": "1:x", "TWELVEDATA_API_KEY": "x", "MISTRAL_API_KEY": "mk", "GEMINI_API_KEY": ""}
+        old = {k: os.environ.get(k) for k in env}
+        os.environ.update(env)
+        try:
+            cfg = config.load_config()
+        finally:
+            for k, v in old.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        self.assertEqual(cfg.gemini_api_keys, [])
+        self.assertEqual(cfg.ai_providers[0]["name"], "Mistral")

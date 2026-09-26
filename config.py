@@ -80,7 +80,7 @@ class Config:
 def load_config() -> Config:
     missing = [
         name
-        for name in ("TELEGRAM_BOT_TOKEN", "GEMINI_API_KEY", "TWELVEDATA_API_KEY")
+        for name in ("TELEGRAM_BOT_TOKEN", "TWELVEDATA_API_KEY")
         if not os.getenv(name)
     ]
     if missing:
@@ -94,11 +94,17 @@ def load_config() -> Config:
     if unknown:
         raise SystemExit(f"Unknown STYLES in .env: {', '.join(unknown)} (use scalp, intraday, swing)")
 
+    # Gemini is optional: leave GEMINI_API_KEY empty (or set USE_GEMINI=off) to run only on Mistral / Groq.
+    gemini_keys = [] if os.getenv("USE_GEMINI", "on").lower() in ("0", "off", "false", "no") else \
+        list(dict.fromkeys(_list(os.getenv("GEMINI_API_KEY", "")) + _list(os.getenv("GEMINI_API_KEYS", ""))))
+    if not gemini_keys and not _providers():
+        raise SystemExit("No AI key found. Put MISTRAL_API_KEY (recommended), GROQ_API_KEY or GEMINI_API_KEY in .env")
+
     return Config(
         telegram_token=os.environ["TELEGRAM_BOT_TOKEN"],
-        gemini_api_key=os.environ["GEMINI_API_KEY"],
+        gemini_api_key=gemini_keys[0] if gemini_keys else "",
         # Extra keys (comma separated) multiply the free quota; the bot rotates between all of them.
-        gemini_api_keys=list(dict.fromkeys([os.environ["GEMINI_API_KEY"]] + _list(os.getenv("GEMINI_API_KEYS", "")))),
+        gemini_api_keys=gemini_keys,
         twelvedata_api_key=os.environ["TWELVEDATA_API_KEY"],
         gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
         gemini_fallback_models=_list(os.getenv("GEMINI_FALLBACK_MODELS", "gemini-3.6-flash,gemini-3.5-flash,gemini-flash-latest,gemini-3-flash-preview,gemini-3.7-flash,"

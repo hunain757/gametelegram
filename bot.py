@@ -335,8 +335,8 @@ class GoldBot:
     async def _alert_ai_down(self, bot):
         if time.time() - self._ai_down_alert_at > 7200:
             self._ai_down_alert_at = time.time()
-            await self.tell_admins(bot, "<b>Gemini AI is not responding</b> (quota or overload). Setups are "
-                                        "skipped until it recovers. Check your GEMINI_API_KEY quota.")
+            await self.tell_admins(bot, "<b>The AI desk is not responding</b> (quota or overload). Setups are "
+                                        "skipped until it recovers. Check the AI keys in .env (Mistral / Groq / Gemini) and their quota.")
 
     async def scheduled_scan(self, context: ContextTypes.DEFAULT_TYPE):
         try:
