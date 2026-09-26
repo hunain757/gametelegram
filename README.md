@@ -1,7 +1,7 @@
 # Gold & Bitcoin SMC AI Signal Desk (website app)
 
 A local website app that scans **gold (XAU/USD)** and **bitcoin (BTC/USD)** around the clock with a **Smart Money
-Concepts engine**, **volume analysis**, a **regime-aware 17-strategy board** and a **26-agent AI desk (Mistral / Groq /
+Concepts engine**, **volume analysis**, a **regime-aware 17-strategy board** and a **50-agent AI desk (Mistral / Groq /
 Gemini) that learns from its own track record**. It publishes **scalping / intraday / swing** signals with entry, SL and
 3 TPs on the website and **tracks every trade live** (entry fill, TP1/TP2/TP3, SL, expiry). No Telegram, no bot
 token, no server: everything runs on your PC.
@@ -62,17 +62,21 @@ every 5 min ─► Twelve Data: XAU/USD M5 · M15 · H1 · H4 · D1   (+ Binance
                  breakout (Donchian, TTM squeeze), mean reversion (RSI+Bollinger, VWAP, RSI divergence),
                  ICT (OTE 62-79 %, premium/discount), momentum (Stochastic, CCI+Williams %R), volume (OBV, delta)
                 │
-        AI DESK – 26 Gemini agents in a 5-stage pipeline; each has ONE job and sees only its own data
-        Stage 1  18 analysts in 3 desks
-                 Technical: Structure · Liquidity · OB/Breaker · FVG · Volume · Price action
-                              · Momentum · Trend indicators · Volatility
-                 Strategy:  Multi-timeframe · ICT & Fibonacci · Levels & pivots · Trend-following
-                              · Breakout & reversion
-                 Macro:     Economic calendar · Geopolitics & world events · Central banks & dollar
-                              · Intermarket (gold ↔ bitcoin correlation) & sentiment
-        Stage 2  3 desk leads check their analysts' evidence; they challenge the doubtful ones, who re-check
+        AI DESK – 50 agents in a 5-stage pipeline; each has ONE job and sees only its own data
+        Stage 1  40 analysts in 4 desks
+                 Technical (16): Structure · HTF structure (D1/H4) · Entry trigger (M15/M5) · Liquidity
+                              · Inducement · OB/Breaker · Mitigation · S/R flip · FVG · Displacement · Volume
+                              · Price action · Momentum · Trend indicators · Volatility · Distance from the mean
+                 Strategy (10): Multi-timeframe · ICT & Fibonacci · Levels & pivots · Session & killzone
+                              · Target path · Trend-following · Breakout & reversion · Smart money · Momentum
+                              timing · Volume strategies
+                 Macro (7):  Calendar timing · Data surprises · Geopolitics · Central banks & dollar
+                              · Intermarket · Instrument news · Risk mood
+                 Execution (7): Stop placement · Fill probability · Target realism · Entry volatility
+                              · Exhaustion · Weekly context · Trade window
+        Stage 2  4 desk leads check their analysts' evidence; they challenge the doubtful ones, who re-check
                  their own data and answer (debate – they may change their vote)
-        Stage 3  3 verifiers cross-check the desks: Confluence · Risk · Devil's Advocate
+        Stage 3  4 verifiers cross-check the desks: Confluence · Risk · Devil's Advocate · Evidence integrity
         Stage 4  Head Trader reads the desks, verifiers, strategy board, the style's track record and every
                  agent's own accuracy → TAKE/SKIP, levels
         Stage 5  Signal Auditor checks the final signal and can veto it
@@ -126,14 +130,14 @@ count-up KPIs, a price flash on every tick and a live-flowing agent network. It 
 navigation). Animations switch off automatically if your system asks for reduced motion.
 
 
-- **Agent network**: the engine, 18 analysts grouped in their 3 desks, 3 desk leads, 3 verifiers, Head Trader,
+- **Agent network**: the engine, 40 analysts grouped in their 4 desks, 4 desk leads, 4 verifiers, Head Trader,
   Signal Auditor and the website output as a live graph. Every time information is passed on, a glowing dot runs along
   the line. Nodes flash while an agent works and turn green/red with its vote; the coloured bar and `KEY 1`/`KEY 2`
   label show which API key the agent runs on. Click a node for its job, the data it receives, who it gets
   information from and sends it to, its evidence, risk, model and timing.
 - **KPI strip**: session and killzone, H1 regime, open trades, win rate, total R, desk reviews, AI requests,
   model slots ready.
-- **Agent directory**: a table of all 26 agents – only job, data it receives, who it sends to, key/model,
+- **Agent directory**: a table of all 50 agents – only job, data it receives, who it sends to, key/model,
   **track record** (how often it was right, vote weight) and current vote.
 - **Strategy board**: all 17 strategies with their verdict and the exact numbers behind it; groups that do not
   fit the current regime are greyed out and not counted.
@@ -152,7 +156,7 @@ navigation). Animations switch off automatically if your system asks for reduced
 - **Performance**: equity curve (R), win rate, profit factor, max drawdown, per market and per style.
 - Live activity feed, last AI decisions, news calendar + headlines, market structure and system health
   (incl. each AI model/key and why it is resting).
-- Buttons: **Scan now**, **Practice AI review** (runs the whole 26-agent desk on the live market right
+- Buttons: **Scan now**, **Practice AI review** (runs the whole 50-agent desk on the live market right
   now so you can watch it – nothing is published) and **Test agents** (one tiny request per model).
 
 Set `DASHBOARD_PORT=8081` if 8080 is taken, or `DASHBOARD_OPEN=off` to stop it opening the browser.
@@ -168,7 +172,7 @@ Set `DASHBOARD_PORT=8081` if 8080 is taken, or `DASHBOARD_OPEN=off` to stop it o
 | `GROQ_API_KEY` (optional) | https://console.groq.com/keys – free, very fast, ~1,000 requests a day per model |
 | `TWELVEDATA_API_KEY` | https://twelvedata.com (the free plan is enough) |
 
-**Which AI does the desk use?** With a Mistral (or Groq) key the 18 analysts run on the small/medium models
+**Which AI does the desk use?** With a Mistral (or Groq) key the 40 analysts run on the small/medium models
 and the desk leads, verifiers, Head Trader and Auditor on the largest model; Gemini becomes the automatic
 fallback. Requests to one Mistral key are spaced about 1 per second, which is its free limit. Without those keys
 everything runs on Gemini as before. Gemini is optional: leave `GEMINI_API_KEY` empty (or set
@@ -177,35 +181,26 @@ account.
 
 Volume comes from Binance's public PAXG/USDT market data, which needs no key.
 
-### How the agents are spread over your Gemini keys
+### How the 50 agents are spread over your API keys
 
-Every *model × key* pair is its own "slot" with its own rate limit. The desk plans the work so no slot is
-overloaded and the strongest models are kept for the decisions that matter:
+Every agent has one **home key**. The agents are dealt out round robin over **all** your AI keys (Mistral,
+Groq and Gemini alike), so every key carries an equal share:
 
-| Agents | Models | Key 1 | Key 2 |
-|---|---|---|---|
-| 18 analysts (stage 1) | fast *lite* models (big free daily quota) | 9 | 9 |
-| 3 desk leads (stage 2) | strong *flash* models | technical, macro | strategy |
-| 3 verifiers (stage 3) | strong *flash* models | risk | confluence, devil |
-| Head Trader (stage 4) | strongest model | | |
-| Auditor (stage 5) | strongest model | | (independent second opinion) |
-| **total** | | **13** | **13** |
+| Keys | Split |
+|---|---|
+| 1 key | 50 |
+| 2 keys | 25 / 25 |
+| **3 keys** | **17 / 17 / 16** |
 
-With 3 keys the same plan is spread over all three.
+On its home key an analyst starts with the small/medium model; desk leads, verifiers, the Head Trader and the
+Auditor start with the biggest model. The Head Trader and the Auditor sit on different keys (an independent
+second opinion). If a key or model is busy or out of quota, the agent automatically moves to the next healthy
+key, and resting slots are remembered across restarts. The website shows each agent's key (M1, M2, M3 …).
 
-If a slot hits a limit it rests (short back-off for "busy", until the daily reset for "quota used"), the
-agent automatically moves to the next healthy slot, and resting slots are remembered across restarts.
-Each agent gets only the data of its own job (about 1k characters on average), which keeps every call far
-below the free tokens-per-minute limit.
-
-**Why is key 2 "resting"?** Open the panel on the dashboard – the reason is written next to each slot.
-The most common one: both keys were made in the **same Google account/project**. Keys of one project share
-**one** quota, so when key 1 uses up a model's daily limit, key 2 is out too (the panel then says so). Create
-the second key in a **different Google account** at https://aistudio.google.com/apikey.
-
-**How many keys?** One review now uses ~26–32 calls. 2 keys (from 2 different Google accounts) cover gold
-*or* bitcoin all day. For gold **and** bitcoin 24/7 plus practice reviews, add a 3rd key: `GEMINI_API_KEYS=key2,key3` in `.env`.
-The dashboard's **API keys & Gemini models** panel shows every slot, its health, latency and which agents use it.
+**Three Mistral keys**: put them comma separated in `.env` – `MISTRAL_API_KEYS=key1,key2,key3` (or one Mistral,
+one Groq and one Gemini key – they are split the same way). Keys from one account share one quota, so use a
+different account for each key. One review uses about 50–60 requests; Mistral's free plan allows about one
+request per second per key, so with 3 keys a full review takes roughly 20–40 seconds.
 
 ## Run it on Windows (easiest)
 

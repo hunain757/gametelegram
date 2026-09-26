@@ -36,15 +36,26 @@ if "%EL%"=="" set EL=Roman Urdu
 :mistral
 rem Mistral: sab se bada free quota. Agar .env mein nahi hai to ek dafa poochho.
 findstr /b /c:"MISTRAL_API_KEY=" .env >nul 2>nul
-if not errorlevel 1 goto run
+if not errorlevel 1 goto morekeys
 echo.
 echo Mistral API key (console.mistral.ai/api-keys se) - sab se zyada free quota deta hai.
 set MK=
 set /p MK=Mistral API key paste karein (ya skip ke liye Enter): 
-if "%MK%"=="" goto run
+if "%MK%"=="" goto morekeys
 >> .env echo.
 >> .env echo MISTRAL_API_KEY=%MK%
 echo Mistral key save ho gayi.
+
+:morekeys
+rem Extra Mistral keys: 50 agents sab keys par barabar bante hain (3 keys = 17/17/16).
+findstr /b /c:"MISTRAL_API_KEYS=" .env >nul 2>nul
+if not errorlevel 1 goto run
+echo.
+echo Aur Mistral keys (dusre accounts se) - 50 agents sab keys par barabar bantenge.
+set MX=
+set /p MX=Extra Mistral keys comma se alag (jaise key2,key3) ya Enter: 
+>> .env echo.
+>> .env echo MISTRAL_API_KEYS=%MX%
 
 :run
 echo.

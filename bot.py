@@ -1,7 +1,7 @@
 """Gold & Bitcoin SMC AI desk - runs on this PC, everything is shown on the local website.
 
 Every few minutes: fetch M5..D1 candles (+ real volume) -> SMC engine finds setups for scalping / intraday /
-swing -> news filter -> strategy board -> 26-agent AI desk reviews them -> approved signals appear on the
+swing -> news filter -> strategy board -> 50-agent AI desk reviews them -> approved signals appear on the
 website (http://localhost:8080) and are tracked live: entry fill, TP1-TP3, stop loss, expiry.
 """
 

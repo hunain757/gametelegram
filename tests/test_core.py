@@ -284,7 +284,7 @@ class FakeModels:
 def fake_desk(**kw):
     from agents import ModelPool
     desk = TradingDesk.__new__(TradingDesk)
-    desk.pool, desk.min_rr, desk.min_confidence, desk.min_votes = ModelPool(["m1", "m2"], rpm=50), 1.5, 70, 3
+    desk.pool, desk.min_rr, desk.min_confidence, desk.min_votes = ModelPool(["m1", "m2"], rpm=500), 1.5, 70, 3
     desk.pool.max_wait = 0  # tests never wait for a resting slot
     desk.usage = {"day": None, "calls": 0, "failures": 0}
     from monitor import Monitor
@@ -303,11 +303,11 @@ class AgentTests(unittest.TestCase):
         desk = fake_desk()
         v = asyncio.run(desk.review(setup, market, SESSION))
         self.assertTrue(v["approved"])
-        self.assertEqual(v["votes"], 24)       # 18 analysts + 3 desk leads + 3 verifiers
-        self.assertEqual(v["per_desk"], {"tech": "9/9", "strategy": "5/5", "macro": "4/4"})
+        self.assertEqual(v["votes"], 48)       # 40 analysts + 4 desk leads + 4 verifiers
+        self.assertEqual(v["per_desk"], {"tech": "16/16", "strategy": "10/10", "macro": "7/7", "exec": "7/7"})
         self.assertTrue(v["audit"]["approve"])
         self.assertIsNone(v["levels"])  # head trader's levels were invalid -> engine levels
-        self.assertEqual(desk.fake.calls, 26)  # every agent exactly once (no debate when all agree)
+        self.assertEqual(desk.fake.calls, 50)  # every agent exactly once (no debate when all agree)
         flows = list(desk.monitor.flows)
         self.assertTrue(any(f["from"] == "structure" and f["to"] == "tech_lead" for f in flows))
         self.assertTrue(any(f["from"] == "world" and f["to"] == "macro_lead" for f in flows))
@@ -357,7 +357,7 @@ class DebateTests(unittest.TestCase):
         v = asyncio.run(desk.review(setup, market, SESSION, history="last 3 trades: 2 losses"))
         analysts = [r for r in v["reports"] if r["stage"] == 1]
         changed = [r for r in analysts if r.get("changed")]
-        self.assertEqual(len(changed), 6)  # the 2 most confident dissenters of each desk were challenged
+        self.assertEqual(len(changed), 8)  # the 2 most confident dissenters of each of the 4 desks were challenged
         self.assertTrue(all(r["vote"] == "SKIP" for r in changed))
         self.assertFalse(v["approved"])
         flows = list(desk.monitor.flows)
@@ -381,13 +381,23 @@ class AgentPlanTests(unittest.TestCase):
         desk = TradingDesk(["k1", "k2"], "big-a", 1.5, 70, 5, ["big-b", "big-c", "x-lite", "y-lite"])
         analyst_first = [desk.slots_for(a["key"])[0] for a in ANALYSTS]
         self.assertTrue(all("lite" in s for s in analyst_first))
-        self.assertEqual(sum(s.endswith("#1") for s in analyst_first), 9)  # half the analysts on each key
+        self.assertEqual(sum(s.endswith("#1") for s in analyst_first), 20)  # half the analysts on each key
         from agents import ALL_AGENTS
         homes = [desk.home_key(a["key"]) for a in ALL_AGENTS]
-        self.assertEqual((homes.count(1), homes.count(2)), (13, 13))    # 26 agents split 13 / 13
+        self.assertEqual((homes.count(1), homes.count(2)), (25, 25))    # 50 agents split 25 / 25
         self.assertTrue(all("lite" not in desk.slots_for(v["key"])[0] for v in VERIFIERS))
         self.assertEqual(desk.slots_for("head")[0], "big-a#1")
         self.assertNotEqual(desk.slots_for("auditor")[0].split("#")[1], "1")
+
+    def test_three_keys_split_50_agents(self):
+        from agents import ALL_AGENTS, TradingDesk
+        prov = [{"name": "Mistral", "base": "x", "key": f"k{i}", "interval": 0,
+                 "models": ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"]} for i in range(3)]
+        desk = TradingDesk([], "gem", 1.5, 70, 5, providers=prov)
+        homes = [desk.home_key(a["key"]) for a in ALL_AGENTS]
+        self.assertEqual((homes.count(1), homes.count(2), homes.count(3)), (17, 17, 16))
+        self.assertEqual(desk.slots_for("head")[0], "mistral-large-latest#1")
+        self.assertTrue(all(len({s.split("#")[1] for s in desk.slots_for(a["key"])}) == 3 for a in ALL_AGENTS))
 
     def test_focused_briefs(self):
         from agents import market_brief
@@ -848,7 +858,7 @@ class DashboardTests(unittest.TestCase):
         self.assertNotIn(b"Telegram", page)
         self.assertIn("current", before)
         self.assertTrue(all(a["slot"] for a in before["agents"]))
-        self.assertEqual(len(before["agents"]), 26)
+        self.assertEqual(len(before["agents"]), 50)
         self.assertIsNone(before["market"])
         self.assertEqual(saved, {"ok": True})
         self.assertFalse(bad["ok"])
@@ -975,7 +985,8 @@ class StrategyAndIndicatorTests(unittest.TestCase):
         self.assertNotIn("M15", world)  # a news agent gets no chart data
         mom = json.loads(agents.agent_data(spec["momentum"], ctx))
         self.assertTrue(set(mom["M15"]["indicators"]) <= set(spec["momentum"]["ind"]))
-        self.assertEqual(len(agents.ALL_AGENTS), 26)
+        self.assertEqual(len(agents.ALL_AGENTS), 50)
+        self.assertEqual(set(json.loads(agents.agent_data(spec["htf_structure"], ctx))), {"D1", "H4"})  # own TFs only
         link = agents.links()
         self.assertEqual(link["world"]["to"], ["macro_lead"])
         self.assertIn("head", link["tech_lead"]["to"])
@@ -1039,7 +1050,7 @@ class QuotaHandlingTests(unittest.TestCase):
         asyncio.run(desk.review(setup, market, SESSION))
         first = desk.fake.calls
         asyncio.run(desk.review(setup, market, SESSION))
-        self.assertEqual(desk.fake.calls - first, first - 18)  # all 18 analysts reused, the rest asked again
+        self.assertEqual(desk.fake.calls - first, first - 40)  # all 40 analysts reused, the rest asked again
 
 
 class ProviderTests(unittest.TestCase):
@@ -1049,18 +1060,21 @@ class ProviderTests(unittest.TestCase):
                  "models": ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"], "interval": 0}]
         return TradingDesk(["gk"], "gem-a", 1.5, 70, 5, ["gem-lite"], providers=prov)
 
-    def test_mistral_goes_first_and_gemini_is_fallback(self):
-        from agents import ANALYSTS
+    def test_gemini_and_mistral_share_the_agents(self):
+        from agents import ALL_AGENTS, ANALYSTS
         desk = self.make()
         self.assertIn("mistral-small-latest#2", desk.pool.models)
         self.assertIn("gem-a#1", desk.pool.models)
-        firsts = {desk.slots_for(a["key"])[0] for a in ANALYSTS}
-        self.assertEqual(firsts, {"mistral-small-latest#2", "mistral-medium-latest#2"})
-        self.assertEqual(desk.slots_for("head")[0], "mistral-large-latest#2")
-        self.assertTrue(any(s.endswith("#1") for s in desk.slots_for("head")))  # Gemini as fallback
+        homes = [desk.home_key(a["key"]) for a in ALL_AGENTS]
+        self.assertEqual((homes.count(1), homes.count(2)), (25, 25))
+        mistral_firsts = {desk.slots_for(a["key"])[0] for a in ANALYSTS if desk.home_key(a["key"]) == 2}
+        self.assertEqual(mistral_firsts, {"mistral-small-latest#2", "mistral-medium-latest#2"})
+        self.assertEqual(desk.slots_for("head")[0], "gem-a#1")
+        self.assertEqual(desk.slots_for("auditor")[0], "mistral-large-latest#2")
+        self.assertTrue(any(s.endswith("#2") for s in desk.slots_for("head")))  # the other key as fallback
         self.assertEqual(desk.key_names(), ["Gemini 1", "Mistral 1"])
         self.assertEqual(desk.label("mistral-large-latest#2"), "mistral-large-latest · Mistral key 1")
-        self.assertEqual(desk.home_key("structure"), 2)
+        self.assertEqual(desk.home_key("liquidity"), 2)
 
     def test_openai_compatible_call_and_errors(self):
         import agents
@@ -1181,10 +1195,10 @@ class NeutralVoteTests(unittest.TestCase):
                                                       '"evidence": ["BOS @ 2617.9", "OB 2612-2614"]}')
             desk.client = types.SimpleNamespace(aio=types.SimpleNamespace(models=Models()))
             return asyncio.run(desk.review(setup, market, SESSION)), desk
-        v, desk = run(neutral_every=2)            # 9 TAKE, 9 NEUTRAL, 0 SKIP
-        self.assertEqual(v["neutral"], 9)
+        v, desk = run(neutral_every=2)            # 20 TAKE, 20 NEUTRAL, 0 SKIP
+        self.assertEqual(v["neutral"], 20)
         self.assertTrue(v["approved"], v.get("reject_reason"))
-        v, desk = run(neutral_every=0, skip_every=2)   # 9 TAKE, 9 SKIP -> half against
+        v, desk = run(neutral_every=0, skip_every=2)   # 20 TAKE, 20 SKIP -> half against
         self.assertFalse(v["approved"])
         self.assertIn("analysts split", v["reject_reason"])
         self.assertEqual(desk.monitor.agents["auditor"]["status"], "skipped")

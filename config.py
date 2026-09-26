@@ -125,7 +125,7 @@ def load_config() -> Config:
         news_currencies=tuple(_list(os.getenv("NEWS_CURRENCIES", "USD"))),
         news_feeds=tuple(dict.fromkeys(_list(os.getenv("NEWS_FEEDS", "")) + list(news.DEFAULT_FEEDS))),
         markets=_markets(os.getenv("MARKETS", "XAUUSD,BTCUSD")),
-        # Strict engine mode (every filter must agree) finds very few setups; the 26-agent desk is the quality
+        # Strict engine mode (every filter must agree) finds very few setups; the 50-agent desk is the quality
         # filter now, so the engine runs in normal mode unless STRICT_MODE=on.
         strict_mode=os.getenv("STRICT_MODE", "off").lower() in ("1", "on", "true", "yes"),
         # The website is the app: it always runs (signals, agents, charts).

@@ -1,16 +1,22 @@
-"""AI trading desk: 26 Gemini agents in a 5-stage pipeline. Every agent has exactly one job, sees only the data
-for that job, and passes its finding on - every hand-over is shown on the local dashboard.
+"""AI trading desk: 50 agents in a 5-stage pipeline. Every agent has exactly one job, sees only the data
+for that job, and passes its finding on - every hand-over is shown on the local website.
 
-  Stage 1  18 analysts in 3 desks study the setup in parallel
-             Technical desk (9)  structure, liquidity, order blocks, FVGs, volume, candles, momentum, trend, volatility
-             Strategy desk  (5)  multi-timeframe, ICT/Fibonacci, key levels & pivots, trend-following, breakout/reversion
-             Macro desk     (4)  economic calendar, world events, central banks & dollar, intermarket & sentiment
-  Stage 2  3 desk leads check their members' evidence, challenge doubtful members (debate) and give one desk verdict
-  Stage 3  3 verifiers cross-check the desks: confluence, risk, devil's advocate
+  Stage 1  40 analysts in 4 desks study the setup in parallel
+             Technical desk (16)  structure (all TFs, HTF, entry trigger), liquidity, inducement, order blocks,
+                                  mitigation, S/R flips, FVGs, displacement, volume, candles, momentum, trend,
+                                  volatility, distance from the mean
+             Strategy desk  (10)  multi-timeframe, ICT/Fibonacci, levels & pivots, session timing, target path and
+                                  the strategy families (trend, breakout/reversion, SMC, momentum, volume)
+             Macro desk      (7)  calendar timing, data surprises, world events, central banks & dollar,
+                                  intermarket, instrument news, risk mood
+             Execution desk  (7)  stop placement, fill probability, target realism, entry volatility, exhaustion,
+                                  weekly context, trade window
+  Stage 2  4 desk leads check their members' evidence, challenge doubtful members (debate) and give one desk verdict
+  Stage 3  4 verifiers cross-check the desks: confluence, risk, devil's advocate, evidence integrity
   Stage 4  the Head Trader reads everything and decides TAKE/SKIP with final levels
-  Stage 5  the Signal Auditor checks the final signal before it is sent (can veto)
+  Stage 5  the Signal Auditor checks the final signal before it is published (can veto)
 
-With 2 API keys the work is split 13 / 13 (see TradingDesk._make_plan).
+Every agent has a home API key: with 3 keys the 50 agents split 17 / 17 / 16 (see TradingDesk._make_plan).
 """
 
 import asyncio
@@ -37,6 +43,7 @@ DESKS = {
     "tech": {"name": "Technical desk", "icon": "TECH"},
     "strategy": {"name": "Strategy desk", "icon": "STRAT"},
     "macro": {"name": "Macro & news desk", "icon": "MACRO"},
+    "exec": {"name": "Execution & risk desk", "icon": "EXEC"},
 }
 
 # Each analyst: its job ("focus"), the inputs it receives (shown on the dashboard) and the exact data slice.
@@ -129,26 +136,127 @@ ANALYSTS = [
               "and bitcoin. Does the macro backdrop support this direction? No relevant headline = NEUTRAL.",
      "fields": (), "extras": ("headlines:macro",)},
     {"key": "intermarket", "desk": "macro", "name": "Intermarket & Sentiment Analyst", "icon": "IMK",
-     "focus": "Other markets and sentiment: the other instrument's trend and move today, the gold/bitcoin "
-              "correlation, and this instrument's own news flow (gold or crypto headlines). Is money flowing with "
-              "this trade or against it?",
-     "fields": ("price", "trend"), "extras": ("intermarket", "headlines:instrument")},
+     "focus": "Other markets only: the other instrument's trend and move today and the gold/bitcoin correlation. "
+              "Is money flowing between these markets with this trade or against it?",
+     "fields": ("price", "trend"), "extras": ("intermarket",)},
+    {"key": "inst_news", "desk": "macro", "name": "Instrument News Analyst", "icon": "NWS",
+     "focus": "This instrument's own news flow only (gold headlines for gold, crypto headlines for bitcoin): "
+              "ETF flows, demand, regulation, big buyers or sellers. Does the latest news push price in the trade "
+              "direction? No relevant headline = NEUTRAL.",
+     "fields": (), "extras": ("headlines:instrument",)},
+    {"key": "data_surprise", "desk": "macro", "name": "Data Surprise Analyst", "icon": "DSP",
+     "focus": "The numbers of released and upcoming USD data only: forecast vs previous on the calendar (CPI, NFP, "
+              "PMI, retail sales…). Do the expected numbers point to a stronger or weaker dollar, and does that help "
+              "or hurt this trade? Timing of the events is another agent's job.",
+     "fields": (), "extras": ("calendar",)},
+    {"key": "risk_mood", "desk": "macro", "name": "Risk Mood Analyst", "icon": "MOOD",
+     "focus": "Risk-on / risk-off mood only, read from crypto and risk-asset headlines: fear, liquidations, rallies, "
+              "stock-market tone. Risk-off usually helps gold and hurts bitcoin; risk-on the opposite. Which mood "
+              "dominates and does it fit this trade?",
+     "fields": (), "extras": ("headlines:crypto",)},
+    # ---------------- technical desk (timeframe specialists) ----------------
+    {"key": "htf_structure", "desk": "tech", "name": "Higher-Timeframe Structure Analyst", "icon": "HTF",
+     "focus": "D1 and H4 structure only: the big trend, last BOS/CHoCH and where price sits in the higher-timeframe "
+              "dealing range. Is this trade with or against the big picture?",
+     "fields": ("price", "trend", "structure_events", "range"), "tfs": ("1day", "4h"), "extras": ()},
+    {"key": "ltf_trigger", "desk": "tech", "name": "Entry Trigger Analyst", "icon": "TRG",
+     "focus": "M15 and M5 only: is there a real entry trigger right now - a fresh CHoCH/BOS in the trade direction "
+              "after a sweep, with a closing candle that confirms it? Name the exact trigger level.",
+     "fields": ("price", "structure_events", "recent_sweeps", "recent_candles"), "tfs": ("15min", "5min"),
+     "extras": ()},
+    {"key": "inducement", "desk": "tech", "name": "Inducement & Equal Levels Analyst", "icon": "IDM",
+     "focus": "Inducement only: equal highs/lows and minor swing liquidity sitting just in front of the entry zone "
+              "(H1, M15, M5). Has the inducement been taken before the entry, or is it still resting as a trap?",
+     "fields": ("price", "equal_highs", "equal_lows", "buy_side_liquidity", "sell_side_liquidity"),
+     "tfs": ("1h", "15min", "5min"), "extras": ()},
+    {"key": "displacement", "desk": "tech", "name": "Displacement Analyst", "icon": "DIS",
+     "focus": "Displacement only: was the move that created the zone impulsive (large bodies versus ATR, fresh FVGs "
+              "left behind) or slow and overlapping? Strong displacement in the trade direction = institutional intent.",
+     "fields": ("price", "atr", "fvgs", "recent_candles"), "tfs": ("1h", "15min"), "extras": ()},
+    {"key": "mitigation", "desk": "tech", "name": "Mitigation & Retest Analyst", "icon": "MIT",
+     "focus": "Zone freshness only: has the entry order block / FVG already been tested (mitigated) before? A first "
+              "retest is strongest; a zone touched several times is weak.",
+     "fields": ("price", "order_blocks", "fvgs"), "tfs": ("4h", "1h", "15min"), "extras": ()},
+    {"key": "sr_flip", "desk": "tech", "name": "Support/Resistance Flip Analyst", "icon": "FLIP",
+     "focus": "Role reversal only: did an old support become resistance (or the reverse) at the entry - breaker blocks, "
+              "broken key levels retested from the other side?",
+     "fields": ("price", "breaker_blocks", "structure_events"), "extras": ("key_levels",)},
+    {"key": "mean_distance", "desk": "tech", "name": "Mean Distance Analyst", "icon": "MEAN",
+     "focus": "Distance from the mean only: how far is price from EMA20, EMA50 and VWAP in ATRs? Entering far from "
+              "the mean in the trade direction is a chase; entering near it is a healthy pullback.",
+     "fields": ("price", "atr"), "ind": ("ema20", "ema50", "vwap"), "tfs": ("1h", "15min", "5min"), "extras": ()},
+    # ---------------- strategy desk (more strategy families) ----------------
+    {"key": "smc_strat", "desk": "strategy", "name": "Smart Money Strategist", "icon": "SMS",
+     "focus": "Run the ICT/SMC strategies on the strategy board (order-block retest, liquidity sweep reversal, FVG "
+              "fill, OTE). How many AGREE vs are AGAINST?",
+     "fields": ("price",), "extras": ("strategies:smc",)},
+    {"key": "momentum_strat", "desk": "strategy", "name": "Momentum Timing Strategist", "icon": "MTS",
+     "focus": "Run the momentum-timing strategies on the strategy board only. Is momentum timing this entry well or "
+              "is it late / early?",
+     "fields": ("price",), "extras": ("strategies:momentum",)},
+    {"key": "volume_strat", "desk": "strategy", "name": "Volume Strategist", "icon": "VST",
+     "focus": "Run the volume strategies on the strategy board only (volume breakout, OBV trend, VWAP reclaim). "
+              "Does volume-based trading support this trade?",
+     "fields": ("price",), "extras": ("strategies:volume",)},
+    {"key": "session", "desk": "strategy", "name": "Session & Killzone Analyst", "icon": "SES",
+     "focus": "Timing only: current session and killzone (London, New York, Asia), the Asia range and whether the "
+              "trade fits how gold/bitcoin usually move in this session. Late-session or dead-hours entries are weak.",
+     "fields": ("price",), "tfs": ("5min",), "extras": ("key_levels",)},
+    {"key": "target_path", "desk": "strategy", "name": "Target Path Analyst", "icon": "PATH",
+     "focus": "The road to the targets only: list every opposing order block, FVG, breaker or key level between "
+              "entry and TP1/TP2/TP3. A clean path = TAKE; a strong zone right before TP1 = SKIP.",
+     "fields": ("price", "order_blocks", "fvgs", "breaker_blocks"), "tfs": ("4h", "1h", "15min"),
+     "extras": ("key_levels",)},
+    # ---------------- execution & risk desk ----------------
+    {"key": "stop_place", "desk": "exec", "name": "Stop Placement Analyst", "icon": "STP",
+     "focus": "The stop loss only: is it beyond the swing / zone that invalidates the idea and outside obvious "
+              "liquidity pools, with enough ATR distance on M15/M5 to survive noise?",
+     "fields": ("price", "atr", "recent_sweeps", "buy_side_liquidity", "sell_side_liquidity"),
+     "tfs": ("1h", "15min", "5min"), "extras": ()},
+    {"key": "fill", "desk": "exec", "name": "Fill Probability Analyst", "icon": "FILL",
+     "focus": "Will the entry fill? Distance from current price to the entry in ATRs, the speed of the last candles "
+              "and the order's lifetime. A limit order far away that will likely never fill = SKIP.",
+     "fields": ("price", "atr", "recent_candles"), "tfs": ("15min", "5min"), "extras": ()},
+    {"key": "rr_real", "desk": "exec", "name": "Target Realism Analyst", "icon": "RR",
+     "focus": "Are the targets realistic? Compare the distance to TP1/TP2/TP3 with the ATR and with how much of the "
+              "average daily range is left today.",
+     "fields": ("price", "atr"), "tfs": ("1day", "1h"), "extras": ("adr",)},
+    {"key": "entry_vol", "desk": "exec", "name": "Entry Volatility Analyst", "icon": "EVL",
+     "focus": "Volatility at the entry only (M15/M5): Bollinger width, squeeze and ATR right now. Is volatility "
+              "about to expand in the trade direction, or is the entry in a spike that may snap back?",
+     "fields": ("price", "atr"), "ind": ("bollinger", "squeeze"), "tfs": ("15min", "5min"), "extras": ()},
+    {"key": "exhaustion", "desk": "exec", "name": "Exhaustion Analyst", "icon": "EXH",
+     "focus": "Short-term exhaustion only (M15/M5): RSI and Stochastic extremes and divergence right at the entry. "
+              "Is the move into the entry exhausted (good for this trade) or is momentum still strongly against it?",
+     "fields": ("price",), "ind": ("rsi", "stochastic", "rsi_divergence"), "tfs": ("15min", "5min"),
+     "extras": ()},
+    {"key": "weekly", "desk": "exec", "name": "Weekly Context Analyst", "icon": "WK",
+     "focus": "The weekly picture only: D1 trend, previous week high/low and where price sits between them. Is the "
+              "trade pushing into a weekly extreme (risky) or away from one (good)?",
+     "fields": ("price", "trend", "range"), "tfs": ("1day",), "extras": ("key_levels",)},
+    {"key": "news_window", "desk": "exec", "name": "Trade Window Analyst", "icon": "WIN",
+     "focus": "The trade's lifetime only: given the order expiry, which hours will the trade be open, do they "
+              "include the session close, a weekend or rollover, and is there time to reach TP1?",
+     "fields": ("price",), "tfs": ("5min",), "extras": ("trade_window",)},
 ]
 
 LEADS = [
     {"key": "tech_lead", "desk": "tech", "name": "Technical Desk Lead", "icon": "TL",
-     "focus": "Check the 9 technical analysts' evidence against the chart data and give the technical verdict."},
+     "focus": "Check the technical analysts' evidence against the chart data and give the technical verdict."},
     {"key": "strategy_lead", "desk": "strategy", "name": "Strategy Desk Lead", "icon": "SL",
-     "focus": "Check the 5 strategy analysts against the strategy board and levels and give the strategy verdict."},
+     "focus": "Check the strategy analysts against the strategy board and levels and give the strategy verdict."},
     {"key": "macro_lead", "desk": "macro", "name": "Macro & News Desk Lead", "icon": "ML",
-     "focus": "Check the 4 macro/news analysts against the calendar, headlines and other markets and give the "
+     "focus": "Check the macro/news analysts against the calendar, headlines and other markets and give the "
               "fundamental verdict."},
+    {"key": "exec_lead", "desk": "exec", "name": "Execution & Risk Desk Lead", "icon": "EL",
+     "focus": "Check the execution analysts (stop, fill, targets, volatility, exhaustion, weekly context, trade "
+              "window) and give the execution verdict: can this trade be entered and managed cleanly?"},
 ]
 
 VERIFIERS = [
     {"key": "confluence", "name": "Confluence Verifier", "icon": "CNF",
-     "focus": "Cross-check the three desks against each other AND against the market data: do technical, strategy "
-              "and macro agree, did any desk claim something the data does not show, which contradiction matters most?"},
+     "focus": "Cross-check the four desks against each other AND against the market data: do technical, strategy, "
+              "macro and execution agree, did any desk claim something the data does not show, which contradiction matters most?"},
     {"key": "risk", "name": "Risk Manager", "icon": "RSK",
      "focus": "Verify the stop loss (beyond invalidation, outside obvious stop hunts), risk/reward of each target, "
               "volatility, news risk inside the trade window and whether a limit entry can fill. Vote SKIP only for a "
@@ -159,6 +267,10 @@ VERIFIERS = [
               "breakout, counter-trend, liquidity that will be taken against it, news), each with its number. Then "
               "judge fairly: vote SKIP only if a flaw makes a LOSS MORE LIKELY THAN A WIN; flaws every trade has "
               "(it could reverse, news may come) are not enough - then vote TAKE with a lower score."},
+    {"key": "integrity", "name": "Evidence Integrity Verifier", "icon": "INT",
+     "focus": "Check the numbers only: compare the prices, levels and events the desk leads quote with the market "
+              "data. Vote SKIP only if the case for the trade rests on numbers that are wrong or not in the data; "
+              "otherwise TAKE with a score for how well the evidence holds up."},
 ]
 
 for _a in ANALYSTS:
@@ -167,12 +279,12 @@ for _a in ANALYSTS:
 
 SPECIALISTS = ANALYSTS + VERIFIERS
 HEAD = {"key": "head", "name": "Head Trader", "icon": "HT",
-        "focus": "Reads the 3 desk verdicts, the 3 verifiers, the strategy board and the track record → TAKE/SKIP, "
+        "focus": "Reads the 4 desk verdicts, the 4 verifiers, the strategy board and the track record → TAKE/SKIP, "
                  "confidence and final levels."}
 AUDITOR = {"key": "auditor", "name": "Signal Auditor", "icon": "AUD",
            "focus": "Final consistency check of the signal before it is sent – can veto."}
 ALL_AGENTS = ANALYSTS + LEADS + VERIFIERS + [HEAD, AUDITOR]
-PIPELINE = [("Stage 1 · 18 analysts", ANALYSTS), ("Stage 2 · Desk leads", LEADS), ("Stage 3 · Verifiers", VERIFIERS),
+PIPELINE = [(f"Stage 1 · {len(ANALYSTS)} analysts", ANALYSTS), ("Stage 2 · Desk leads", LEADS), ("Stage 3 · Verifiers", VERIFIERS),
             ("Stage 4 · Decision", [HEAD]), ("Stage 5 · Final check", [AUDITOR])]
 
 
@@ -209,7 +321,7 @@ def inputs(agent: dict) -> list[str]:
 
 
 ANALYST_PROMPT = """You are the {name} of the {desk} on a professional {instrument} trading desk.
-26 agents work on this trade and each has exactly ONE job. YOUR ONLY JOB:
+__N__ agents work on this trade and each has exactly ONE job. YOUR ONLY JOB:
 {focus}
 
 STRICT RULES:
@@ -248,7 +360,7 @@ YOUR JOB:
 1. Check every member's evidence against the data below. Name any member whose claim is wrong or not supported.
 2. Weigh the members: one well-evidenced SKIP outweighs several weak TAKEs. NEUTRAL members found no edge
    either way - they neither support nor block the trade.
-3. Give ONE verdict for your desk. It is sent to the three verifiers and to the head of the desk.
+3. Give ONE verdict for your desk. It is sent to the verifiers and to the head of the desk.
 
 Setup:
 {setup}
@@ -303,10 +415,10 @@ Time / session and upcoming news: {session}
 Strategy board ({board_summary}):
 {board}
 
-The three desk leads report (after checking their analysts):
+The desk leads report (after checking their analysts):
 {desks}
 
-All 18 analysts (one line each):
+All __NA__ analysts (one line each):
 {reports}
 
 Check the desks' claims against the data above and call out anything unsupported. Judge only from your own role,
@@ -391,6 +503,11 @@ and what would make you buy or sell. Do not invent prices that are not in the da
 """
 
 
+# Prompts name the real desk size.
+ANALYST_PROMPT = ANALYST_PROMPT.replace("__N__", str(len(ALL_AGENTS)))
+VERIFIER_PROMPT = VERIFIER_PROMPT.replace("__NA__", str(len(ANALYSTS)))
+
+
 def _r(x, n=2):
     return round(x, n) if isinstance(x, (int, float)) and not isinstance(x, bool) else x
 
@@ -462,7 +579,7 @@ def market_brief(market: dict, agent: str | None = None, tfs=None) -> str:
 def _analyst_market(market: dict, spec: dict) -> dict:
     out = {}
     if spec["fields"]:
-        for tf in TF_ORDER:
+        for tf in spec.get("tfs") or TF_ORDER:
             if tf in market:
                 out[TF_LABEL[tf]] = _tf_slice(market[tf], spec["fields"], spec.get("ind"))
     return out
@@ -494,6 +611,9 @@ def agent_data(spec: dict, ctx: dict) -> str:
             out[f"{cat}_headlines_last_24h"] = items or ["no relevant headlines in the last 24h"]
         elif x == "intermarket":
             out["other_markets"] = extra.get("intermarket") or "no other market data"
+        elif x == "trade_window":
+            out["order_lifetime_minutes"] = ctx.get("_expiry")
+            out["now_utc"] = datetime.now(timezone.utc).strftime("%a %H:%M")
     return json.dumps(out, separators=(",", ":"))
 
 
@@ -768,38 +888,48 @@ class TradingDesk:
 
     @staticmethod
     def _make_plan(models: list[str], n_keys: int, extra=(), multi: bool | None = None) -> dict[str, list[str]]:
-        """With other providers (Mistral/Groq) configured they go first – they have far bigger free quotas –
-        and the Gemini plan below becomes the fallback."""
+        """Split the agents over every AI key (Gemini, Mistral, Groq) as equal shares. Without Mistral/Groq keys
+        the Gemini plan is used as it is."""
         base = (TradingDesk._gemini_plan(models, n_keys, n_keys > 1 if multi is None else multi) if n_keys
                 else {a["key"]: [] for a in ALL_AGENTS})
         ex = [f"{m}#{k + 1}" for k, ms in extra for m in ms]
         if not ex:
             return base
-        lite = [x for x in ex if is_lite(split_slot(x)[0])]
-        strong = [x for x in ex if x not in lite]
-        fast = lite + strong[1:] or strong  # analysts: small + mid models; decisions: the biggest first
+        # Every agent gets a home key, round robin over all keys, so 50 agents on 3 keys split 17 / 17 / 16.
+        # On its home key an analyst starts with the small/mid models, a lead/verifier/head/auditor with the
+        # biggest; after that it may fall back to the other keys.
+        # Gemini keys (0 .. n_keys-1) take part too, so "3 API keys" means 3 equal shares whatever the provider.
+        by_key = {k: list(models) for k in range(n_keys)}
+        by_key.update({k: list(ms) for k, ms in extra})
+        keys = list(by_key)
+
+        def order(k: int, decision: bool, n: int) -> list[str]:
+            small = [m for m in by_key[k] if is_lite(m)]
+            big = [m for m in by_key[k] if m not in small]
+            if decision:
+                ms = big + small
+            else:  # analysts: small/mid models first, rotated so neighbours use different models
+                fast = small + big[1:] or big
+                n %= len(fast)
+                ms = fast[n:] + fast[:n] + [m for m in big if m not in fast]
+            return [f"{m}#{k + 1}" for m in ms]
         plan = {}
-        for i, a in enumerate(ANALYSTS):
-            n = i % max(len(fast), 1)
-            plan[a["key"]] = fast[n:] + fast[:n] + [x for x in strong if x not in fast] + base[a["key"]]
-        for i, a in enumerate(LEADS + VERIFIERS + [HEAD, AUDITOR]):
-            order = strong or lite
-            n = i % max(len(order), 1) if a in VERIFIERS else 0
-            plan[a["key"]] = order[n:] + order[:n] + [x for x in lite if x not in order] + base[a["key"]]
+        for i, a in enumerate(ALL_AGENTS):
+            home = keys[i % len(keys)]
+            decision = a not in ANALYSTS
+            own = order(home, decision, i // len(keys))
+            rest = [x for k in keys[i % len(keys) + 1:] + keys[:i % len(keys)] for x in order(k, decision, 0)]
+            plan[a["key"]] = own + rest + base[a["key"]]
         return plan
 
     @staticmethod
     def _gemini_plan(models: list[str], n_keys: int, multi: bool) -> dict[str, list[str]]:
-        """Which model × key each agent tries first.
+        """Which model × key each agent tries first (Gemini keys).
 
-        Every agent has a home key. With 2 keys the 26 agents split 13 / 13:
-          analysts   alternate key 1 / key 2 (9 + 9)
-          leads      technical → key 1, strategy → key 2, macro → key 1
-          verifiers  confluence → key 2, risk → key 1, devil → key 2
-          head       key 1            auditor  key 2 (an independent second opinion)
-        The 18 analysts have narrow, data-bound jobs → fast "lite" models (much bigger free quota).
-        Leads, verifiers, Head Trader and Auditor judge everything → the strongest models.
-        After its own list an agent can still fall back to any healthy slot on any key.
+        Every agent has a home key, round robin over the keys in pipeline order, so 3 keys carry 17 / 17 / 16
+        of the 50 agents. Analysts have narrow, data-bound jobs → fast "lite" models (bigger free quota);
+        leads, verifiers, Head Trader and Auditor judge everything → the strongest models.
+        After its own key an agent can still fall back to any healthy slot on the other keys.
         """
         n_keys = max(n_keys, 1)
 
@@ -812,17 +942,11 @@ class TradingDesk:
         lite = [m for m in models if "lite" in m] or models
         strong = [m for m in models if "lite" not in m] or models
         plan = {}
-        for i, a in enumerate(ANALYSTS):
+        for i, a in enumerate(ALL_AGENTS):
             k = i % n_keys
-            plan[a["key"]] = [slot(m, k) for m in rot(lite, i // n_keys)] + [slot(m, k) for m in strong]
-        for i, lead in enumerate(LEADS):
-            k = i % n_keys
-            plan[lead["key"]] = [slot(m, k) for m in rot(strong, i)] + [slot(m, k) for m in lite]
-        for i, v in enumerate(VERIFIERS):
-            k = (i + 1) % n_keys
-            plan[v["key"]] = [slot(m, k) for m in rot(strong, 1 + i)] + [slot(m, k) for m in lite]
-        plan["head"] = [slot(m, 0) for m in strong] + [slot(m, n_keys - 1) for m in strong]
-        plan["auditor"] = [slot(m, (1 % n_keys)) for m in rot(strong, 1)] + [slot(m, 0) for m in strong]
+            first = rot(lite, i // n_keys) + strong if a in ANALYSTS else rot(strong, i // n_keys) + lite
+            others = [slot(m, kk) for kk in range(n_keys) if kk != k for m in first]
+            plan[a["key"]] = [slot(m, k) for m in dict.fromkeys(first)] + others
         return plan
 
     def home_key(self, key: str) -> int:
@@ -1308,8 +1432,8 @@ class TradingDesk:
                  "confidence": 0, "headline": "", "reason": "", "levels": None}
         if self._out_of_quota(early, mon, ANALYSTS + LEADS + VERIFIERS + [HEAD, AUDITOR]):
             return early
-        # Stage 1: the engine hands the setup to the 18 analysts; each works on its own data in parallel.
-        mon.event(f"Stage 1: engine → {len(ANALYSTS)} analysts (technical, strategy, macro desks)")
+        # Stage 1: the engine hands the setup to the analysts; each works on its own data in parallel.
+        mon.event(f"Stage 1: engine → {len(ANALYSTS)} analysts (technical, strategy, macro, execution desks)")
         analysts = list(await asyncio.gather(*(self._analyst(a, ctx, mon) for a in ANALYSTS)))
         verdict = {"reports": list(analysts), "votes": 0, "errors": 0, "approved": False, "board": board,
                    "confidence": 0, "headline": "", "reason": "", "levels": None}
@@ -1322,7 +1446,7 @@ class TradingDesk:
             return verdict
 
         # Stage 2: each desk lead checks its analysts, then challenges the doubtful ones (debate).
-        mon.event("Stage 2: analysts → Technical / Strategy / Macro desk leads")
+        mon.event(f"Stage 2: analysts → {len(LEADS)} desk leads")
         leads = list(await asyncio.gather(*(self._lead(lead, [r for r in analysts if r["desk"] == lead["desk"]], ctx, mon)
                                             for lead in LEADS)))
         if getattr(self, "debate", True):
@@ -1332,7 +1456,7 @@ class TradingDesk:
             verdict["reports"] = list(analysts) + list(leads)
             return verdict
 
-        # Stage 3: the verifiers receive the three desk verdicts (plus every analyst's one-liner).
+        # Stage 3: the verifiers receive the desk verdicts (plus every analyst's one-liner).
         mon.event("Stage 3: desk verdicts → Confluence Verifier, Risk Manager, Devil's Advocate")
         board_summary = f"{board['agrees']} agree, {board['against']} against, {board['neutral']} neutral"
         vctx = dict(instrument=ctx["instrument"], setup=ctx["setup"], market=ctx["market"], session=ctx["session_news"],
@@ -1366,13 +1490,13 @@ class TradingDesk:
         verdict["conviction"] = conviction
         tally = (f"{a_votes} TAKE, {len(decisive) - a_votes} SKIP, {neutral} NEUTRAL of {len(answered)} analysts "
                  f"(need {need} TAKE), reliability-weighted agreement "
-                 f"{weighted}% – technical {per_desk['tech']}, strategy {per_desk['strategy']}, macro {per_desk['macro']}")
+                 f"{weighted}% – " + ", ".join(f"{DESKS[d]['name']} {v}" for d, v in per_desk.items()))
 
         # Stage 4: the Head Trader reads the desks and the verifiers.
         for r in leads + verifiers:
             if r["vote"] != "ERROR":
                 mon.message(r["key"], "head", f"{r['vote']} {r['score']} – {r['summary']}")
-        mon.event("Stage 4: 3 desk verdicts + 3 verifiers → Head Trader")
+        mon.event(f"Stage 4: {len(LEADS)} desk verdicts + {len(VERIFIERS)} verifiers → Head Trader")
         mon.agent("head", "thinking", summary="Reading the desks and verifiers and making the final call…")
         try:
             text, _ = await self._ask(HEAD_PROMPT.format(

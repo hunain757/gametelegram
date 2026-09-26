@@ -128,7 +128,7 @@ tr{transition:background .2s}tbody tr:hover td,table tr:hover td{background:rgba
 @keyframes grow{from{transform:scaleX(0)}}
 ul.pts{margin:6px 0 0;padding-left:18px;color:var(--mut)}
 .codeb{display:inline-block;min-width:30px;text-align:center;font:700 10px/16px ui-monospace,Consolas,monospace;padding:0 5px;border-radius:4px;background:#223049;color:#e8eefc;vertical-align:1px}
-.codeb.tech{background:#16335a}.codeb.strategy{background:#4a3a10}.codeb.macro{background:#133d2b}
+.codeb.tech{background:#16335a}.codeb.strategy{background:#4a3a10}.codeb.macro{background:#133d2b}.codeb.exec{background:#35204f}
 .tk{font:700 11px ui-monospace,Consolas,monospace;padding:1px 5px;border-radius:4px;background:rgba(0,0,0,.18)}
 .sd{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:var(--mut)}.sd.ok{background:var(--green)}.sd.bad{background:var(--red)}
 .fl{display:inline-block;min-width:32px;font:700 10px ui-monospace,Consolas,monospace;color:var(--gold)}
@@ -248,7 +248,7 @@ select{width:auto}.msgline{font-size:12px;margin-top:6px;min-height:16px}
 </head>
 <body>
 <aside>
-  <div class="brand"><span class="logo">AU</span><div><b>AI Control Room</b><small>Gold &amp; Bitcoin · 26 agents</small></div></div>
+  <div class="brand"><span class="logo">AU</span><div><b>AI Control Room</b><small>Gold &amp; Bitcoin · 50 agents</small></div></div>
   <nav id="nav">
     <div id="navInk"></div>
     <button data-v="signals"><span class="ic">SIG</span>Signals<span class="cnt" id="navSig"></span></button>
@@ -268,7 +268,7 @@ select{width:auto}.msgline{font-size:12px;margin-top:6px;min-height:16px}
   <div class="pills" id="pills"></div>
   <div class="acts">
     <button id="scanBtn" onclick="act('scan')">Scan now</button>
-    <button class="alt" id="practiceBtn" onclick="act('practice')" title="Run the whole 26-agent desk on live data now – nothing is published">Practice AI review</button>
+    <button class="alt" id="practiceBtn" onclick="act('practice')" title="Run the whole 50-agent desk on live data now – nothing is published">Practice AI review</button>
   </div>
 </header>
 <main>
@@ -314,7 +314,7 @@ select{width:auto}.msgline{font-size:12px;margin-top:6px;min-height:16px}
         <span class="toggles"><label><input type="checkbox" id="onlySel"> only the selected agent</label></span></h2>
       <div id="chat" class="chat"></div></section>
     <section><h2>Last AI decisions</h2><div id="reviews"></div></section>
-    <section><details class="fold"><summary>Agent directory – all 26 agents, their job, data, key and record</summary>
+    <section><details class="fold"><summary>Agent directory – all 50 agents, their job, data, key and record</summary>
       <div class="dirwrap" id="directory"></div></details></section>
   </div>
 
@@ -379,31 +379,32 @@ let pos = {};
 function el(tag, attrs, parent){ const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); (parent||net).appendChild(e); return e; }
 function keyName(k){ return ((state && state.key_names) || [])[k - 1] || "Key " + k; }
 const KEYCOL = ["#3d9bff", "#b36bff", "#22c7b8", "#ffab1a"];
-const CODECOL = {tech: "#16335a", strategy: "#4a3a10", macro: "#133d2b"};
-const DESKCOL = {tech: "rgba(61,155,255,.06)", strategy: "rgba(245,197,66,.06)", macro: "rgba(34,199,122,.06)"};
+const CODECOL = {tech: "#16335a", strategy: "#4a3a10", macro: "#133d2b", exec: "#35204f"};
+const DESKCOL = {tech: "rgba(61,155,255,.06)", strategy: "rgba(245,197,66,.06)", macro: "rgba(34,199,122,.06)", exec: "rgba(179,107,255,.06)"};
 let deskBoxes = [];
 function layout(agents){
   pos = {}; deskBoxes = [];
-  const X = {0: 70, 1: 300, 2: 610, 3: 840, 4: 1045, 5: 1215}, MID = 470;
-  pos.engine = {x: X[0], y: MID, w: 120, h: 54, icon: "ENG", name: "SMC Engine", sub: "finds setups"};
+  const X = {0: 70, 1: 300, 2: 610, 3: 840, 4: 1045, 5: 1215};
   let y = 100;
-  const desks = state.desks || {};
+  const desks = state.desks || {}, ROW = 34;
   for (const d of Object.keys(desks)) {
     const members = agents.filter(a => a.stage === 1 && a.desk === d);
     if (!members.length) continue;
     const top = y;
-    members.forEach(a => { pos[a.key] = {x: X[1], y, w: 236, h: 38, icon: a.icon, desk: d, key: a.home_key,
-      name: a.name.replace(" Analyst", "").replace(" Specialist", "").replace(" & Pattern Reader", " Reader").replace(" Strategist", ""), sub: ""}; y += 44; });
-    deskBoxes.push({d, top: top - 48, bottom: y - 44 + 8, label: desks[d].name + " · " + members.length});
+    members.forEach(a => { pos[a.key] = {x: X[1], y, w: 236, h: 30, icon: a.icon, desk: d, key: a.home_key,
+      name: a.name.replace(" Analyst", "").replace(" Specialist", "").replace(" & Pattern Reader", " Reader").replace(" Strategist", ""), sub: ""}; y += ROW; });
+    deskBoxes.push({d, top: top - 44, bottom: y - ROW + 4, label: desks[d].name + " · " + members.length});
     const lead = agents.find(a => a.stage === 2 && a.desk === d);
-    if (lead) pos[lead.key] = {x: X[2], y: (top + y - 44) / 2, w: 218, h: 48, icon: lead.icon, desk: d, key: lead.home_key, name: lead.name, sub: ""};
-    y += 58;
+    if (lead) pos[lead.key] = {x: X[2], y: (top + y - ROW) / 2, w: 218, h: 48, icon: lead.icon, desk: d, key: lead.home_key, name: lead.name, sub: ""};
+    y += 56;
   }
+  const MID = (100 + y - 56 - ROW) / 2;
+  pos.engine = {x: X[0], y: MID, w: 120, h: 54, icon: "ENG", name: "SMC Engine", sub: "finds setups"};
   const ver = agents.filter(a => a.stage === 3);
-  ver.forEach((a, i) => pos[a.key] = {x: X[3], y: MID + (i - (ver.length - 1) / 2) * 130, w: 180, h: 48, icon: a.icon, key: a.home_key, name: a.name, sub: ""});
+  ver.forEach((a, i) => pos[a.key] = {x: X[3], y: MID + (i - (ver.length - 1) / 2) * 120, w: 180, h: 48, icon: a.icon, key: a.home_key, name: a.name, sub: ""});
   agents.filter(a => a.stage >= 4).forEach(a => pos[a.key] = {x: X[a.stage], y: MID, w: 150, h: 52, icon: a.icon, key: a.home_key, name: a.name, sub: ""});
   pos.website = {x: 1335, y: MID, w: 96, h: 48, icon: "WEB", name: "Website", sub: "signal out"};
-  netHeight = Math.max(y + 20, MID * 2);
+  netHeight = Math.max(y, MID * 2);
 }
 let netHeight = 940;
 const EDGES = [];
@@ -413,7 +414,7 @@ function buildNet(agents){
   [[70,"Engine"],[300,st[0]],[610,st[1]],[840,st[2]],[1045,st[3]],[1215,st[4]],[1335,"Output"]].forEach(([x,t]) =>
     el("text", {x, y: 22, "text-anchor":"middle", class:"stage"}).textContent = (t || "").replace("Stage ", "S"));
   deskBoxes.forEach(b => {
-    el("rect", {x: 168, y: b.top, width: 560, height: b.bottom - b.top + 19, rx: 14, fill: DESKCOL[b.d], stroke: "#1f2838"});
+    el("rect", {x: 160, y: b.top, width: 568, height: b.bottom - b.top + 19, rx: 14, fill: DESKCOL[b.d], stroke: "#1f2838"});
     el("text", {x: 182, y: b.top + 17, class: "desklabel"}).textContent = b.label;
   });
   const pairs = [];
@@ -431,12 +432,15 @@ function buildNet(agents){
     const p = pos[k], n = el("g", {class: "node", id: "n-" + k, transform: `translate(${p.x - p.w/2},${p.y - p.h/2})`});
     el("rect", {width: p.w, height: p.h, rx: 9}, n);
     if (p.key) { el("rect", {width: 4, height: p.h - 12, x: 3, y: 6, rx: 2, style: `fill:${KEYCOL[(p.key - 1) % 4]};stroke:none`}, n);
-                 el("text", {x: p.w - 8, y: p.h - 7, "text-anchor": "end", class: "kbadge", style: `fill:${KEYCOL[(p.key - 1) % 4]}`}, n).textContent = keyName(p.key).toUpperCase(); }
-    const small = p.h < 44, bw = Math.max(26, 7 * String(p.icon).length + 10);
+                 el("text", {x: p.w - 8, y: p.h < 40 ? 19 : p.h - 7, "text-anchor": "end", class: "kbadge", style: `fill:${KEYCOL[(p.key - 1) % 4]}`}, n).textContent =
+                   p.h < 40 ? keyName(p.key).replace(/^(\w)\w*\s*/, "$1") : keyName(p.key).toUpperCase(); }
+    const small = p.h < 40, bw = Math.max(26, 7 * String(p.icon).length + 10);
     el("rect", {x: 12, y: small ? 7 : 9, width: bw, height: 16, rx: 4, style: `fill:${CODECOL[p.desk] || "#223049"};stroke:none;animation:none`}, n);
     el("text", {x: 12 + bw / 2, y: small ? 19 : 21, "text-anchor": "middle", class: "codet"}, n).textContent = p.icon;
-    el("text", {x: 18 + bw, y: small ? 19 : 21}, n).textContent = p.name;
-    el("text", {x: 12, y: small ? 33 : 39, class: "sub", id: "s-" + k}, n).textContent = p.sub;
+    el("text", {x: 18 + bw, y: small ? 19 : 21}, n).textContent = small && p.name.length > 21 ? p.name.slice(0, 20) + "…" : p.name;
+    el("text", small ? {x: 0, y: 0, class: "sub", style: "display:none", id: "s-" + k}
+                     : {x: 12, y: 39, class: "sub", id: "s-" + k}, n).textContent = p.sub;
+    el("title", {}, n).textContent = p.name;
     n.onclick = () => { selected = k; render(); renderChat(state.flows || []); };
   }
   net.setAttribute("viewBox", `0 0 1400 ${netHeight + 30}`);
@@ -543,7 +547,7 @@ function renderChat(flows){
   const raw = !list.length;
   if (raw) list = flows.slice(-60);
   list = list.filter(f => !only || f.from === selected || f.to === selected);
-  if (!list.length) { H.chat = '<div class="empty">No messages yet. Press Practice AI review to watch the 26 agents work on live data – or wait for the engine to find a real setup.</div>'; return; }
+  if (!list.length) { H.chat = '<div class="empty">No messages yet. Press Practice AI review to watch the 50 agents work on live data – or wait for the engine to find a real setup.</div>'; return; }
   if (raw) { H.chat = list.slice().reverse().map(row).join(""); return; }
   H.chat = PHASES.map(([n, title, test]) => {
     const items = list.filter(test); if (!items.length) return "";
@@ -557,7 +561,7 @@ function renderChat(flows){
 function link(k){ return `<a href="#" class="lnk" onclick="selected='${k}';render();renderChat(state.flows||[]);return false">${esc(who(k))}</a>`; }
 function renderDetail(agents){
   const a = agents.find(x => x.key === selected);
-  if (!a) { H.detailBody = '<span class="empty">The SMC engine scans M5→D1 every few minutes and hands real setups to the 18 analysts.</span>'; }
+  if (!a) { H.detailBody = '<span class="empty">The SMC engine scans M5→D1 every few minutes and hands real setups to the 40 analysts in 4 desks.</span>'; }
   else {
     const badge = a.status === "done" && a.vote ? a.vote : a.status;
     const desk = a.desk && state.desks ? state.desks[a.desk] : null;
@@ -740,7 +744,7 @@ function render(){
       (dayOut.length ? ` – the free <b>daily quota</b> is used up. It comes back in ~${Math.max(...dayOut.map(m => m.back_in_min))} min.` : ".") +
       ` The engine keeps scanning; only very strong engine-only setups are published meanwhile. Tip: don't press "Test agents" often – each test uses quota.</div>`
     : dayOut.length * 2 >= models.length ? `<div class="banner warnb"><b>Low on AI quota:</b> ${dayOut.length} of ${models.length} model slots used their free daily quota
-      . A full review needs about 26–30 requests, so reviews may stop early. Add a second free key
+      . A full review needs about 50–60 requests, so reviews may stop early. Add a second free key
       (MISTRAL_API_KEYS or GROQ_API_KEY in .env) and avoid pressing Practice / Test often.</div>` : "";
   paintNodes(s.agents); renderDetail(s.agents);
   H.log = s.log.map(l => `<div class="k-${l.kind}"><span class="t">${l.t}</span>${esc(l.text)}</div>`).join("") || '<div class="empty">Waiting for the first scan…</div>';
