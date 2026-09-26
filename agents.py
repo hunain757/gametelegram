@@ -14,6 +14,7 @@ With 2 API keys the work is split 13 / 13 (see TradingDesk._make_plan).
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import math
@@ -551,6 +552,8 @@ def classify_error(error: Exception) -> tuple[str, str, float]:
         return "missing", "Model not available for this key", 86400.0
     if "api key" in low or "api_key" in low or "401" in t or "403" in t or "permission" in low:
         return "key", "Gemini key rejected – check GEMINI_API_KEY", 3600.0
+    if "all gemini models are resting" in low:
+        return "exhausted", "All Gemini models are resting (daily quota used or busy)", 0.0
     return "other", t[:140], 30.0
 
 
@@ -589,18 +592,41 @@ class ModelPool:
         return pref + rest
 
     async def acquire(self, preferred, tried: set) -> str | None:
-        """Next usable slot. Waits only for a rate-limit slot, never for a slot that is resting."""
+        """Next usable slot. Waits for a rate-limit slot, and for a resting slot that is free again within
+        `max_wait` seconds (per-minute limits, short "busy" back-offs) - but never for a daily-quota slot."""
         order = self.order(preferred)
+        max_wait = getattr(self, "max_wait", 75.0)
+        deadline = time.monotonic() + max_wait
         while True:
             now = time.monotonic()
-            left = [m for m in order if m not in tried and self.cool_until[m] <= now]
+            untried = [m for m in order if m not in tried]
+            left = [m for m in untried if self.cool_until[m] <= now]
             if not left:
-                return None
+                soon = [self.cool_until[m] for m in untried if self.cool_until[m] <= deadline]
+                if not soon:
+                    return None
+                await asyncio.sleep(min(max(min(soon) - now, 0.5), 65))
+                continue
             for m in left:
                 if self._ready_at(m, now) <= now:
                     self.calls[m].append(now)
+                    self.today(m)
                     return m
             await asyncio.sleep(min(max(min(self._ready_at(m, now) for m in left) - now, 0.5), 65))
+
+    def today(self, m: str | None = None) -> dict:
+        """Requests sent today per slot (resets at midnight UTC), to see how much quota the desk uses."""
+        day = datetime.now(timezone.utc).date().isoformat()
+        if getattr(self, "_day", None) != day:
+            self._day, self.sent_today = day, {}
+        if m:
+            self.sent_today[m] = self.sent_today.get(m, 0) + 1
+        return self.sent_today
+
+    def resting_all(self, within: float = 75.0) -> bool:
+        """True when no slot at all can be used within `within` seconds (e.g. every daily quota used)."""
+        now = time.monotonic()
+        return all(self.cool_until[m] > now + within for m in self.models)
 
     def success(self, m: str, seconds: float):
         self.ok[m] += 1
@@ -650,7 +676,8 @@ class ModelPool:
                         "kind": err["kind"] if err and cooling else None,
                         "reason": reason,
                         "back_in_min": int(max(err["until"] - now, 0) // 60) if err and cooling else 0,
-                        "calls_last_min": len(self.calls[m]), "ok": self.ok[m], "fail": self.fail[m],
+                        "calls_last_min": len(self.calls[m]), "today": self.today().get(m, 0),
+                        "ok": self.ok[m], "fail": self.fail[m],
                         "latency": round(self.latency[m], 1) if m in self.latency else None})
         return out
 
@@ -758,7 +785,7 @@ class TradingDesk:
         while True:
             model = await self.pool.acquire(preferred or self.pool.models[0], tried)
             if model is None:
-                raise last_error or RuntimeError("no Gemini model available")
+                raise last_error if tried else RuntimeError("all Gemini models are resting (daily quota used or busy)")
             try:
                 name, k = split_slot(model)
                 client = self.clients[k] if hasattr(self, "clients") else self.client
@@ -882,11 +909,30 @@ class TradingDesk:
 
     async def _analyst(self, spec: dict, ctx: dict, mon: Monitor) -> dict:
         lead = next(x for x in LEADS if x["key"] == spec["lead"])
+        data = agent_data(spec, ctx)
         prompt = ANALYST_PROMPT.format(
             name=spec["name"], desk=DESKS[spec["desk"]]["name"], instrument=ctx["instrument"], focus=spec["focus"],
-            direction=ctx["direction"], lead=lead["name"], setup=ctx["setup"], session=ctx["session"],
-            data=agent_data(spec, ctx))
+            direction=ctx["direction"], lead=lead["name"], setup=ctx["setup"], session=ctx["session"], data=data)
+        # Saving quota: an analyst whose input has not changed gives the same answer, so reuse it for a while.
+        # News analysts only depend on the news and the direction; the others on their full prompt.
+        basis = (ctx["instrument"], ctx["direction"], data) if spec["desk"] == "macro" else (prompt,)
+        ck = (spec["key"], hashlib.sha1(repr(basis).encode()).hexdigest())
+        ttl = 45 * 60 if spec["desk"] == "macro" else 20 * 60
+        cache = self.__dict__.setdefault("_cache", {})
+        hit = cache.get(ck)
+        if hit and time.time() - hit[0] < ttl:
+            r = dict(hit[1], summary=hit[1]["summary"], reused=True)
+            mon.message("engine", spec["key"], ctx["_brief"])
+            mon.agent(spec["key"], "done", vote=r["vote"], score=r["score"], summary=r["summary"],
+                      points=r["points"] + [f"Reused: input unchanged since {int((time.time() - hit[0]) // 60)} min ago"],
+                      model=r.get("model"), seconds=0, err=None)
+            mon.message(spec["key"], spec["lead"], f"{r['vote']} {r['score']} – {r['summary']}")
+            return r
         r = await self._call(spec, prompt, mon, 1, sources=(("engine", ctx["_brief"]),))
+        if r["vote"] != "ERROR":
+            cache[ck] = (time.time(), dict(r))
+            for k in [k for k, v in cache.items() if time.time() - v[0] > 3600]:
+                cache.pop(k, None)
         if r["vote"] != "ERROR":  # hand the finding straight to the desk lead
             mon.message(spec["key"], spec["lead"], f"{r['vote']} {r['score']} – {r['summary']}")
         return r
@@ -933,7 +979,7 @@ class TradingDesk:
                 continue
             members = [r for r in analysts if r["desk"] == lead["desk"] and r["vote"] != "ERROR"]
             targets = [r for r in members if r["vote"] != lead["vote"] or r["key"] in lead.get("doubtful", [])]
-            targets = sorted(targets, key=lambda r: -r["score"])[:3]  # the most confident dissenters first
+            targets = sorted(targets, key=lambda r: -r["score"])[:2]  # the 2 most confident dissenters
             jobs += [(lead, r) for r in targets]
         if not jobs:
             return
@@ -1025,8 +1071,24 @@ class TradingDesk:
         mon.set_phase("idle")
         return verdict
 
+    def _out_of_quota(self, verdict: dict, mon: Monitor, pending: list[dict]) -> dict | None:
+        """Stop cleanly when no model slot can be used any more today, instead of sending doomed requests."""
+        if not self.pool.resting_all():
+            return None
+        for a in pending:
+            mon.agent(a["key"], "error", err="exhausted", summary="Skipped – no Gemini model available (daily quota used)")
+        mon.event("AI desk stopped: every Gemini model/key is resting (daily quota used). It resumes after the reset "
+                  "(midnight Pacific ≈ 07:00 UTC) – add another key from a different Google account for more.", "error")
+        verdict.update(ai_down=True, reason="Gemini quota used on every key",
+                       reject_reason="the AI desk ran out of Gemini quota before finishing the review")
+        return verdict
+
     async def _review(self, setup: dict, ctx: dict, mon: Monitor) -> dict:
         board = ctx["_board"]
+        early = {"reports": [], "votes": 0, "errors": 0, "approved": False, "board": board,
+                 "confidence": 0, "headline": "", "reason": "", "levels": None}
+        if self._out_of_quota(early, mon, ANALYSTS + LEADS + VERIFIERS + [HEAD, AUDITOR]):
+            return early
         # Stage 1: the engine hands the setup to the 18 analysts; each works on its own data in parallel.
         mon.event(f"Stage 1: engine → {len(ANALYSTS)} analysts (technical, strategy, macro desks)")
         analysts = list(await asyncio.gather(*(self._analyst(a, ctx, mon) for a in ANALYSTS)))
@@ -1037,12 +1099,19 @@ class TradingDesk:
             verdict["ai_down"] = True
             return verdict
 
+        if self._out_of_quota(verdict, mon, LEADS + VERIFIERS + [HEAD, AUDITOR]):
+            return verdict
+
         # Stage 2: each desk lead checks its analysts, then challenges the doubtful ones (debate).
         mon.event("Stage 2: analysts → Technical / Strategy / Macro desk leads")
         leads = list(await asyncio.gather(*(self._lead(lead, [r for r in analysts if r["desk"] == lead["desk"]], ctx, mon)
                                             for lead in LEADS)))
         if getattr(self, "debate", True):
             await self._debate(leads, analysts, ctx, mon)
+
+        if self._out_of_quota(verdict, mon, VERIFIERS + [HEAD, AUDITOR]):
+            verdict["reports"] = list(analysts) + list(leads)
+            return verdict
 
         # Stage 3: the verifiers receive the three desk verdicts (plus every analyst's one-liner).
         mon.event("Stage 3: desk verdicts → Confluence Verifier, Risk Manager, Devil's Advocate")
@@ -1092,7 +1161,8 @@ class TradingDesk:
             log.warning("Head trader failed: %s", e)
             takers = [r["score"] for r in reports if r["vote"] == "TAKE"]
             verdict["confidence"] = round(sum(takers) / len(takers)) if takers else 0
-            verdict["reason"] = "Head trader offline – decided by the desk's votes."
+            kind, friendly, _ = classify_error(e)
+            verdict["reason"] = f"Head trader unavailable ({friendly}) – decided by the desk's votes."
             strict_need = max(need, math.ceil(len(answered) * 0.75))
             verdict["approved"] = (a_votes >= strict_need and l_votes >= 2 and v_votes >= 2
                                    and board["against"] <= board["agrees"]

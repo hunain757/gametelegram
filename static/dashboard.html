@@ -74,7 +74,7 @@ background:var(--panel2);border:1px solid var(--line);font-size:13px;animation:f
 .flabel{font-size:11px;fill:#fff3c4;paint-order:stroke;stroke:#070a10;stroke-width:4px;pointer-events:none}
 @media(max-width:800px){.msg{grid-template-columns:1fr}}
 .banner{padding:12px 16px;border-radius:12px;border:1px solid #6b2a2f;background:#2a1216;color:#ffd0d4;font-size:14px}
-.banner b{color:#fff}.news div{padding:5px 0;border-bottom:1px dashed #19212f;font-size:13px}
+.banner b{color:#fff}.banner.warnb{border-color:#6b5a1a;background:#241d0c;color:#ffe3a3}.news div{padding:5px 0;border-bottom:1px dashed #19212f;font-size:13px}
 /* brand, kpis, code badges */
 .logo{display:inline-grid;place-items:center;width:38px;height:38px;border-radius:10px;font:800 14px/1 ui-monospace,Consolas,monospace;color:#161100;background:linear-gradient(135deg,var(--gold2),var(--gold));letter-spacing:.5px}
 .tk{font:700 11px ui-monospace,Consolas,monospace;padding:1px 5px;border-radius:4px;background:rgba(0,0,0,.18)}
@@ -218,7 +218,9 @@ function layout(agents){
   ver.forEach((a, i) => pos[a.key] = {x: X[3], y: MID + (i - (ver.length - 1) / 2) * 130, w: 180, h: 48, icon: a.icon, key: a.home_key, name: a.name, sub: ""});
   agents.filter(a => a.stage >= 4).forEach(a => pos[a.key] = {x: X[a.stage], y: MID, w: 150, h: 52, icon: a.icon, key: a.home_key, name: a.name, sub: ""});
   pos.telegram = {x: 1335, y: MID, w: 96, h: 48, icon: "OUT", name: "Telegram", sub: "signal out"};
+  netHeight = Math.max(y + 20, MID * 2);
 }
+let netHeight = 940;
 const EDGES = [];
 function buildNet(agents){
   net.textContent = ""; EDGES.length = 0; layout(agents);
@@ -252,10 +254,11 @@ function buildNet(agents){
     el("text", {x: 12, y: small ? 33 : 39, class: "sub", id: "s-" + k}, n).textContent = p.sub;
     n.onclick = () => { selected = k; render(); renderChat(state.flows || []); };
   }
-  const lg = el("g", {transform: "translate(20, 928)"});
+  net.setAttribute("viewBox", `0 0 1400 ${netHeight + 30}`);
+  const lg = el("g", {transform: `translate(20, ${netHeight + 18})`});
   for (let k = 1; k <= (state.keys || 1); k++) {
-    el("rect", {x: (k - 1) * 150, y: -9, width: 10, height: 10, rx: 2, fill: KEYCOL[(k - 1) % 4]}, lg);
-    el("text", {x: (k - 1) * 150 + 16, y: 0, class: "stage"}, lg).textContent =
+    el("rect", {x: (k - 1) * 220, y: -9, width: 10, height: 10, rx: 2, fill: KEYCOL[(k - 1) % 4]}, lg);
+    el("text", {x: (k - 1) * 220 + 16, y: 0, class: "stage"}, lg).textContent =
       `API key ${k}: ${agents.filter(a => a.home_key === k).length} agents`;
   }
 }
@@ -268,8 +271,8 @@ function paintNodes(agents){
     if (a) {
       if (a.status === "done" && a.vote) { cls += " " + a.vote; sub = `${a.vote} · ${a.score ?? ""}${a.seconds != null ? " · " + a.seconds + "s" : ""}`; }
       else if (a.status === "done") { cls += " TAKE"; sub = "online" + (a.seconds != null ? " · " + a.seconds + "s" : ""); }
-      else if (a.status === "error") { cls += " error"; sub = "error: " + ({quota_day: "daily quota used", quota_min: "rate limit, retrying",
-        busy: "Google busy", key: "key problem", missing: "model missing"}[a.err] || "error"); }
+      else if (a.status === "error") { cls += " error"; sub = ({quota_day: "daily quota used", quota_min: "rate limit, retrying", exhausted: "no model left (quota)",
+        busy: "Google busy", key: "key problem", missing: "model missing"}[a.err] || ("failed: " + (a.summary || "").slice(0, 26))); }
       else { cls += " " + a.status; sub = a.status === "idle" ? "idle" : a.status + "…"; }
     }
     if (k === "engine") sub = state.phase === "scanning" ? "scanning…" : "finds setups";
@@ -485,7 +488,10 @@ function render(){
   const dayOut = models.filter(m => m.kind === "quota_day");
   H.banner = models.length && !ready ? `<div class="banner"><b>AI desk paused:</b> all ${models.length} Gemini models are resting` +
       (dayOut.length ? ` – the free <b>daily quota</b> is used up. It resets at midnight Pacific time (≈ 07:00 UTC, in ~${Math.max(...dayOut.map(m => m.back_in_min))} min).` : ".") +
-      ` The engine keeps scanning; only very strong engine-only setups are sent meanwhile. Tip: don't press "Test all agents" often – each test uses quota.</div>` : "";
+      ` The engine keeps scanning; only very strong engine-only setups are sent meanwhile. Tip: don't press "Test all agents" often – each test uses quota.</div>`
+    : dayOut.length * 2 >= models.length ? `<div class="banner warnb"><b>Low on Gemini quota:</b> ${dayOut.length} of ${models.length} model slots used their free daily quota
+      (reset ≈ 07:00 UTC). A full review needs about 26–30 requests, so reviews may stop early. Add a key from a <b>different Google account</b>
+      (GEMINI_API_KEYS in .env) and avoid pressing Practice / Test often.</div>` : "";
   paintNodes(s.agents); renderDetail(s.agents);
   H.log = s.log.map(l => `<div class="k-${l.kind}"><span class="t">${l.t}</span>${esc(l.text)}</div>`).join("") || '<div class="empty">Waiting for the first scan…</div>';
   H.reviews = s.reviews.length ? `<table><tr><th>Time</th><th>Setup</th><th>Desk</th><th>Result</th></tr>` +
@@ -559,10 +565,10 @@ function renderKeys(models){
   H.keysSum = keys.map(k => { const ms = models.filter(m => m.key === k), r = ms.filter(m => m.ready).length;
     return `<span class="pill ${r ? "ok" : "bad"}">key ${k}: ${r}/${ms.length} ready</span>`; }).join(" ");
   const used = {}; (state.agents || []).forEach(a => { if (a.slot) (used[a.slot] = used[a.slot] || []).push(`<span class="codeb ${a.desk || ""}">${esc(a.icon)}</span>`); });
-  H.keys = `<table><tr><th>Model</th><th>Key</th><th>Tier</th><th>Health</th><th>OK / fail</th><th>Latency</th><th>Last min</th><th>Agents</th></tr>` +
+  H.keys = `<table><tr><th>Model</th><th>Key</th><th>Tier</th><th>Health</th><th>OK / fail</th><th>Latency</th><th>Sent today</th><th>Last min</th><th>Agents</th></tr>` +
     models.map(m => `<tr><td>${esc(m.name)}</td><td>key ${m.key}</td><td><span class="tag ${m.lite ? "lite" : "strong"}">${m.lite ? "lite" : "strong"}</span></td>
       <td><span class="hb ${m.ready ? "g" : "r"}"></span>${m.ready ? "ready" : `<span class="bad">resting${m.back_in_min ? " " + m.back_in_min + " min" : ""}</span><br><span class="role">${esc((m.reason || "").slice(0, 90))}</span>`}</td>
-      <td><span class="ok">${m.ok}</span> / <span class="${m.fail ? "bad" : ""}">${m.fail}</span></td><td>${m.latency != null ? m.latency + "s" : "–"}</td>
+      <td><span class="ok">${m.ok}</span> / <span class="${m.fail ? "bad" : ""}">${m.fail}</span></td><td>${m.latency != null ? m.latency + "s" : "–"}</td><td>${m.today ?? 0}</td>
       <td>${m.calls_last_min}</td><td>${(used[m.model] || []).join(" ")}</td></tr>`).join("") + "</table>";
 }
 function tick(){

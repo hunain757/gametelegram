@@ -270,6 +270,7 @@ def fake_desk(**kw):
     from agents import ModelPool
     desk = TradingDesk.__new__(TradingDesk)
     desk.pool, desk.min_rr, desk.min_confidence, desk.min_votes = ModelPool(["m1", "m2"], rpm=50), 1.5, 70, 3
+    desk.pool.max_wait = 0  # tests never wait for a resting slot
     desk.usage = {"day": None, "calls": 0, "failures": 0}
     from monitor import Monitor
     desk.monitor = Monitor()
@@ -334,7 +335,7 @@ class DebateTests(unittest.TestCase):
         v = asyncio.run(desk.review(setup, market, SESSION, history="last 3 trades: 2 losses"))
         analysts = [r for r in v["reports"] if r["stage"] == 1]
         changed = [r for r in analysts if r.get("changed")]
-        self.assertEqual(len(changed), 9)  # the 3 most confident dissenters of each desk were challenged
+        self.assertEqual(len(changed), 6)  # the 2 most confident dissenters of each desk were challenged
         self.assertTrue(all(r["vote"] == "SKIP" for r in changed))
         self.assertFalse(v["approved"])
         flows = list(desk.monitor.flows)
@@ -436,6 +437,7 @@ class ModelPoolTests(unittest.TestCase):
 
         async def run():
             pool = ModelPool(["a", "b"], rpm=2)
+            pool.max_wait = 0  # do not wait for resting slots in this test
             got = [await pool.acquire("a", set()) for _ in range(4)]
             pool.penalize("a", RuntimeError("429 RESOURCE_EXHAUSTED"))
             cooling = pool._ready_at("a", time.monotonic() - 50) > time.monotonic()
@@ -1149,3 +1151,42 @@ class AgentRecordTests(unittest.TestCase):
         desk.records = {a["key"]: {"weight": 1.5 if i < 9 else 0.5} for i, a in enumerate(ANALYSTS)}
         v = asyncio.run(desk.review(setup, market, SESSION))
         self.assertEqual(v["weighted_agreement"], 100)
+
+
+class QuotaHandlingTests(unittest.TestCase):
+    def test_pool_waits_for_a_short_rest_but_not_for_daily_quota(self):
+        from agents import ModelPool
+
+        async def run():
+            pool = ModelPool(["a"], rpm=10)
+            pool.max_wait = 2
+            pool.cool_until["a"] = time.monotonic() + 0.6  # e.g. "busy" back-off ending soon
+            started = time.monotonic()
+            got = await pool.acquire("a", set())
+            waited = time.monotonic() - started
+            pool.penalize("a", RuntimeError("429 RESOURCE_EXHAUSTED quota PerDay"))
+            return got, waited, await pool.acquire("a", set())
+        got, waited, none = asyncio.run(run())
+        self.assertEqual(got, "a")
+        self.assertGreater(waited, 0.4)
+        self.assertIsNone(none)
+
+    def test_review_stops_cleanly_when_every_key_is_out_of_quota(self):
+        setup, market, _ = first_setup()
+        desk = fake_desk()
+        for m in desk.pool.models:
+            desk.pool.penalize(m, RuntimeError("429 RESOURCE_EXHAUSTED quota PerDay"))
+        v = asyncio.run(desk.review(setup, market, SESSION))
+        self.assertFalse(v["approved"])
+        self.assertTrue(v["ai_down"])
+        self.assertEqual(desk.fake.calls, 0)  # no doomed requests were sent
+        self.assertEqual(desk.monitor.agents["head"]["status"], "error")
+        self.assertIn("quota", desk.monitor.agents["tech_lead"]["summary"])
+
+    def test_unchanged_analyst_input_is_reused(self):
+        setup, market, _ = first_setup()
+        desk = fake_desk()
+        asyncio.run(desk.review(setup, market, SESSION))
+        first = desk.fake.calls
+        asyncio.run(desk.review(setup, market, SESSION))
+        self.assertEqual(desk.fake.calls - first, first - 18)  # all 18 analysts reused, the rest asked again
