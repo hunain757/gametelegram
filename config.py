@@ -35,7 +35,10 @@ def load_config() -> Config:
         if not os.getenv(name)
     ]
     if missing:
-        raise SystemExit(f"Missing required settings in .env: {', '.join(missing)}")
+        raise SystemExit(
+            f"Missing required settings in .env: {', '.join(missing)}\n"
+            "Open .env in Notepad and fill them in (or delete .env and run start.bat again)."
+        )
 
     return Config(
         telegram_token=os.environ["TELEGRAM_BOT_TOKEN"],

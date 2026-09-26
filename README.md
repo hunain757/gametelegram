@@ -24,7 +24,16 @@ BUY/SELL signal **only when there is a strong trade**. If there is no good trade
 | `GEMINI_API_KEY` | https://aistudio.google.com/apikey |
 | `TWELVEDATA_API_KEY` | https://twelvedata.com (the free plan is enough) |
 
-## Run it on your PC
+## Run it on Windows (easiest)
+
+1. Install Python from https://www.python.org/downloads/ (tick **"Add python.exe to PATH"**).
+2. Download this repo (green **Code** button → **Download ZIP**) and unzip it.
+3. Double-click **`start.bat`**. The first time, it installs everything and asks you to paste
+   your 3 keys; it saves them in a local `.env` file. After that it just starts the bot.
+
+To change a key later, delete `.env` and run `start.bat` again (or edit `.env` in Notepad).
+
+## Run it on your PC (manual)
 
 ```bash
 git clone https://github.com/hunain757/gametelegram.git
