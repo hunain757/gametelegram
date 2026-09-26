@@ -1,14 +1,22 @@
-"""AI trading desk: a 4-stage pipeline of 13 Gemini agents that pass their findings on.
+"""AI trading desk: 26 Gemini agents in a 5-stage pipeline. Every agent has exactly one job, sees only the data
+for that job, and passes its finding on - every hand-over is shown on the local dashboard.
 
-  Stage 1  8 analysts, each an expert in one thing, study the setup in parallel
-  Stage 2  3 verifiers read ALL analyst reports and cross-check them (confluence, risk, devil's advocate)
-  Stage 3  the Head Trader reads everything and decides TAKE/SKIP with final levels
-  Stage 4  the Signal Auditor checks the final signal before it is sent (can veto)
+  Stage 1  18 analysts in 3 desks study the setup in parallel
+             📐 Technical desk (9)  structure, liquidity, order blocks, FVGs, volume, candles, momentum, trend, volatility
+             🧭 Strategy desk  (5)  multi-timeframe, ICT/Fibonacci, key levels & pivots, trend-following, breakout/reversion
+             🌍 Macro desk     (4)  economic calendar, world events, central banks & dollar, intermarket & sentiment
+  Stage 2  3 desk leads check their members' evidence, challenge doubtful members (debate) and give one desk verdict
+  Stage 3  3 verifiers cross-check the desks: confluence, risk, devil's advocate
+  Stage 4  the Head Trader reads everything and decides TAKE/SKIP with final levels
+  Stage 5  the Signal Auditor checks the final signal before it is sent (can veto)
+
+With 2 API keys the work is split 13 / 13 (see TradingDesk._make_plan).
 """
 
 import asyncio
 import json
 import logging
+import math
 import re
 import time
 from collections import deque
@@ -17,122 +25,304 @@ from datetime import datetime, timedelta, timezone
 from google import genai
 from google.genai import types
 
+import strategies
 from monitor import Monitor
 from setups import TF_LABEL, validate_levels
 
 log = logging.getLogger("goldbot.agents")
 
+DESKS = {
+    "tech": {"name": "Technical desk", "icon": "📐"},
+    "strategy": {"name": "Strategy desk", "icon": "🧭"},
+    "macro": {"name": "Macro & news desk", "icon": "🌍"},
+}
+
+# Each analyst: its job ("focus"), the inputs it receives (shown on the dashboard) and the exact data slice.
+#   fields  per-timeframe keys of the market read      ind     which indicators (per timeframe)
+#   extras  other inputs: key_levels, adr, pivots, strategies:<groups>, calendar, headlines:<category>, intermarket
 ANALYSTS = [
-    {
-        "key": "structure", "name": "Market Structure Analyst", "icon": "🏗",
-        "focus": "Market structure across all timeframes: trend on each timeframe, BOS vs CHoCH, whether the "
-                 "higher timeframes truly support this direction, and whether the entry-timeframe shift is real "
-                 "or just noise inside a range.",
-    },
-    {
-        "key": "liquidity", "name": "Liquidity & Sweep Hunter", "icon": "💧",
-        "focus": "Liquidity: which pools (swing highs/lows, equal highs/lows, PDH/PDL, PWH/PWL, Asia range) were "
-                 "swept before this move, which are still resting as targets, and whether the stop sits where "
-                 "liquidity will be hunted.",
-    },
-    {
-        "key": "orderblocks", "name": "Order Block & Breaker Specialist", "icon": "🧱",
-        "focus": "Order blocks and breaker blocks: is the entry zone a fresh, untested OB or a valid breaker, did it "
-                 "create a real break of structure, is there an opposing OB/breaker between entry and TP1?",
-    },
-    {
-        "key": "imbalance", "name": "FVG & Imbalance Analyst", "icon": "⚡",
-        "focus": "Fair value gaps and imbalances: is there an unfilled FVG supporting the entry, are opposing FVGs "
-                 "in the path, and is price in premium or discount of the dealing range?",
-    },
-    {
-        "key": "volume", "name": "Volume Profile & Order Flow Analyst", "icon": "📊",
-        "focus": "Volume (Binance: PAXG/USDT for gold, spot volume for crypto): relative volume, delta (buy/sell pressure), volume bubbles "
-                 "(institutional candles), POC and value area. Does volume confirm this move or show absorption "
-                 "against it? If volume data is unavailable, say so and judge displacement only.",
-    },
-    {
-        "key": "price_action", "name": "Price Action & Pattern Reader", "icon": "🕯",
-        "focus": "Read the candles: recent_candles on each timeframe, candlestick patterns (engulfing, pin bars, "
-                 "stars, inside bars, dojis), double tops/bottoms, rejection wicks. Is there real rejection from "
-                 "the entry zone or is price slicing through it?",
-    },
-    {
-        "key": "indicators", "name": "Indicator & Momentum Analyst", "icon": "⚙️",
-        "focus": "Indicators on each timeframe: EMA 20/50/200 alignment, RSI, MACD histogram, ADX trend strength "
-                 "and +DI/-DI, Supertrend direction, Stochastic RSI, Bollinger Band position and VWAP. Do they "
-                 "confirm the trade or warn of exhaustion / chop?",
-    },
-    {
-        "key": "session_news", "name": "Session, News & Macro Analyst", "icon": "📰",
-        "focus": "Timing and macro: session and killzone, ADR already used, the Asian range, upcoming high-impact "
-                 "USD news and the latest gold/crypto/USD/Fed headlines. Is this the right time for this trade?",
-    },
+    # ---------------- 📐 technical desk ----------------
+    {"key": "structure", "desk": "tech", "name": "Market Structure Analyst", "icon": "🏗",
+     "focus": "Market structure on every timeframe: trend, BOS vs CHoCH, whether the higher timeframes support this "
+              "direction and whether the entry-timeframe shift is a real break or noise inside a range.",
+     "fields": ("price", "trend", "structure_events", "range"), "extras": ()},
+    {"key": "liquidity", "desk": "tech", "name": "Liquidity & Sweep Hunter", "icon": "💧",
+     "focus": "Liquidity: which pools (swing highs/lows, equal highs/lows, PDH/PDL, PWH/PWL, Asia range) were swept "
+              "before this move, which still rest as targets, and whether the stop sits where liquidity will be hunted.",
+     "fields": ("price", "atr", "buy_side_liquidity", "sell_side_liquidity", "equal_highs", "equal_lows",
+                "recent_sweeps"), "extras": ("key_levels",)},
+    {"key": "orderblocks", "desk": "tech", "name": "Order Block & Breaker Specialist", "icon": "🧱",
+     "focus": "Order blocks and breaker blocks: is the entry zone a fresh, untested OB or a valid breaker, did it "
+              "cause a real break of structure, is an opposing OB/breaker between entry and TP1?",
+     "fields": ("price", "atr", "order_blocks", "breaker_blocks", "structure_events"), "extras": ()},
+    {"key": "imbalance", "desk": "tech", "name": "FVG & Imbalance Analyst", "icon": "⚡",
+     "focus": "Fair value gaps: is an unfilled FVG supporting the entry, are opposing FVGs in the path to the "
+              "targets, and did price displace (leave imbalance) in the trade direction?",
+     "fields": ("price", "atr", "fvgs"), "extras": ()},
+    {"key": "volume", "desk": "tech", "name": "Volume Profile & Order Flow Analyst", "icon": "📊",
+     "focus": "Volume (Binance: PAXG/USDT for gold, spot volume for crypto): relative volume, delta (buy/sell "
+              "pressure), volume bubbles (institutional candles), POC / value area and OBV. Does volume confirm the "
+              "move or show absorption against it? If volume data is unavailable say so and vote SKIP.",
+     "fields": ("price", "volume"), "ind": ("obv",), "extras": ()},
+    {"key": "price_action", "desk": "tech", "name": "Price Action & Pattern Reader", "icon": "🕯",
+     "focus": "Read the candles: recent candles on each timeframe, candlestick patterns (engulfing, pin bars, "
+              "stars, inside bars, dojis), double tops/bottoms, rejection wicks. Is there real rejection from the "
+              "entry zone or is price slicing through it?",
+     "fields": ("price", "recent_candles", "candle_patterns"), "extras": ()},
+    {"key": "momentum", "desk": "tech", "name": "Momentum Oscillator Analyst", "icon": "🚀",
+     "focus": "Momentum oscillators: RSI, RSI divergence, MACD histogram, Stochastic, Stochastic RSI, CCI and "
+              "Williams %R on each timeframe. Is momentum turning in the trade direction, or overbought/oversold "
+              "exhaustion / divergence against it?",
+     "fields": ("price",), "ind": ("rsi", "rsi_divergence", "macd_hist", "stochastic", "stoch_rsi", "cci",
+                                   "williams_r"), "extras": ()},
+    {"key": "trend", "desk": "tech", "name": "Trend Indicator Analyst", "icon": "📈",
+     "focus": "Trend indicators: EMA 20/50/200 stack, ADX with +DI/-DI, Supertrend, Ichimoku (cloud, Tenkan/Kijun), "
+              "Heikin-Ashi and VWAP. Is there a real trend in the trade direction and how strong is it?",
+     "fields": ("price",), "ind": ("ema20", "ema50", "ema200", "adx", "supertrend", "ichimoku", "heikin_ashi",
+                                   "vwap"), "extras": ()},
+    {"key": "volatility", "desk": "tech", "name": "Volatility Analyst", "icon": "🌡",
+     "focus": "Volatility: ATR, Bollinger Bands (width, position), TTM squeeze, Donchian channel and how much of the "
+              "average daily range is used. Is there enough room to reach the targets, or is the market too "
+              "compressed / already over-extended?",
+     "fields": ("price", "atr"), "ind": ("bollinger", "squeeze", "donchian"), "extras": ("adr",)},
+    # ---------------- 🧭 strategy desk ----------------
+    {"key": "mtf", "desk": "strategy", "name": "Multi-Timeframe Analyst", "icon": "🔭",
+     "focus": "Top-down alignment D1 → H4 → H1 → M15 → M5: does every timeframe from the bias down to the entry "
+              "agree with this direction? Name the exact timeframe that disagrees, if any.",
+     "fields": ("price", "trend", "structure_events"), "ind": ("ema50", "ema200"),
+     "extras": ("strategies:trend",)},
+    {"key": "ict", "desk": "strategy", "name": "ICT & Fibonacci Specialist", "icon": "🎯",
+     "focus": "ICT model: premium/discount of the dealing range, Fibonacci OTE zone (62-79%), killzone timing, "
+              "Asian range and the power-of-three (accumulation → manipulation → distribution). Is the entry at a "
+              "textbook ICT location and time?",
+     "fields": ("price", "range", "fib"), "extras": ("key_levels", "strategies:smc")},
+    {"key": "levels", "desk": "strategy", "name": "Key Levels & Pivot Analyst", "icon": "📏",
+     "focus": "Horizontal levels: PDH/PDL, PWH/PWL, daily/weekly open, floor pivots (P, R1/R2, S1/S2), round "
+              "numbers and Fibonacci levels. Does a level support the entry, and is a level blocking the way to TP1?",
+     "fields": ("price", "atr", "fib"), "extras": ("key_levels", "pivots")},
+    {"key": "trend_follow", "desk": "strategy", "name": "Trend-Following Strategist", "icon": "🏄",
+     "focus": "Run the trend-following strategies (EMA pullback, Supertrend+MACD, Ichimoku, ADX/DMI, Heikin-Ashi, "
+              "multi-timeframe) on this setup. How many AGREE vs are AGAINST, and is this a with-trend trade?",
+     "fields": ("price",), "extras": ("strategies:trend",)},
+    {"key": "breakout_rev", "desk": "strategy", "name": "Breakout & Reversion Strategist", "icon": "🔄",
+     "focus": "Run the breakout (Donchian, squeeze), mean-reversion (RSI+Bollinger, VWAP, divergence), momentum-"
+              "timing and volume strategies. Is this a good breakout or a good reversion entry - or a chase that "
+              "these strategies warn against?",
+     "fields": ("price",), "extras": ("strategies:breakout,reversion,momentum,volume",)},
+    # ---------------- 🌍 macro & news desk ----------------
+    {"key": "calendar", "desk": "macro", "name": "Economic Calendar Analyst", "icon": "📅",
+     "focus": "The economic calendar only: which high/medium-impact USD events (CPI, NFP, FOMC, PCE, GDP, jobless "
+              "claims…) fall inside this trade's lifetime, and how close they are. A red event within the trade "
+              "window = SKIP. If no event threatens the trade, vote TAKE with a score of 60-70.",
+     "fields": (), "extras": ("calendar",)},
+    {"key": "world", "desk": "macro", "name": "Geopolitics & World Events Analyst", "icon": "🌐",
+     "focus": "What is happening in the world right now: wars, conflicts, sanctions, tariffs, elections, oil and "
+              "crises in the headlines. Would these events push this instrument in the trade direction (e.g. "
+              "risk-off = gold up) or against it? If no relevant headline exists, vote TAKE with a score of 55-65.",
+     "fields": (), "extras": ("headlines:world",)},
+    {"key": "macro", "desk": "macro", "name": "Central Banks & Dollar Analyst", "icon": "🏦",
+     "focus": "Central banks and the US dollar: Fed/FOMC tone, inflation and jobs data, yields, rate-cut/hike "
+              "expectations and dollar strength in the headlines. A stronger dollar and higher yields weigh on gold "
+              "and bitcoin. Does the macro backdrop support this direction? No relevant headline = TAKE 55-65.",
+     "fields": (), "extras": ("headlines:macro",)},
+    {"key": "intermarket", "desk": "macro", "name": "Intermarket & Sentiment Analyst", "icon": "🔗",
+     "focus": "Other markets and sentiment: the other instrument's trend and move today, the gold/bitcoin "
+              "correlation, and this instrument's own news flow (gold or crypto headlines). Is money flowing with "
+              "this trade or against it?",
+     "fields": ("price", "trend"), "extras": ("intermarket", "headlines:instrument")},
+]
+
+LEADS = [
+    {"key": "tech_lead", "desk": "tech", "name": "Technical Desk Lead", "icon": "📐",
+     "focus": "Check the 9 technical analysts' evidence against the chart data and give the technical verdict."},
+    {"key": "strategy_lead", "desk": "strategy", "name": "Strategy Desk Lead", "icon": "🧭",
+     "focus": "Check the 5 strategy analysts against the strategy board and levels and give the strategy verdict."},
+    {"key": "macro_lead", "desk": "macro", "name": "Macro & News Desk Lead", "icon": "🌍",
+     "focus": "Check the 4 macro/news analysts against the calendar, headlines and other markets and give the "
+              "fundamental verdict."},
 ]
 
 VERIFIERS = [
-    {
-        "key": "confluence", "name": "Confluence Verifier", "icon": "🔗",
-        "focus": "Cross-check the 8 analyst reports against each other AND against the market data: do they agree, "
-                 "did any analyst claim something the data does not show, which contradictions matter most?",
-    },
-    {
-        "key": "risk", "name": "Risk Manager", "icon": "🛡",
-        "focus": "Using the analysts' findings, verify the stop loss (beyond invalidation, outside stop hunts), "
-                 "risk/reward of each target, volatility and whether a limit entry can fill. Protect capital first.",
-    },
-    {
-        "key": "devil", "name": "Devil's Advocate", "icon": "😈",
-        "focus": "Attack the trade using everything the analysts found: the strongest reasons it will FAIL "
-                 "(trap, fake breakout, counter-trend, liquidity that will be taken against it). Vote TAKE only if "
-                 "you honestly cannot find a serious flaw.",
-    },
+    {"key": "confluence", "name": "Confluence Verifier", "icon": "🔗",
+     "focus": "Cross-check the three desks against each other AND against the market data: do technical, strategy "
+              "and macro agree, did any desk claim something the data does not show, which contradiction matters most?"},
+    {"key": "risk", "name": "Risk Manager", "icon": "🛡",
+     "focus": "Verify the stop loss (beyond invalidation, outside obvious stop hunts), risk/reward of each target, "
+              "volatility, news risk inside the trade window and whether a limit entry can fill. Protect capital first."},
+    {"key": "devil", "name": "Devil's Advocate", "icon": "😈",
+     "focus": "Attack the trade with everything the desks found: the strongest reasons it will FAIL (trap, fake "
+              "breakout, counter-trend, liquidity that will be taken against it, news). Vote TAKE only if you "
+              "honestly cannot find a serious flaw."},
 ]
 
+for _a in ANALYSTS:
+    _a["lead"] = next(lead["key"] for lead in LEADS if lead["desk"] == _a["desk"])
+    _a.setdefault("ind", None)
+
 SPECIALISTS = ANALYSTS + VERIFIERS
-HEAD = {"key": "head", "name": "Head Trader", "icon": "👑"}
-AUDITOR = {"key": "auditor", "name": "Signal Auditor", "icon": "✅"}
-PIPELINE = [("Stage 1 · Analysts", ANALYSTS), ("Stage 2 · Verifiers", VERIFIERS),
-            ("Stage 3 · Decision", [HEAD]), ("Stage 4 · Final check", [AUDITOR])]
+HEAD = {"key": "head", "name": "Head Trader", "icon": "👑",
+        "focus": "Reads the 3 desk verdicts, the 3 verifiers, the strategy board and the track record → TAKE/SKIP, "
+                 "confidence and final levels."}
+AUDITOR = {"key": "auditor", "name": "Signal Auditor", "icon": "✅",
+           "focus": "Final consistency check of the signal before it is sent – can veto."}
+ALL_AGENTS = ANALYSTS + LEADS + VERIFIERS + [HEAD, AUDITOR]
+PIPELINE = [("Stage 1 · 18 analysts", ANALYSTS), ("Stage 2 · Desk leads", LEADS), ("Stage 3 · Verifiers", VERIFIERS),
+            ("Stage 4 · Decision", [HEAD]), ("Stage 5 · Final check", [AUDITOR])]
 
-SPECIALIST_PROMPT = """You are the {name} on a professional {instrument} trading desk that trades Smart Money Concepts.
-YOUR ONLY JOB: {focus}
 
-Rules you must follow:
-1. Judge ONLY your specialty. Eight other specialists cover everything else - do not comment on their areas.
-2. Use ONLY the data below. Every point must quote an exact number, level or candle from it, so the verifiers
-   can check it. Never invent prices.
-3. If your data is missing or does not clearly support the trade, vote SKIP with a score of 40 or less and say why.
-4. Your report is sent to the Confluence Verifier, the Risk Manager and the Devil's Advocate, who will challenge it.
+def links() -> dict[str, dict]:
+    """Who each agent receives information from and sends it to (the dashboard draws these)."""
+    out = {}
+    for a in ANALYSTS:
+        out[a["key"]] = {"from": ["engine"], "to": [a["lead"]]}
+    for lead in LEADS:
+        members = [a["key"] for a in ANALYSTS if a["desk"] == lead["desk"]]
+        out[lead["key"]] = {"from": members, "to": [v["key"] for v in VERIFIERS] + ["head"]}
+    for v in VERIFIERS:
+        out[v["key"]] = {"from": [lead["key"] for lead in LEADS], "to": ["head"]}
+    out["head"] = {"from": [lead["key"] for lead in LEADS] + [v["key"] for v in VERIFIERS], "to": ["auditor"]}
+    out["auditor"] = {"from": ["head"], "to": ["telegram"]}
+    return out
+
+
+def inputs(agent: dict) -> list[str]:
+    """Human-readable list of the data an analyst receives (for the dashboard)."""
+    names = {"price": "price", "atr": "ATR", "trend": "trend", "structure_events": "BOS/CHoCH events",
+             "range": "dealing range", "buy_side_liquidity": "buy-side liquidity", "sell_side_liquidity":
+             "sell-side liquidity", "equal_highs": "equal highs", "equal_lows": "equal lows", "recent_sweeps":
+             "sweeps", "order_blocks": "order blocks", "breaker_blocks": "breaker blocks", "fvgs": "FVGs",
+             "volume": "volume/delta/POC/bubbles", "recent_candles": "last candles", "candle_patterns": "patterns",
+             "fib": "Fibonacci"}
+    out = [names.get(f, f) for f in agent.get("fields", ()) if f != "price"]
+    out += list(agent.get("ind") or ())
+    for x in agent.get("extras", ()):
+        out.append({"key_levels": "PDH/PDL/PWH/PWL/Asia", "adr": "ADR", "pivots": "floor pivots",
+                    "calendar": "economic calendar", "intermarket": "other markets + correlation"}.get(x) or
+                   x.replace("strategies:", "strategy board: ").replace("headlines:", "headlines: "))
+    return out
+
+
+ANALYST_PROMPT = """You are the {name} of the {desk} on a professional {instrument} trading desk.
+26 agents work on this trade and each has exactly ONE job. YOUR ONLY JOB:
+{focus}
+
+STRICT RULES:
+1. Judge ONLY your job. Other specialists cover everything else - never comment on their areas.
+2. Use ONLY the data below. Every evidence item must quote an exact number, level, time or headline from it,
+   so your desk lead can verify it. Never invent prices, events or news.
+3. If your data is missing or does not clearly support a {direction}, vote SKIP with a score of 40 or less
+   and say exactly what is missing or against it.
+4. Score honestly: 80-100 = your data strongly supports the {direction}, 60-79 = supports it, below 60 = weak.
+5. Your report goes to the {lead}, who checks your evidence and challenges you if it is wrong.
 
 Setup proposed by the engine:
 {setup}
 
-Your data (per timeframe, only what your specialty needs):
-{market}
+Time / session: {session}
 
-Session and upcoming news: {session}
+YOUR DATA:
+{data}
 
 Reply with JSON only:
-{{"vote": "TAKE" or "SKIP", "score": 0-100, "summary": "one short sentence about YOUR specialty only",
-  "evidence": ["up to 3 exact data points you used, e.g. 'H1 bearish BOS @ 2617.89'"]}}
+{{"vote": "TAKE" or "SKIP", "score": 0-100, "summary": "one short sentence about YOUR job only",
+  "evidence": ["2-3 exact data points you used, e.g. 'H1 bearish BOS @ 2617.89'"],
+  "risk": "the one thing in YOUR data that could make this trade fail"}}
 """
 
-HEAD_PROMPT = """You are the Head Trader of a professional {instrument} desk that trades Smart Money Concepts.
+LEAD_PROMPT = """You are the {name} on a professional {instrument} trading desk. You lead the {desk}.
+Your members and their jobs:
+{members}
+
+YOUR JOB:
+1. Check every member's evidence against the data below. Name any member whose claim is wrong or not supported.
+2. Weigh the members: one well-evidenced SKIP outweighs several weak TAKEs.
+3. Give ONE verdict for your desk. It is sent to the three verifiers and to the head of the desk.
+
+Setup:
+{setup}
+
+Time / session: {session}
+
+Data your desk used:
+{data}
+
+Your members' reports:
+{reports}
+
+Reply with JSON only:
+{{"vote": "TAKE" or "SKIP", "score": 0-100, "summary": "one sentence: the desk's finding",
+  "points": ["up to 3 key findings with exact numbers"],
+  "doubtful": ["keys of members whose claims are wrong or weak, e.g. 'volume'"]}}
+"""
+
+DEBATE_PROMPT = """You are the {name} on a professional {instrument} trading desk. Your only job:
+{focus}
+
+Setup:
+{setup}
+
+YOUR DATA:
+{data}
+
+Your first report was: {own}
+
+Your desk lead challenges you:
+{challenges}
+
+Re-check YOUR data only. Change your vote if the challenge is right, keep it if the data supports you.
+Reply with JSON only:
+{{"vote": "TAKE" or "SKIP", "score": 0-100, "changed": true or false,
+  "reply": "one sentence answering the challenge with an exact number", "summary": "your updated one-sentence view"}}
+"""
+
+VERIFIER_PROMPT = """You are the {name} on a professional {instrument} trading desk. Your job:
+{focus}
+
 The engine proposed this setup:
 {setup}
 
-Market read (per timeframe):
+Market read on the setup's timeframes:
 {market}
 
-Session and upcoming news: {session}
+Time / session and upcoming news: {session}
 
-Your 8 analysts and 3 verifiers reported (after their debate):
+Strategy board ({board_summary}):
+{board}
+
+The three desk leads report (after checking their analysts):
+{desks}
+
+All 18 analysts (one line each):
 {reports}
+
+Check the desks' claims against the data above and call out anything unsupported. Judge only from your own role.
+Be strict. Reply with JSON only:
+{{"vote": "TAKE" or "SKIP", "score": 0-100, "summary": "one short sentence", "points": ["up to 3 short points"]}}
+"""
+
+HEAD_PROMPT = """You are the Head Trader of a professional {instrument} desk.
+The engine proposed this setup:
+{setup}
+
+Market read on the setup's timeframes:
+{market}
+
+Time / session and upcoming news: {session}
+
+Strategy board: {board_summary}
+
+Analyst tally: {tally}
+
+Desk verdicts (each desk lead checked its analysts):
+{desks}
+
+Verifiers:
+{verifiers}
 
 Desk track record for this trading style (learn from it): {history}
 
-Make the final call. Only TAKE high-quality trades where structure, liquidity and risk line up; SKIP otherwise.
+Make the final call. Only TAKE a trade when technicals, strategies and macro line up and the risk is clean;
+SKIP otherwise - a missed trade costs nothing, a bad one costs money.
 You may fine-tune entry / stop loss / targets (keep the same direction; TP1 must be at least 1:{min_rr}),
 or keep the engine's levels. confidence is 0-100 and must be honest.
 Reply with JSON only:
@@ -142,45 +332,6 @@ Reply with JSON only:
   "reason": "1-2 short sentences in simple English"}}
 """
 
-DEBATE_PROMPT = """You are the {name} on a professional {instrument} trading desk that trades Smart Money Concepts.
-Your job: {focus}
-
-Setup:
-{setup}
-
-Market read (per timeframe):
-{market}
-
-Your first report was: {own}
-
-The verifiers challenge the desk:
-{challenges}
-
-Re-check the data for YOUR specialty only. Change your vote if the challenge is right, keep it if the data
-supports you. Reply with JSON only:
-{{"vote": "TAKE" or "SKIP", "score": 0-100, "changed": true or false,
-  "reply": "one sentence answering the challenge", "summary": "your updated one-sentence view"}}
-"""
-
-VERIFIER_PROMPT = """You are the {name} on a professional {instrument} trading desk that trades Smart Money Concepts.
-Your job: {focus}
-
-The engine proposed this setup:
-{setup}
-
-Market read (per timeframe):
-{market}
-
-Session and upcoming news: {session}
-
-The 8 analysts sent you their reports (with the evidence they cite):
-{reports}
-
-Check each analyst's evidence against the market data above - call out any claim the data does not support.
-Judge only from your own role. Be strict. Reply with JSON only:
-{{"vote": "TAKE" or "SKIP", "score": 0-100, "summary": "one short sentence", "points": ["up to 3 short points"]}}
-"""
-
 AUDITOR_PROMPT = """You are the Signal Auditor, the last check before a {instrument} signal is sent to traders.
 Setup from the engine:
 {setup}
@@ -188,7 +339,7 @@ Setup from the engine:
 Final decision from the head of the desk: {decision}
 Final levels: {levels}
 
-Desk reports (analysts and verifiers):
+Desk verdicts and verifiers:
 {reports}
 
 Check that the signal is consistent: direction matches the reasons, the stop is beyond the invalidation level,
@@ -211,86 +362,123 @@ and what would make you buy or sell. Do not invent prices that are not in the da
 
 
 def _r(x, n=2):
-    return round(x, n) if isinstance(x, (int, float)) else x
+    return round(x, n) if isinstance(x, (int, float)) and not isinstance(x, bool) else x
 
 
-def _indicators(ind: dict) -> dict:
+def _indicators(ind: dict, keep=None) -> dict:
     out = {}
     for k, v in ind.items():
-        if isinstance(v, dict):
-            out[k] = {kk: _r(vv) for kk, vv in v.items()}
-        else:
-            out[k] = _r(v)
-    return out
-
-
-# The slice of the market read each analyst is allowed to see: one specialty, one set of data.
-AGENT_FIELDS = {
-    "structure": ("price", "atr", "trend", "structure_events", "range"),
-    "liquidity": ("price", "atr", "buy_side_liquidity", "sell_side_liquidity", "equal_highs", "equal_lows",
-                  "recent_sweeps", "key_levels"),
-    "orderblocks": ("price", "atr", "order_blocks", "breaker_blocks", "structure_events"),
-    "imbalance": ("price", "atr", "fvgs", "range"),
-    "volume": ("price", "volume"),
-    "price_action": ("price", "atr", "recent_candles", "candle_patterns"),
-    "indicators": ("price", "atr", "indicators"),
-    "session_news": ("price", "atr", "range", "key_levels", "average_daily_range"),
-}
-
-
-def market_brief(market: dict, agent: str | None = None) -> str:
-    """Compact JSON of the per-timeframe read. With `agent`, only that specialist's fields."""
-    fields = AGENT_FIELDS.get(agent)
-    full = _full_brief(market)
-    if not fields:
-        return json.dumps(full, indent=1)
-    out = {k: full[k] for k in ("key_levels", "average_daily_range") if k in fields}
-    for tf, data in full.items():
-        if isinstance(data, dict) and "price" in data:
-            out[tf] = {k: v for k, v in data.items() if k in fields}
-    return json.dumps(out, indent=1)
-
-
-def _full_brief(market: dict) -> dict:
-    out = {"key_levels": market.get("levels", {}), "average_daily_range": market.get("adr", {})}
-    for tf, m in market.items():
-        if tf in ("levels", "adr"):
+        if keep is not None and k not in keep:
             continue
-        s, v, ind = m["smc"], m["volume"], m["ind"]
-        out[TF_LABEL.get(tf, tf)] = {
-            "price": _r(m["price"]),
-            "atr": _r(s["atr"]),
-            "trend": s["trend"],
-            "structure_events": [f"{e['type']} {e['direction']} @ {e['level']:.2f}" for e in s["events"][-3:]],
-            "order_blocks": [f"{z['direction']} {z['bottom']:.2f}-{z['top']:.2f}{' (tested)' if z['touched'] else ''}"
-                             for z in s["order_blocks"][-3:]],
-            "fvgs": [f"{z['direction']} {z['bottom']:.2f}-{z['top']:.2f}" for z in s["fvgs"][-3:]],
-            "breaker_blocks": [f"{z['direction']} {z['bottom']:.2f}-{z['top']:.2f}" for z in s.get("breakers", [])[-3:]],
-            "buy_side_liquidity": s["liquidity"]["buy_side"][:3],
-            "sell_side_liquidity": s["liquidity"]["sell_side"][:3],
-            "equal_highs": s["liquidity"]["equal_highs"][-2:],
-            "equal_lows": s["liquidity"]["equal_lows"][-2:],
-            "recent_sweeps": [f"{w['side']} swept @ {w['level']:.2f}" for w in s["liquidity"]["sweeps"][-2:]],
-            "range": s["range"],
-            "candle_patterns": [f"{x['name']}" + (f" @ {x['level']}" if "level" in x else f" ({x['age']} candles ago)")
-                                for x in s.get("patterns", [])][-4:],
-            "recent_candles": s.get("recent_candles", [])[-6:],
-            "indicators": _indicators(ind),
-            "volume": v if not v.get("available") else {k: v[k] for k in (
-                "relative_volume_last_closed", "delta", "pressure", "poc", "value_area_high", "value_area_low", "bubbles")},
-        }
+        if v is None:
+            continue
+        out[k] = {kk: _r(vv) for kk, vv in v.items()} if isinstance(v, dict) else _r(v)
     return out
+
+
+# Kept for callers that still ask for one analyst's per-timeframe slice by key.
+AGENT_FIELDS = {a["key"]: a["fields"] + (("indicators",) if a.get("ind") else ()) for a in ANALYSTS}
+TF_ORDER = ("1day", "4h", "1h", "15min", "5min")
+
+
+def _tf_slice(m: dict, fields, ind_keep=None) -> dict:
+    s, v = m["smc"], m["volume"]
+    full = {
+        "price": _r(m["price"]),
+        "atr": _r(s["atr"]),
+        "trend": s["trend"],
+        "structure_events": [f"{e['type']} {e['direction']} @ {e['level']:.2f}" for e in s["events"][-3:]],
+        "order_blocks": [f"{z['direction']} {z['bottom']:.2f}-{z['top']:.2f}{' (tested)' if z['touched'] else ''}"
+                         for z in s["order_blocks"][-3:]],
+        "fvgs": [f"{z['direction']} {z['bottom']:.2f}-{z['top']:.2f}" for z in s["fvgs"][-3:]],
+        "breaker_blocks": [f"{z['direction']} {z['bottom']:.2f}-{z['top']:.2f}" for z in s.get("breakers", [])[-3:]],
+        "buy_side_liquidity": s["liquidity"]["buy_side"][:3],
+        "sell_side_liquidity": s["liquidity"]["sell_side"][:3],
+        "equal_highs": s["liquidity"]["equal_highs"][-2:],
+        "equal_lows": s["liquidity"]["equal_lows"][-2:],
+        "recent_sweeps": [f"{w['side']} swept @ {w['level']:.2f}" for w in s["liquidity"]["sweeps"][-2:]],
+        "range": s["range"],
+        "fib": {k: _r(x) for k, x in (m.get("fib") or {}).items()},
+        "candle_patterns": [f"{x['name']}" + (f" @ {x['level']}" if "level" in x else f" ({x['age']} candles ago)")
+                            for x in s.get("patterns", [])][-4:],
+        "recent_candles": s.get("recent_candles", [])[-6:],
+        "volume": v if not v.get("available") else {k: v.get(k) for k in (
+            "relative_volume_last_closed", "delta", "pressure", "poc", "value_area_high", "value_area_low", "bubbles")},
+    }
+    out = {k: full[k] for k in fields if k in full}
+    if ind_keep is not None or "indicators" in fields:
+        out["indicators"] = _indicators(m["ind"], ind_keep)
+    return out
+
+
+def market_brief(market: dict, agent: str | None = None, tfs=None) -> str:
+    """Compact JSON of the per-timeframe read. With `agent`, only that analyst's fields; with `tfs`, only
+    those timeframes (verifiers and the head trader get the setup's three timeframes)."""
+    spec = next((a for a in ANALYSTS if a["key"] == agent), None)
+    if spec:
+        return agent_data(spec, {"_market": market})
+    out = {"key_levels": market.get("levels", {}), "average_daily_range": market.get("adr", {}),
+           "pivots": market.get("pivots", {})}
+    all_fields = ("price", "atr", "trend", "structure_events", "order_blocks", "fvgs", "breaker_blocks",
+                  "buy_side_liquidity", "sell_side_liquidity", "equal_highs", "equal_lows", "recent_sweeps", "range",
+                  "candle_patterns", "recent_candles", "volume", "indicators")
+    for tf in TF_ORDER:
+        if tf in market and (not tfs or tf in tfs):
+            out[TF_LABEL[tf]] = _tf_slice(market[tf], all_fields)
+    return json.dumps(out, separators=(",", ":"))
+
+
+def _analyst_market(market: dict, spec: dict) -> dict:
+    out = {}
+    if spec["fields"]:
+        for tf in TF_ORDER:
+            if tf in market:
+                out[TF_LABEL[tf]] = _tf_slice(market[tf], spec["fields"], spec.get("ind"))
+    return out
+
+
+def agent_data(spec: dict, ctx: dict) -> str:
+    """Everything one analyst receives - its own slice of the market plus its own extra inputs."""
+    market, extra = ctx["_market"], ctx.get("_extra", {})
+    out = _analyst_market(market, spec)
+    for x in spec.get("extras", ()):
+        if x == "key_levels":
+            out["key_levels"] = market.get("levels", {})
+        elif x == "adr":
+            out["average_daily_range"] = market.get("adr", {})
+        elif x == "pivots":
+            out["floor_pivots"] = market.get("pivots", {})
+        elif x.startswith("strategies:"):
+            groups = tuple(x.split(":", 1)[1].split(","))
+            board = ctx.get("_board") or {}
+            out["strategy_board"] = strategies.brief(board, groups)
+        elif x == "calendar":
+            out["economic_calendar_next_hours"] = extra.get("calendar") or ["no high/medium USD events"]
+            out["trade_lifetime_minutes"] = ctx.get("_expiry")
+        elif x.startswith("headlines:"):
+            cat = x.split(":", 1)[1]
+            if cat == "instrument":
+                cat = "crypto" if "BTC" in ctx.get("instrument", "") else "gold"
+            items = (extra.get("headlines") or {}).get(cat)
+            out[f"{cat}_headlines_last_24h"] = items or ["no relevant headlines in the last 24h"]
+        elif x == "intermarket":
+            out["other_markets"] = extra.get("intermarket") or "no other market data"
+    return json.dumps(out, separators=(",", ":"))
 
 
 def setup_brief(setup: dict) -> str:
     keep = ("style_label", "direction", "entry_type", "entry", "stop_loss", "tps", "price", "atr",
             "score", "confluences", "poi", "timeframes", "expiry_min")
-    return json.dumps({k: setup[k] for k in keep}, indent=1)
+    return json.dumps({k: setup[k] for k in keep if k in setup}, separators=(",", ":"))
 
 
 def _reports_text(reports: list[dict]) -> str:
     return "\n".join(f"- {r['name']}: {r['vote']} ({r['score']}) - {r['summary']} | evidence: {r['points']}"
                      for r in reports)
+
+
+def _one_liners(reports: list[dict]) -> str:
+    return "\n".join(f"- [{r.get('desk', '')}] {r['name']}: {r['vote']} {r['score']} - {r['summary']}" for r in reports)
 
 
 def parse_json(text: str) -> dict:
@@ -413,10 +601,18 @@ class ModelPool:
             err = self.last_error.get(m)
             cooling = self.cool_until[m] > now_m
             model, k = split_slot(m)
+            reason = err["text"] if err and cooling else ""
+            first = f"{model}#1"
+            if (cooling and err and err["kind"] == "quota_day" and k > 0 and self.ok[m] == 0
+                    and self.ok.get(first, 0) > 0):
+                # Never answered, yet "daily quota used": the quota is shared with key 1.
+                reason += (" – this key hit the daily limit without being used: it is probably in the SAME Google "
+                           "project/account as key 1 (keys of one project share one quota). Make it in another "
+                           "Google account.")
             out.append({"model": slot_label(m), "name": model, "key": k + 1, "lite": "lite" in model,
                         "ready": not cooling,
                         "kind": err["kind"] if err and cooling else None,
-                        "reason": err["text"] if err and cooling else "",
+                        "reason": reason,
                         "back_in_min": int(max(err["until"] - now, 0) // 60) if err and cooling else 0,
                         "calls_last_min": len(self.calls[m]), "ok": self.ok[m], "fail": self.fail[m],
                         "latency": round(self.latency[m], 1) if m in self.latency else None})
@@ -464,10 +660,14 @@ class TradingDesk:
     def _make_plan(models: list[str], n_keys: int) -> dict[str, list[str]]:
         """Which model × key each agent tries first.
 
-        * the 8 analysts have narrow, data-bound jobs -> fast "lite" models (much bigger free quota),
-          split evenly across the API keys so one key's limits never stop the desk
-        * verifiers, Head Trader and Signal Auditor judge everything -> the strongest models
-        * after its own list an agent can still fall back to any healthy slot
+        Every agent has a home key. With 2 keys the 26 agents split 13 / 13:
+          analysts   alternate key 1 / key 2 (9 + 9)
+          leads      technical → key 1, strategy → key 2, macro → key 1
+          verifiers  confluence → key 2, risk → key 1, devil → key 2
+          head       key 1            auditor  key 2 (an independent second opinion)
+        The 18 analysts have narrow, data-bound jobs → fast "lite" models (much bigger free quota).
+        Leads, verifiers, Head Trader and Auditor judge everything → the strongest models.
+        After its own list an agent can still fall back to any healthy slot on any key.
         """
         def slot(m: str, k: int) -> str:
             return f"{m}#{k + 1}" if n_keys > 1 else m
@@ -481,12 +681,19 @@ class TradingDesk:
         for i, a in enumerate(ANALYSTS):
             k = i % n_keys
             plan[a["key"]] = [slot(m, k) for m in rot(lite, i // n_keys)] + [slot(m, k) for m in strong]
-        for i, v in enumerate(VERIFIERS):
+        for i, lead in enumerate(LEADS):
             k = i % n_keys
+            plan[lead["key"]] = [slot(m, k) for m in rot(strong, i)] + [slot(m, k) for m in lite]
+        for i, v in enumerate(VERIFIERS):
+            k = (i + 1) % n_keys
             plan[v["key"]] = [slot(m, k) for m in rot(strong, 1 + i)] + [slot(m, k) for m in lite]
         plan["head"] = [slot(m, 0) for m in strong] + [slot(m, n_keys - 1) for m in strong]
         plan["auditor"] = [slot(m, (1 % n_keys)) for m in rot(strong, 1)] + [slot(m, 0) for m in strong]
         return plan
+
+    def home_key(self, key: str) -> int:
+        slots = self.slots_for(key)
+        return split_slot(slots[0])[1] + 1 if slots and "#" in slots[0] else 1
 
     def slots_for(self, key: str) -> list[str]:
         plan = getattr(self, "plan", None) or {}
@@ -531,44 +738,10 @@ class TradingDesk:
                 self.pool.penalize(model, e)
                 log.warning("Gemini %s failed: %s", model, str(e)[:120])
 
-    async def _specialist(self, i: int, agent: dict, ctx: dict, template: str = SPECIALIST_PROMPT,
-                          sources: tuple = ()) -> dict:
-        mon = getattr(self, "monitor", None) or Monitor()
-        mon.agent(agent["key"], "thinking", vote=None, score=None, summary="Analysing the setup…", points=[])
-        started = time.monotonic()
-        try:
-            for src in sources:
-                if isinstance(src, tuple):
-                    mon.message(src[0], agent["key"], src[1])
-                else:
-                    mon.message(src, agent["key"])
-            actx = dict(ctx)
-            if template is SPECIALIST_PROMPT and "_market" in ctx:
-                actx["market"] = market_brief(ctx["_market"], agent["key"])
-            data, model = await self._ask_json(template.format(name=agent["name"], focus=agent["focus"], **actx),
-                                               self.slots_for(agent["key"]))
-            vote = str(data.get("vote", "SKIP")).upper()
-            report = {"key": agent["key"], "name": agent["name"], "icon": agent["icon"], "model": model,
-                      "stage": 2 if agent in VERIFIERS else 1,
-                      "vote": "TAKE" if vote == "TAKE" else "SKIP", "score": int(data.get("score") or 0),
-                      "summary": str(data.get("summary", ""))[:200],
-                      "points": [str(p)[:150] for p in (data.get("evidence") or data.get("points") or [])][:3]}
-            mon.agent(agent["key"], "done", vote=report["vote"], score=report["score"], summary=report["summary"],
-                      points=report["points"], model=model, seconds=round(time.monotonic() - started, 1))
-            mon.event(f"{agent['icon']} {agent['name']}: {report['vote']} ({report['score']}) – {report['summary']}",
-                      "take" if report["vote"] == "TAKE" else "skip")
-            return report
-        except Exception as e:
-            log.warning("%s failed: %s", agent["name"], e)
-            kind, friendly, _ = classify_error(e)
-            mon.agent(agent["key"], "error", summary=friendly, err=kind, seconds=round(time.monotonic() - started, 1))
-            mon.event(f"{agent['icon']} {agent['name']} failed: {friendly}", "error")
-            return {"key": agent["key"], "name": agent["name"], "icon": agent["icon"], "vote": "ERROR",
-                    "stage": 2 if agent in VERIFIERS else 1, "score": 0, "summary": "unavailable", "points": []}
 
     def agent_models(self) -> dict[str, str]:
         """Which model each agent tries first."""
-        keys = ["head"] + [a["key"] for a in SPECIALISTS] + ["auditor"]
+        keys = [a["key"] for a in ALL_AGENTS]
         return {k: self.slots_for(k)[0] for k in keys}
 
     async def ping(self) -> list[dict]:
@@ -629,17 +802,172 @@ class TradingDesk:
                           "error")
         return list(results.values())
 
+
+    async def _call(self, agent: dict, prompt: str, mon: Monitor, stage: int, sources: tuple = ()) -> dict:
+        """Run one agent on its prompt; returns its report (vote ERROR if Gemini could not answer)."""
+        key = agent["key"]
+        mon.agent(key, "thinking", vote=None, score=None, summary="Working on its job…", points=[], err=None)
+        started = time.monotonic()
+        base = {"key": key, "name": agent["name"], "icon": agent["icon"], "stage": stage,
+                "desk": agent.get("desk", "")}
+        try:
+            for src in sources:
+                if isinstance(src, tuple):
+                    mon.message(src[0], key, src[1], src[2] if len(src) > 2 else "report")
+                else:
+                    mon.message(src, key)
+            data, model = await self._ask_json(prompt, self.slots_for(key))
+            vote = str(data.get("vote", "SKIP")).upper()
+            try:
+                score = max(0, min(int(float(data.get("score") or 0)), 100))
+            except (TypeError, ValueError):
+                score = 0
+            report = dict(base, model=model, vote="TAKE" if vote == "TAKE" else "SKIP", score=score,
+                          summary=str(data.get("summary", ""))[:220],
+                          points=[str(p)[:160] for p in (data.get("evidence") or data.get("points") or [])][:3],
+                          risk=str(data.get("risk", ""))[:160],
+                          doubtful=[str(x) for x in (data.get("doubtful") or [])][:9])
+            pts = report["points"] + ([f"⚠ Risk: {report['risk']}"] if report["risk"] else [])
+            mon.agent(key, "done", vote=report["vote"], score=score, summary=report["summary"], points=pts,
+                      model=model, seconds=round(time.monotonic() - started, 1))
+            mon.event(f"{agent['icon']} {agent['name']}: {report['vote']} ({score}) – {report['summary']}",
+                      "take" if report["vote"] == "TAKE" else "skip")
+            return report
+        except Exception as e:
+            log.warning("%s failed: %s", agent["name"], e)
+            kind, friendly, _ = classify_error(e)
+            mon.agent(key, "error", summary=friendly, err=kind, seconds=round(time.monotonic() - started, 1))
+            mon.event(f"{agent['icon']} {agent['name']} failed: {friendly}", "error")
+            return dict(base, vote="ERROR", score=0, summary="unavailable", points=[], risk="", doubtful=[])
+
+    # Kept for older callers: one specialist on the old-style prompt.
+    async def _specialist(self, i: int, agent: dict, ctx: dict, template: str | None = None, sources: tuple = ()):
+        return await self._analyst(agent, ctx, self.monitor)
+
+    async def _analyst(self, spec: dict, ctx: dict, mon: Monitor) -> dict:
+        lead = next(x for x in LEADS if x["key"] == spec["lead"])
+        prompt = ANALYST_PROMPT.format(
+            name=spec["name"], desk=DESKS[spec["desk"]]["name"], instrument=ctx["instrument"], focus=spec["focus"],
+            direction=ctx["direction"], lead=lead["name"], setup=ctx["setup"], session=ctx["session"],
+            data=agent_data(spec, ctx))
+        r = await self._call(spec, prompt, mon, 1, sources=(("engine", ctx["_brief"]),))
+        if r["vote"] != "ERROR":  # hand the finding straight to the desk lead
+            mon.message(spec["key"], spec["lead"], f"{r['vote']} {r['score']} – {r['summary']}")
+        return r
+
+    @staticmethod
+    def _desk_data(desk: str, ctx: dict) -> str:
+        market, extra = ctx["_market"], ctx.get("_extra", {})
+        if desk == "tech":
+            return ctx["market"]
+        if desk == "strategy":
+            return json.dumps({"strategy_board": strategies.brief(ctx.get("_board") or {}),
+                               "key_levels": market.get("levels", {}), "floor_pivots": market.get("pivots", {}),
+                               "fib_and_range": {TF_LABEL[tf]: {"range": market[tf]["smc"]["range"],
+                                                                "fib": {k: _r(v) for k, v in market[tf].get("fib", {}).items()}}
+                                                 for tf in ctx["_tfs"] if tf in market},
+                               "trend_by_timeframe": {TF_LABEL[tf]: market[tf]["smc"]["trend"]
+                                                      for tf in TF_ORDER if tf in market}}, separators=(",", ":"))
+        return json.dumps({"economic_calendar": extra.get("calendar") or ["no high/medium USD events"],
+                           "trade_lifetime_minutes": ctx.get("_expiry"),
+                           "headlines": extra.get("headlines") or {}, "other_markets": extra.get("intermarket")},
+                          indent=1)
+
+    async def _lead(self, lead: dict, members: list[dict], ctx: dict, mon: Monitor) -> dict:
+        specs = {a["key"]: a for a in ANALYSTS}
+        roster = "\n".join(f"- {m['key']}: {m['name']} – {specs[m['key']]['focus'][:110]}" for m in members)
+        answered = [m for m in members if m["vote"] != "ERROR"]
+        if not answered:
+            mon.agent(lead["key"], "error", summary="none of the desk's analysts answered", err="other")
+            return {"key": lead["key"], "name": lead["name"], "icon": lead["icon"], "stage": 2, "desk": lead["desk"],
+                    "vote": "ERROR", "score": 0, "summary": "no analyst reports", "points": [], "risk": "",
+                    "doubtful": []}
+        prompt = LEAD_PROMPT.format(name=lead["name"], instrument=ctx["instrument"], desk=DESKS[lead["desk"]]["name"],
+                                    members=roster, setup=ctx["setup"], session=ctx["session_news"],
+                                    data=self._desk_data(lead["desk"], ctx), reports=_reports_text(answered))
+        return await self._call(lead, prompt, mon, 2)
+
+    async def _debate(self, leads: list[dict], analysts: list[dict], ctx: dict, mon: Monitor):
+        """Each desk lead challenges the members who disagree with the desk or whose evidence it doubts; the
+        member re-checks its own data and answers (it may change its vote)."""
+        specs = {a["key"]: a for a in ANALYSTS}
+        jobs = []
+        for lead in leads:
+            if lead["vote"] == "ERROR":
+                continue
+            members = [r for r in analysts if r["desk"] == lead["desk"] and r["vote"] != "ERROR"]
+            targets = [r for r in members if r["vote"] != lead["vote"] or r["key"] in lead.get("doubtful", [])]
+            targets = sorted(targets, key=lambda r: -r["score"])[:3]  # the most confident dissenters first
+            jobs += [(lead, r) for r in targets]
+        if not jobs:
+            return
+        mon.event(f"🗣 Debate: desk leads challenge {len(jobs)} analysts")
+
+        async def answer(lead: dict, r: dict):
+            spec = specs[r["key"]]
+            why = (f"{lead['name']} ({lead['vote']} {lead['score']}): {lead['summary']}"
+                   + (" – your evidence looks wrong or weak" if r["key"] in lead.get("doubtful", []) else ""))
+            mon.message(lead["key"], r["key"], f"Challenge: {lead['summary']}", "challenge")
+            mon.agent(r["key"], "thinking", summary="Answering the desk lead's challenge…")
+            try:
+                d, model = await self._ask_json(DEBATE_PROMPT.format(
+                    name=spec["name"], instrument=ctx["instrument"], focus=spec["focus"], setup=ctx["setup"],
+                    data=agent_data(spec, ctx), own=f"{r['vote']} {r['score']} – {r['summary']} {r['points']}",
+                    challenges=why), self.slots_for(spec["key"]))
+            except Exception as e:
+                kind, friendly, _ = classify_error(e)
+                mon.agent(r["key"], "done", vote=r["vote"], score=r["score"], summary=r["summary"])
+                mon.event(f"{spec['icon']} {spec['name']} could not answer ({friendly}); keeps {r['vote']}", "error")
+                return
+            old = r["vote"]
+            vote = "TAKE" if str(d.get("vote", old)).upper() == "TAKE" else "SKIP"
+            try:
+                score = max(0, min(int(float(d.get("score") or r["score"])), 100))
+            except (TypeError, ValueError):
+                score = r["score"]
+            r.update(vote=vote, score=score, debate=str(d.get("reply", ""))[:200],
+                     summary=str(d.get("summary") or r["summary"])[:220], changed=vote != old)
+            mon.agent(r["key"], "done", vote=vote, score=score, summary=r["summary"], model=model,
+                      points=[f"Debate: {r['debate']}"] + r.get("points", [])[:2])
+            mon.message(r["key"], lead["key"], f"{'Changed to ' + vote if r['changed'] else 'Keeps ' + vote}: "
+                                               f"{r['debate']}", "reply")
+            mon.event(f"🗣 {spec['icon']} {spec['name']}: "
+                      + (f"changed {old} → {vote}" if r["changed"] else f"keeps {vote}") + f" – {r['debate']}",
+                      "take" if vote == "TAKE" else "skip")
+
+        await asyncio.gather(*(answer(lead, r) for lead, r in jobs))
+
+    def _need(self, answered: int) -> int:
+        """Analysts that must agree: MIN_AGREE_PCT of those that answered (default: MIN_AGENT_VOTES out of 8)."""
+        pct = getattr(self, "min_agree_pct", None) or self.min_votes / 8
+        return max(1, math.ceil(answered * pct - 1e-9))
+
     async def review(self, setup: dict, market: dict, session: dict, history: str = "",
                      practice: bool = False, instrument: str = "XAU/USD (gold)") -> dict:
         """Run the whole desk on one setup. Returns a verdict dict with 'approved'."""
-        ctx = {"setup": setup_brief(setup), "market": market_brief(market), "session": json.dumps(session),
-               "history": history, "instrument": instrument, "_market": market}
+        extra = {"calendar": session.get("news") or [],
+                 "headlines": session.get("headlines_by_cat") or {"gold": session.get("headlines") or [],
+                                                                  "macro": session.get("headlines") or []},
+                 "intermarket": session.get("intermarket")}
+        sess = {k: session[k] for k in ("sessions", "killzone", "utc_time") if k in session}
+        tfs = [t for t in (setup.get("timeframes") or {}).values() if t in market] or list(TF_ORDER)
+        board = strategies.evaluate(market, setup["direction"], setup.get("timeframes") or {}, setup["entry"])
+        brief = (f"{setup['style_label']} {setup['direction']} {setup['entry_type']} @ {setup['entry']} · SL "
+                 f"{setup['stop_loss']} · TP1 {setup['tps'][0]['price']} · engine score {setup['score']} · "
+                 + "; ".join(setup["confluences"][:3]))
+        ctx = {"setup": setup_brief(setup), "session": json.dumps(sess),
+               "session_news": json.dumps({**sess, "upcoming_usd_news": extra["calendar"]}),
+               "market": market_brief(market, tfs=tfs), "history": history, "instrument": instrument,
+               "direction": setup["direction"], "_market": market, "_extra": extra, "_board": board,
+               "_tfs": tfs, "_expiry": setup.get("expiry_min"), "_brief": brief}
         mon = getattr(self, "monitor", None) or Monitor()
         mon.set_phase("ai_review")
-        for a in VERIFIERS + [HEAD, AUDITOR]:
+        mon.board = board
+        for a in LEADS + VERIFIERS + [HEAD, AUDITOR]:
             mon.agent(a["key"], "waiting", summary="Waiting for reports…", vote=None, score=None, points=[])
         mon.event(("🧪 PRACTICE review (no signal will be sent): " if practice else "🧠 AI desk reviewing ")
                   + f"{setup.get('symbol_name', 'XAU/USD')} {setup['style_label']} {setup['direction']} @ {setup['entry']} (engine score {setup['score']})")
+        mon.event(f"📋 Strategy board: {board['agrees']} agree · {board['against']} against · {board['neutral']} neutral")
         mon.review_start(f"{setup.get('symbol_name', 'XAU/USD')} {setup['style_label']} {setup['direction']} @ {setup['entry']}",
                          practice)
         verdict = await self._review(setup, ctx, mon)
@@ -650,102 +978,72 @@ class TradingDesk:
         mon.event(f"👑 Head Trader: {'✅ APPROVED' if verdict['approved'] else '❌ REJECTED'} – "
                   f"{verdict.get('reject_reason') or verdict.get('headline') or verdict.get('reason')}",
                   "take" if verdict["approved"] else "skip")
-        mon.review({"practice": practice, "symbol": setup.get("symbol_name", "XAU/USD"), "style": setup["style_label"], "direction": setup["direction"], "entry": setup["entry"],
+        mon.review({"practice": practice, "symbol": setup.get("symbol_name", "XAU/USD"), "style": setup["style_label"],
+                    "direction": setup["direction"], "entry": setup["entry"],
                     "score": setup["score"], "votes": verdict["votes"], "approved": verdict["approved"],
                     "confidence": verdict["confidence"], "reason": verdict.get("reject_reason") or verdict.get("reason"),
-                    "reports": [{k: r.get(k) for k in ("icon", "name", "vote", "score", "changed")}
+                    "board": f"{board['agrees']}/{board['agrees'] + board['against']}",
+                    "reports": [{k: r.get(k) for k in ("icon", "name", "vote", "score", "changed", "stage")}
                                 for r in verdict["reports"]]})
         mon.set_phase("idle")
         return verdict
 
-    async def _debate(self, analysts: list[dict], verifiers: list[dict], ctx: dict, mon: Monitor):
-        """Round 2: when the verifiers mostly disagree with an analyst, they send their challenge back and
-        the analyst re-checks its own specialty and answers (it may change its vote)."""
-        skip = [v for v in verifiers if v["vote"] == "SKIP"]
-        take = [v for v in verifiers if v["vote"] == "TAKE"]
-        if len(skip) >= 2:
-            targets, against = [r for r in analysts if r["vote"] == "TAKE"], skip
-        elif len(take) >= 2:
-            targets, against = [r for r in analysts if r["vote"] == "SKIP"], take
-        else:
-            return
-        if not targets:
-            return
-        mon.event(f"🗣 Debate: {len(against)} verifiers challenge {len(targets)} analysts")
-        challenges = "\n".join(f"- {v['name']} ({v['vote']}): {v['summary']} {v['points']}" for v in against)
-        by_key = {a["key"]: a for a in ANALYSTS}
-
-        async def answer(r: dict):
-            agent = by_key[r["key"]]
-            for v in against:
-                mon.message(v["key"], r["key"], f"Challenge: {v['summary']}", "challenge")
-            mon.agent(r["key"], "thinking", summary="Answering the verifiers' challenge…")
-            try:
-                text, model = await self._ask(DEBATE_PROMPT.format(
-                    instrument=ctx.get("instrument", "XAU/USD (gold)"), name=agent["name"], focus=agent["focus"], own=f"{r['vote']} {r['score']} – {r['summary']}",
-                    challenges=challenges, setup=ctx["setup"], market=ctx["market"]),
-                    preferred=self.slots_for(agent["key"]))
-                d = parse_json(text)
-            except Exception as e:
-                kind, friendly, _ = classify_error(e)
-                mon.agent(r["key"], "done", vote=r["vote"], score=r["score"], summary=r["summary"])
-                mon.event(f"{agent['icon']} {agent['name']} could not answer ({friendly}); keeps {r['vote']}", "error")
-                return
-            old_vote = r["vote"]
-            vote = "TAKE" if str(d.get("vote", old_vote)).upper() == "TAKE" else "SKIP"
-            r.update(vote=vote, score=int(d.get("score") or r["score"]), debate=str(d.get("reply", ""))[:200],
-                     summary=str(d.get("summary") or r["summary"])[:200], changed=vote != old_vote)
-            mon.agent(r["key"], "done", vote=vote, score=r["score"], summary=r["summary"], model=model,
-                      points=[f"Debate: {r['debate']}"] + r.get("points", [])[:2])
-            for v in against:
-                mon.message(r["key"], v["key"], f"{'Changed to ' + vote if r['changed'] else 'Keeps ' + vote}: "
-                                                f"{r['debate']}", "reply")
-            mon.event(f"🗣 {agent['icon']} {agent['name']}: "
-                      + (f"changed {old_vote} → {vote}" if r["changed"] else f"keeps {vote}") + f" – {r['debate']}",
-                      "take" if vote == "TAKE" else "skip")
-
-        await asyncio.gather(*(answer(r) for r in targets))
-
     async def _review(self, setup: dict, ctx: dict, mon: Monitor) -> dict:
-        # Stage 1: analysts in parallel (the engine hands each of them the setup and market read).
-        mon.event("📤 Stage 1: engine → 8 analysts")
-        brief = (f"{setup['style_label']} {setup['direction']} {setup['entry_type']} @ {setup['entry']} · SL "
-                 f"{setup['stop_loss']} · TP1 {setup['tps'][0]['price']} · engine score {setup['score']} · "
-                 + "; ".join(setup["confluences"][:3]))
-        analysts = await asyncio.gather(*(self._specialist(i, a, ctx, sources=(("engine", brief),))
-                                          for i, a in enumerate(ANALYSTS)))
-        analysts = list(analysts)
-        verdict = {"reports": list(analysts), "votes": 0, "errors": 0, "approved": False,
+        board = ctx["_board"]
+        # Stage 1: the engine hands the setup to the 18 analysts; each works on its own data in parallel.
+        mon.event(f"📤 Stage 1: engine → {len(ANALYSTS)} analysts (technical, strategy, macro desks)")
+        analysts = list(await asyncio.gather(*(self._analyst(a, ctx, mon) for a in ANALYSTS)))
+        verdict = {"reports": list(analysts), "votes": 0, "errors": 0, "approved": False, "board": board,
                    "confidence": 0, "headline": "", "reason": "", "levels": None}
         if all(r["vote"] == "ERROR" for r in analysts):
             verdict["reason"] = "AI unavailable"
             verdict["ai_down"] = True
             return verdict
 
-        # Stage 2: verifiers receive every analyst report.
-        mon.event("📤 Stage 2: analyst reports → Confluence Verifier, Risk Manager, Devil's Advocate")
-        vctx = dict(ctx, reports=_reports_text(analysts))
-        shared = tuple((r["key"], f"{r['vote']} {r['score']} – {r['summary']}") for r in analysts)
-        verifiers = await asyncio.gather(*(self._specialist(len(ANALYSTS) + i, v, vctx, VERIFIER_PROMPT, shared)
-                                           for i, v in enumerate(VERIFIERS)))
+        # Stage 2: each desk lead checks its analysts, then challenges the doubtful ones (debate).
+        mon.event("📤 Stage 2: analysts → 📐 Technical / 🧭 Strategy / 🌍 Macro desk leads")
+        leads = list(await asyncio.gather(*(self._lead(lead, [r for r in analysts if r["desk"] == lead["desk"]], ctx, mon)
+                                            for lead in LEADS)))
         if getattr(self, "debate", True):
-            await self._debate(analysts, list(verifiers), ctx, mon)
-        reports = list(analysts) + list(verifiers)
-        a_votes = sum(r["vote"] == "TAKE" for r in analysts)
-        v_votes = sum(r["vote"] == "TAKE" for r in verifiers)
-        verdict.update(reports=reports, votes=a_votes + v_votes, analyst_votes=a_votes, verifier_votes=v_votes,
-                       errors=sum(r["vote"] == "ERROR" for r in reports))
+            await self._debate(leads, analysts, ctx, mon)
 
-        # Stage 3: the Head Trader reads everything.
-        for r in reports:
-            mon.message(r["key"], "head", f"{r['vote']} {r['score']} – {r['summary']}")
-        mon.event("📤 Stage 3: all 11 reports → 👑 Head Trader")
-        mon.agent("head", "thinking", summary="Reading all 11 reports and making the final call…")
+        # Stage 3: the verifiers receive the three desk verdicts (plus every analyst's one-liner).
+        mon.event("📤 Stage 3: desk verdicts → Confluence Verifier, Risk Manager, Devil's Advocate")
+        board_summary = f"{board['agrees']} agree, {board['against']} against, {board['neutral']} neutral"
+        vctx = dict(instrument=ctx["instrument"], setup=ctx["setup"], market=ctx["market"], session=ctx["session_news"],
+                    board_summary=board_summary, board="\n".join(strategies.brief(board)),
+                    desks=_reports_text(leads), reports=_one_liners(analysts))
+        shared = tuple((lead["key"], f"{lead['vote']} {lead['score']} – {lead['summary']}") for lead in leads
+                       if lead["vote"] != "ERROR")
+        verifiers = list(await asyncio.gather(*(self._call(
+            v, VERIFIER_PROMPT.format(name=v["name"], focus=v["focus"], **vctx), mon, 3, shared) for v in VERIFIERS)))
+
+        answered = [r for r in analysts if r["vote"] != "ERROR"]
+        a_votes = sum(r["vote"] == "TAKE" for r in analysts)
+        l_votes = sum(r["vote"] == "TAKE" for r in leads)
+        v_votes = sum(r["vote"] == "TAKE" for r in verifiers)
+        need = self._need(len(answered))
+        reports = list(analysts) + list(leads) + list(verifiers)
+        per_desk = {d: f"{sum(r['vote'] == 'TAKE' for r in analysts if r['desk'] == d)}/"
+                       f"{sum(1 for r in analysts if r['desk'] == d)}" for d in DESKS}
+        verdict.update(reports=reports, votes=a_votes + l_votes + v_votes, analyst_votes=a_votes, lead_votes=l_votes,
+                       verifier_votes=v_votes, errors=sum(r["vote"] == "ERROR" for r in reports), need=need,
+                       per_desk=per_desk)
+        tally = (f"{a_votes}/{len(answered)} analysts TAKE (need {need}) – technical {per_desk['tech']}, "
+                 f"strategy {per_desk['strategy']}, macro {per_desk['macro']}")
+
+        # Stage 4: the Head Trader reads the desks and the verifiers.
+        for r in leads + verifiers:
+            if r["vote"] != "ERROR":
+                mon.message(r["key"], "head", f"{r['vote']} {r['score']} – {r['summary']}")
+        mon.event("📤 Stage 4: 3 desk verdicts + 3 verifiers → 👑 Head Trader")
+        mon.agent("head", "thinking", summary="Reading the desks and verifiers and making the final call…")
         try:
-            text, _ = await self._ask(HEAD_PROMPT.format(reports=_reports_text(reports), min_rr=self.min_rr,
-                                                         history=ctx.get("history") or "no closed trades yet",
-                                                         **{k: v for k, v in ctx.items() if k != "history"}),
-                                      preferred=self.slots_for("head"))
+            text, _ = await self._ask(HEAD_PROMPT.format(
+                instrument=ctx["instrument"], setup=ctx["setup"], market=ctx["market"], session=ctx["session_news"],
+                board_summary=board_summary, tally=tally, desks=_reports_text(leads),
+                verifiers=_reports_text(verifiers), history=ctx.get("history") or "no closed trades yet",
+                min_rr=self.min_rr), preferred=self.slots_for("head"))
             head = parse_json(text)
         except Exception as e:
             # Reports did arrive, so this is not "AI down": decide on the votes alone, with a clear majority.
@@ -753,10 +1051,12 @@ class TradingDesk:
             takers = [r["score"] for r in reports if r["vote"] == "TAKE"]
             verdict["confidence"] = round(sum(takers) / len(takers)) if takers else 0
             verdict["reason"] = "Head trader offline – decided by the desk's votes."
-            need = max(self.min_votes, -(-3 * len(ANALYSTS) // 4))
-            verdict["approved"] = a_votes >= need and v_votes >= 2 and verdict["confidence"] >= self.min_confidence
+            strict_need = max(need, math.ceil(len(answered) * 0.75))
+            verdict["approved"] = (a_votes >= strict_need and l_votes >= 2 and v_votes >= 2
+                                   and board["against"] <= board["agrees"]
+                                   and verdict["confidence"] >= self.min_confidence)
             if not verdict["approved"]:
-                verdict["reject_reason"] = f"head trader offline and only {a_votes}/{len(ANALYSTS)} analysts agree"
+                verdict["reject_reason"] = f"head trader offline and only {a_votes}/{len(answered)} analysts agree"
             return verdict
 
         verdict["confidence"] = int(head.get("confidence") or 0)
@@ -777,31 +1077,39 @@ class TradingDesk:
         except (KeyError, TypeError, ValueError):
             pass
 
+        # Confirmation rules: every layer of the desk must agree.
         reasons = []
         if not take:
             reasons.append("head trader said SKIP")
         if verdict["confidence"] < self.min_confidence:
             reasons.append(f"confidence {verdict['confidence']} < {self.min_confidence}")
-        if a_votes < self.min_votes:
-            reasons.append(f"only {a_votes}/{len(ANALYSTS)} analysts agree")
+        if len(answered) < math.ceil(len(ANALYSTS) * 2 / 3):
+            reasons.append(f"only {len(answered)}/{len(ANALYSTS)} analysts answered")
+        if a_votes < need:
+            reasons.append(f"only {a_votes}/{len(answered)} analysts agree (need {need})")
+        if l_votes < 2:
+            reasons.append(f"only {l_votes}/{len(LEADS)} desks agree")
         if v_votes < 2:
             reasons.append(f"only {v_votes}/{len(VERIFIERS)} verifiers agree")
+        if board["against"] > board["agrees"]:
+            reasons.append(f"strategy board against ({board['against']} vs {board['agrees']})")
         if reasons:
             verdict["reject_reason"] = "; ".join(reasons)
             return verdict
 
-        # Stage 4: the Signal Auditor checks the final signal and can veto it.
+        # Stage 5: the Signal Auditor checks the final signal and can veto it.
         mon.message("head", "auditor", f"TAKE {setup['direction']} · confidence {verdict['confidence']}% – "
                                        f"{verdict['headline'] or verdict['reason'][:120]}", "decision")
-        mon.event("📤 Stage 4: Head Trader's signal → ✅ Signal Auditor")
+        mon.event("📤 Stage 5: Head Trader's signal → ✅ Signal Auditor")
         mon.agent("auditor", "thinking", summary="Checking the final signal…")
         final = verdict["levels"] or {"entry": setup["entry"], "stop_loss": setup["stop_loss"],
                                       "tps": [t["price"] for t in setup["tps"]]}
         started = time.monotonic()
         try:
             text, model = await self._ask(AUDITOR_PROMPT.format(
-                instrument=ctx.get("instrument", "XAU/USD (gold)"), setup=ctx["setup"], decision=json.dumps({k: head.get(k) for k in ("decision", "confidence", "reason")}),
-                levels=json.dumps(final), reports=_reports_text(reports), min_rr=self.min_rr),
+                instrument=ctx["instrument"], setup=ctx["setup"],
+                decision=json.dumps({k: head.get(k) for k in ("decision", "confidence", "reason")}),
+                levels=json.dumps(final), reports=_reports_text(leads + verifiers), min_rr=self.min_rr),
                 preferred=self.slots_for("auditor"))
             audit = parse_json(text)
             approve = audit.get("approve") is True or str(audit.get("approve")).lower() == "true"

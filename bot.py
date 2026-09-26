@@ -223,6 +223,7 @@ class GoldBot:
         session = sessions.current(now)
         session["news"] = self.news.brief(now)
         session["headlines"] = self.headlines.brief()
+        session["headlines_by_cat"] = self.headlines.by_category()
 
         # Warn before high-impact news (once, for everybody).
         for ev in self.news.due_alerts(now, 20):
@@ -308,8 +309,8 @@ class GoldBot:
             log.info("Reviewing %s %s %s setup (score %s)", key, style, setup["direction"], setup["score"])
             mon.event(f"🎯 {label}: engine found {setup['direction']} setup, score {setup['score']} – "
                       + "; ".join(setup["confluences"][:3]))
-            verdict = await self.desk.review(setup, market, session, self.track_record(style, key),
-                                             instrument=inst["ai_name"])
+            verdict = await self.desk.review(setup, market, {**session, "intermarket": self.intermarket(key)},
+                                             self.track_record(style, key), instrument=inst["ai_name"])
             if verdict.get("ai_down"):
                 await self._alert_ai_down(bot)
             if not verdict["approved"]:
@@ -762,16 +763,6 @@ class GoldBot:
 
     # ================= local dashboard =================
 
-    ROLES = {"structure": "Trend, BOS/CHoCH on every timeframe", "liquidity": "Sweeps, resting liquidity, stop hunts",
-             "orderblocks": "Order blocks & breaker blocks", "imbalance": "FVGs, imbalance, premium/discount",
-             "volume": "Volume profile, delta, volume bubbles", "price_action": "Candles, patterns, rejections",
-             "indicators": "EMA, RSI, MACD, ADX, Supertrend, StochRSI, BB, VWAP",
-             "session_news": "Killzone, ADR, calendar & headlines",
-             "confluence": "Cross-checks all 8 analyst reports", "risk": "Verifies stop, targets, R:R",
-             "devil": "Attacks the trade with the analysts' findings",
-             "head": "Reads all 11 reports → TAKE/SKIP, confidence, levels",
-             "auditor": "Final check of the signal – can veto"}
-
     def _slot_label(self, agent_key: str) -> str:
         from agents import slot_label
         slots = self.desk.slots_for(agent_key)
@@ -797,10 +788,14 @@ class GoldBot:
                 "adr": market.get("adr", {}), "tfs": tfs}
 
     def dashboard_state(self) -> dict:
-        from agents import PIPELINE
+        from agents import DESKS, PIPELINE, inputs, links
 
         mon = self.desk.monitor
-        agents = [{"key": a["key"], "name": a["name"], "icon": a["icon"], "role": self.ROLES.get(a["key"], ""),
+        link = links()
+        agents = [{"key": a["key"], "name": a["name"], "icon": a["icon"], "role": a.get("focus", ""),
+                   "desk": a.get("desk"), "inputs": inputs(a) if stage_no == 1 else [],
+                   "receives": link[a["key"]]["from"], "sends": link[a["key"]]["to"],
+                   "home_key": self.desk.home_key(a["key"]) if hasattr(self.desk, "plan") else 1,
                    "stage": stage_no, "slot": self._slot_label(a["key"]), **dict(mon.agents.get(a["key"], {}))}
                   for stage_no, (_, members) in enumerate(PIPELINE, 1) for a in members]
         stages = [name for name, _ in PIPELINE]
@@ -818,6 +813,9 @@ class GoldBot:
                              "open": instruments.is_open(i)} for i in self.instruments],
             "agents": agents,
             "stages": stages,
+            "desks": DESKS,
+            "board": mon.board,
+            "keys": len(getattr(self.desk, "clients", [None])),
             "flows": flows,
             "data_age": self.data_age(),
             "data_ages": {i["key"]: self.data_age(i["key"]) for i in self.instruments},
@@ -828,7 +826,8 @@ class GoldBot:
                           "forecast": e["forecast"], "previous": e["previous"]}
                          for e in self.news.upcoming(datetime.now(timezone.utc), 48)][:10],
             "headlines": [{"title": h["title"], "source": h["source"], "link": h["link"], "gold": h["gold"],
-                           "time": h["time"].strftime("%H:%M UTC") if h["time"] else ""} for h in self.headlines.latest(10)],
+                           "cats": h.get("categories", []),
+                           "time": h["time"].strftime("%H:%M UTC") if h["time"] else ""} for h in self.headlines.latest(18)],
             "log": list(mon.log)[::-1][:200],
             "reviews": list(mon.reviews),
             "market": markets.get(self.primary),
@@ -1004,6 +1003,34 @@ class GoldBot:
                 "poi": {"kind": "none", "top": price, "bottom": price, "time": ""}, "key": "practice",
                 "expiry_min": 240, "timeframes": {"entry": "15min", "confirm": "1h", "bias": "4h"}, **extra}
 
+    def intermarket(self, key: str) -> dict | None:
+        """The other instruments' trend, 24h move and H1 correlation with `key` (for the intermarket analyst)."""
+        def returns(candles):
+            return {b["time"]: (b["close"] - a["close"]) / a["close"] for a, b in zip(candles, candles[1:]) if a["close"]}
+        mine = (self.candles_by.get(key) or {}).get("1h") or []
+        out = {}
+        for inst in self.instruments:
+            other, market = inst["key"], self.markets.get(inst["key"])
+            if other == key or not market:
+                continue
+            h1 = (self.candles_by.get(other) or {}).get("1h") or []
+            info = {"price": round(market["5min"]["price"], 2) if "5min" in market else None,
+                    "trend": {TF_LABEL[tf]: market[tf]["smc"]["trend"] for tf in ("1day", "4h", "1h", "15min")
+                              if tf in market}}
+            if len(h1) >= 25:
+                info["change_24h_pct"] = round(100 * (h1[-1]["close"] / h1[-25]["close"] - 1), 2)
+            ra, rb = returns(mine[-121:]), returns(h1[-121:])
+            common = [t for t in ra if t in rb]
+            if len(common) >= 30:
+                xs, ys = [ra[t] for t in common], [rb[t] for t in common]
+                mx, my = sum(xs) / len(xs), sum(ys) / len(ys)
+                cov = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+                sx = sum((x - mx) ** 2 for x in xs) ** 0.5
+                sy = sum((y - my) ** 2 for y in ys) ** 0.5
+                info["h1_correlation"] = round(cov / (sx * sy), 2) if sx and sy else None
+            out[inst["name"]] = info
+        return out or None
+
     async def practice_review(self, key: str | None = None) -> dict | None:
         """Run the whole AI desk on live data right now so the owner can watch it work (no signal is sent)."""
         mon = self.desk.monitor
@@ -1015,7 +1042,8 @@ class GoldBot:
             await self.refresh_market([inst["key"]])
         async with self.scan_lock:
             setup = self.practice_setup(inst["key"])
-            session = {**sessions.current(), "news": self.news.brief(), "headlines": self.headlines.brief()}
+            session = {**sessions.current(), "news": self.news.brief(), "headlines": self.headlines.brief(),
+                       "headlines_by_cat": self.headlines.by_category(), "intermarket": self.intermarket(inst["key"])}
             try:
                 return await self.desk.review(setup, self.markets[inst["key"]], session,
                                               self.track_record(setup["style"], inst["key"]), practice=True,

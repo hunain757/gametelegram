@@ -1,7 +1,7 @@
 # 🏆 Gold & Bitcoin SMC AI Signal Bot (Telegram)
 
 A Telegram bot that scans **gold (XAU/USD)** and **bitcoin (BTC/USD)** around the clock with a **Smart Money Concepts engine**,
-**volume analysis** and a **13-agent Gemini AI desk**, sends **scalping / intraday / swing** signals
+**volume analysis**, a **17-strategy board** and a **26-agent Gemini AI desk**, sends **scalping / intraday / swing** signals
 with entry, SL and 3 TPs, and **tracks every trade live** (entry fill, TP1/TP2/TP3, SL, expiry).
 
 ## Markets
@@ -42,16 +42,27 @@ every 5 min ─► Twelve Data: XAU/USD M5 · M15 · H1 · H4 · D1   (+ Binance
         📰 NEWS FILTER – no new trades 30 min around high-impact USD news (ForexFactory calendar)
                 │
                 ▼ (only setups with confluence score ≥ MIN_ENGINE_SCORE)
-        AI DESK – 13 Gemini agents in a 4-stage pipeline (each on its own model, automatic fallback)
-        Stage 1  8 analysts: 🏗 Structure · 💧 Liquidity · 🧱 Order/Breaker blocks · ⚡ FVG · 📊 Volume profile
-                 · 🕯 Price action · ⚙️ Indicators (EMA/RSI/MACD/ADX/Supertrend/StochRSI/BB/VWAP) · 📰 News & macro
-        Stage 2  3 verifiers read ALL analyst reports: 🔗 Confluence · 🛡 Risk · 😈 Devil's Advocate
-                 Debate: when the verifiers disagree, their challenge goes back to the analysts, who re-check
-                 their data and answer (they may change their vote)
-        Stage 3  👑 Head Trader reads all 11 reports + the desk's recent track record → TAKE/SKIP, levels
-        Stage 4  ✅ Signal Auditor checks the final signal and can veto it
+        STRATEGY BOARD – 17 classic strategies vote AGREE / AGAINST / NEUTRAL on the setup:
+                 trend (EMA pullback, Supertrend+MACD, Ichimoku, ADX/DMI, Heikin-Ashi, multi-timeframe),
+                 breakout (Donchian, TTM squeeze), mean reversion (RSI+Bollinger, VWAP, RSI divergence),
+                 ICT (OTE 62-79 %, premium/discount), momentum (Stochastic, CCI+Williams %R), volume (OBV, delta)
                 │
-                ▼ (Head TAKE + confidence ≥ 70 + ≥ 5/8 analysts + ≥ 2/3 verifiers + auditor OK)
+        AI DESK – 26 Gemini agents in a 5-stage pipeline; each has ONE job and sees only its own data
+        Stage 1  18 analysts in 3 desks
+                 📐 Technical: 🏗 Structure · 💧 Liquidity · 🧱 OB/Breaker · ⚡ FVG · 📊 Volume · 🕯 Price action
+                              · 🚀 Momentum · 📈 Trend indicators · 🌡 Volatility
+                 🧭 Strategy:  🔭 Multi-timeframe · 🎯 ICT & Fibonacci · 📏 Levels & pivots · 🏄 Trend-following
+                              · 🔄 Breakout & reversion
+                 🌍 Macro:     📅 Economic calendar · 🌐 Geopolitics & world events · 🏦 Central banks & dollar
+                              · 🔗 Intermarket (gold ↔ bitcoin correlation) & sentiment
+        Stage 2  3 desk leads check their analysts' evidence; they challenge the doubtful ones, who re-check
+                 their own data and answer (debate – they may change their vote)
+        Stage 3  3 verifiers cross-check the desks: 🔗 Confluence · 🛡 Risk · 😈 Devil's Advocate
+        Stage 4  👑 Head Trader reads the desks, verifiers, strategy board and track record → TAKE/SKIP, levels
+        Stage 5  ✅ Signal Auditor checks the final signal and can veto it
+                │
+                ▼ (Head TAKE + confidence ≥ 70 + ≥ 62 % of analysts + ≥ 2/3 desk leads + ≥ 2/3 verifiers
+                   + strategy board not against + auditor OK)
         TELEGRAM: 📈 chart + signal + 💰 your lot size ─► live tracking replies on the signal:
         ✅ entry filled · 🎯 TP1 (SL → breakeven) · 🎯 TP2 · 🏆 TP3 · 🛑 SL · ⌛ expired
 ```
@@ -96,21 +107,26 @@ replayed. Use it to tune `MIN_ENGINE_SCORE`, `MIN_RISK_REWARD` and `STYLES` befo
 
 When the bot starts it opens **http://localhost:8080** (it listens on this computer only):
 
-- **Agent network**: the engine, 8 analysts, 3 verifiers, Head Trader, Signal Auditor and Telegram as a live
-  graph. Every time information is passed on, a glowing dot runs along the line. Nodes flash while an agent
-  thinks and turn green/red with its vote. Click a node for its full reasoning, model and timing.
+- **Agent network**: the engine, 18 analysts grouped in their 3 desks, 3 desk leads, 3 verifiers, Head Trader,
+  Signal Auditor and Telegram as a live graph. Every time information is passed on, a glowing dot runs along
+  the line. Nodes flash while an agent works and turn green/red with its vote; the coloured bar and `K1`/`K2`
+  badge show which API key the agent runs on. Click a node for its job, the data it receives, who it gets
+  information from and sends it to, its evidence, risk, model and timing.
+- **Agent directory**: a table of all 26 agents – only job, data it receives, who it sends to, key/model,
+  current vote.
+- **Strategy board**: all 17 strategies with their verdict and the exact numbers behind it.
 - **Live chart** (M5 → D1, TradingView Lightweight Charts): candles with BOS/CHoCH arrows, liquidity sweeps,
   order blocks, breaker blocks, FVGs, key levels (PDH/PDL/PWH/PWL/Asia), buy/sell-side liquidity, volume
   bubbles, volume profile + POC and your open trades. Toggle each layer.
 - **Live price** every 5 s (PAXG/USDT calibrated to the last XAU/USD candle between scans) and the time of the
   last real candle, so you can see how fresh the data is.
 - **Agent conversation**: every message the agents send each other, with its text – the engine's setup to
-  the analysts, each analyst's report to the verifiers, the verifiers' **challenges** back to the analysts and
+  the analysts, each analyst's report to its desk lead, the leads' **challenges** back to their analysts and
   their **replies** (debate round), all reports to the Head Trader, the decision to the Signal Auditor and the
   final verdict. Replies/challenges run backwards along the lines in red.
 - Live activity feed, last AI decisions, open trades, news calendar + headlines, market structure, system
   health (incl. each Gemini model/key and why it is resting) and performance.
-- Buttons: **⚡ Scan now**, **🎓 Practice AI review** (runs the whole 13-agent desk on the live market right
+- Buttons: **⚡ Scan now**, **🎓 Practice AI review** (runs the whole 26-agent desk on the live market right
   now so you can watch it – nothing is sent to Telegram) and **🩺 Test agents** (one tiny request per model).
 
 Set `DASHBOARD_PORT=0` to turn it off, or `DASHBOARD_OPEN=off` to stop it opening the browser.
@@ -132,20 +148,29 @@ Volume comes from Binance's public PAXG/USDT market data, which needs no key.
 Every *model × key* pair is its own "slot" with its own rate limit. The desk plans the work so no slot is
 overloaded and the strongest models are kept for the decisions that matter:
 
-| Agents | Models | Keys |
-|---|---|---|
-| 8 analysts (stage 1) | fast *lite* models (big free daily quota) | alternate: key 1, key 2, key 1, … |
-| 3 verifiers (stage 2) | strong *flash* models | spread over all keys |
-| 👑 Head Trader (stage 3) | strongest model | key 1 first |
-| 🛡 Auditor (stage 4) | strongest model | key 2 first (an independent second opinion) |
+| Agents | Models | Key 1 | Key 2 |
+|---|---|---|---|
+| 18 analysts (stage 1) | fast *lite* models (big free daily quota) | 9 | 9 |
+| 3 desk leads (stage 2) | strong *flash* models | technical, macro | strategy |
+| 3 verifiers (stage 3) | strong *flash* models | risk | confluence, devil |
+| 👑 Head Trader (stage 4) | strongest model | ✔ | |
+| ✅ Auditor (stage 5) | strongest model | | ✔ (independent second opinion) |
+| **total** | | **13** | **13** |
+
+With 3 keys the same plan is spread over all three.
 
 If a slot hits a limit it rests (short back-off for "busy", until the daily reset for "quota used"), the
 agent automatically moves to the next healthy slot, and resting slots are remembered across restarts.
-Each agent gets only the data of its own specialty (~1.5–2.5k characters instead of the full 12k brief),
-which keeps every call far below the free tokens-per-minute limit.
+Each agent gets only the data of its own job (about 1k characters on average), which keeps every call far
+below the free tokens-per-minute limit.
 
-**How many keys?** 1 key works for light use. 2 keys comfortably cover gold *or* bitcoin all day. For gold
-**and** bitcoin 24/7 plus practice reviews, add a 3rd key: `GEMINI_API_KEYS=key2,key3` in `.env`.
+**Why is key 2 "resting"?** Open the 🔑 panel on the dashboard – the reason is written next to each slot.
+The most common one: both keys were made in the **same Google account/project**. Keys of one project share
+**one** quota, so when key 1 uses up a model's daily limit, key 2 is out too (the panel then says so). Create
+the second key in a **different Google account** at https://aistudio.google.com/apikey.
+
+**How many keys?** One review now uses ~26–32 calls. 2 keys (from 2 different Google accounts) cover gold
+*or* bitcoin all day. For gold **and** bitcoin 24/7 plus practice reviews, add a 3rd key: `GEMINI_API_KEYS=key2,key3` in `.env`.
 The dashboard's **🔑 API keys & Gemini models** panel shows every slot, its health, latency and which agents use it.
 
 ## Run it on Windows (easiest)

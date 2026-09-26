@@ -5,6 +5,8 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
+import news
+
 load_dotenv()
 
 
@@ -100,7 +102,7 @@ def load_config() -> Config:
         news_blackout_min=int(os.getenv("NEWS_BLACKOUT_MIN", "30")),
         news_currencies=tuple(_list(os.getenv("NEWS_CURRENCIES", "USD"))),
         briefings=os.getenv("BRIEFINGS", "on").lower() not in ("0", "off", "false", "no"),
-        news_feeds=tuple(_list(os.getenv("NEWS_FEEDS", "https://www.fxstreet.com/rss/news,https://www.forexlive.com/feed/news"))),
+        news_feeds=tuple(dict.fromkeys(_list(os.getenv("NEWS_FEEDS", "")) + list(news.DEFAULT_FEEDS))),
         markets=_markets(os.getenv("MARKETS", "XAUUSD,BTCUSD")),
         strict_mode=os.getenv("STRICT_MODE", "on").lower() not in ("0", "off", "false", "no"),
         dashboard_port=int(os.getenv("DASHBOARD_PORT", "8080")),

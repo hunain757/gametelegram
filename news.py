@@ -91,9 +91,24 @@ class NewsCalendar:
 
 # ---------------- headlines ----------------
 
-DEFAULT_FEEDS = ("https://www.fxstreet.com/rss/news", "https://www.forexlive.com/feed/news")
-KEYWORDS = re.compile(r"\b(gold|xau|bullion|fed|fomc|powell|inflation|cpi|pce|nfp|payrolls|jobs|dollar|usd|dxy|"
-                      r"yields?|treasur(?:y|ies)|rate cuts?|rate hikes?|geopolit\w*|war|tariffs?)\b", re.I)
+DEFAULT_FEEDS = ("https://www.fxstreet.com/rss/news", "https://www.forexlive.com/feed/news",
+                 "https://feeds.bbci.co.uk/news/world/rss.xml", "https://www.coindesk.com/arc/outboundfeeds/rss/")
+# Headline categories: each news agent reads only its own kind of story.
+CATEGORIES = {
+    "gold": r"gold|xau|bullion|precious metals?|silver",
+    "crypto": r"bitcoin|btc|crypto\w*|ether(?:eum)?|etf flows?|stablecoins?|binance|coinbase|sec\b",
+    "macro": r"fed|fomc|powell|inflation|cpi|ppi|pce|nfp|payrolls|jobs|unemployment|gdp|dollar|usd|dxy|yields?|"
+             r"treasur(?:y|ies)|rate cuts?|rate hikes?|interest rates?|ecb|boj|recession|central banks?",
+    "world": r"geopolit\w*|wars?|tariffs?|sanctions?|conflict|missiles?|strikes?|attacks?|invasion|ceasefire|"
+             r"elections?|oil|opec|china|russia|ukraine|iran|israel|gaza|middle east|taiwan|north korea|crisis|"
+             r"trump|white house|nato|terror\w*|coup|protests?",
+}
+_CAT_RE = {k: re.compile(rf"\b({v})\b", re.I) for k, v in CATEGORIES.items()}
+KEYWORDS = re.compile(r"\b(" + "|".join(CATEGORIES.values()) + r")\b", re.I)
+
+
+def categorize(title: str) -> list[str]:
+    return [k for k, rx in _CAT_RE.items() if rx.search(title)]
 
 
 def parse_rss(xml_text: str, source: str) -> list[dict]:
@@ -108,7 +123,7 @@ def parse_rss(xml_text: str, source: str) -> list[dict]:
         except (TypeError, ValueError):
             when = None
         out.append({"title": title, "time": when, "source": source, "link": (item.findtext("link") or "").strip(),
-                    "gold": bool(re.search(r"\b(gold|xau|bullion)\b", title, re.I))})
+                    "gold": bool(_CAT_RE["gold"].search(title)), "categories": categorize(title)})
     return out
 
 
@@ -139,7 +154,7 @@ class Headlines:
                 if it["title"].lower() not in seen:
                     seen.add(it["title"].lower())
                     uniq.append(it)
-            self.items = uniq[:25]
+            self.items = uniq[:60]
         self.error = "; ".join(errors) if errors and not items else None
         if errors:
             log.warning("Headline feeds: %s", "; ".join(errors))
@@ -148,6 +163,10 @@ class Headlines:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
         return [h for h in self.items if not h["time"] or h["time"] >= cutoff][:n]
 
-    def brief(self, n: int = 6) -> list[str]:
+    def brief(self, n: int = 6, category: str | None = None) -> list[str]:
+        items = [h for h in self.latest(60) if not category or category in h.get("categories", [])][:n]
         return [f"{h['time'].strftime('%H:%M') if h['time'] else '--:--'} UTC {h['source']}: {h['title']}"
-                for h in self.latest(n)]
+                for h in items]
+
+    def by_category(self, n: int = 6) -> dict[str, list[str]]:
+        return {c: self.brief(n, c) for c in CATEGORIES}

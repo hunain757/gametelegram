@@ -286,12 +286,15 @@ class AgentTests(unittest.TestCase):
         desk = fake_desk()
         v = asyncio.run(desk.review(setup, market, SESSION))
         self.assertTrue(v["approved"])
-        self.assertEqual(v["votes"], 11)       # 8 analysts + 3 verifiers
+        self.assertEqual(v["votes"], 24)       # 18 analysts + 3 desk leads + 3 verifiers
+        self.assertEqual(v["per_desk"], {"tech": "9/9", "strategy": "5/5", "macro": "4/4"})
         self.assertTrue(v["audit"]["approve"])
         self.assertIsNone(v["levels"])  # head trader's levels were invalid -> engine levels
-        self.assertEqual(desk.fake.calls, 13)  # 8 analysts + 3 verifiers + head trader + auditor
+        self.assertEqual(desk.fake.calls, 26)  # every agent exactly once (no debate when all agree)
         flows = list(desk.monitor.flows)
-        self.assertTrue(any(f["from"] == "structure" and f["to"] == "confluence" for f in flows))
+        self.assertTrue(any(f["from"] == "structure" and f["to"] == "tech_lead" for f in flows))
+        self.assertTrue(any(f["from"] == "world" and f["to"] == "macro_lead" for f in flows))
+        self.assertTrue(any(f["from"] == "strategy_lead" and f["to"] == "confluence" for f in flows))
         self.assertTrue(any(f["from"] == "head" and f["to"] == "auditor" for f in flows))
         cur = desk.monitor.current  # live-review panel: which setup, when it started/ended and the outcome
         self.assertIn(setup["direction"], cur["label"])
@@ -312,16 +315,16 @@ class AgentTests(unittest.TestCase):
 
 
 class DebateTests(unittest.TestCase):
-    def test_verifiers_challenge_and_analysts_answer(self):
+    def test_leads_challenge_and_analysts_answer(self):
         setup, market, _ = first_setup()
         desk = fake_desk()
 
         class Models:
             async def generate_content(self, model, contents, config):
-                if "The verifiers challenge" in contents:        # debate answer: analyst changes its mind
+                if "Your desk lead challenges you" in contents:  # debate answer: analyst changes its mind
                     return types.SimpleNamespace(text='{"vote": "SKIP", "score": 40, "changed": true, '
                                                       '"reply": "Agreed, ADR is exhausted", "summary": "now SKIP"}')
-                if "The 8 analysts sent you" in contents:        # verifiers say SKIP
+                if "Your members and their jobs" in contents or "three desk leads" in contents:  # leads/verifiers SKIP
                     return types.SimpleNamespace(text='{"vote": "SKIP", "score": 30, "summary": "ADR exhausted", "points": []}')
                 if "Head Trader" in contents:
                     return types.SimpleNamespace(text='{"decision": "SKIP", "confidence": 20, "reason": "no"}')
@@ -329,10 +332,12 @@ class DebateTests(unittest.TestCase):
         desk.client = types.SimpleNamespace(aio=types.SimpleNamespace(models=Models()))
         v = asyncio.run(desk.review(setup, market, SESSION, history="last 3 trades: 2 losses"))
         analysts = [r for r in v["reports"] if r["stage"] == 1]
-        self.assertTrue(all(r["vote"] == "SKIP" and r["changed"] for r in analysts))
+        changed = [r for r in analysts if r.get("changed")]
+        self.assertEqual(len(changed), 9)  # the 3 most confident dissenters of each desk were challenged
+        self.assertTrue(all(r["vote"] == "SKIP" for r in changed))
         self.assertFalse(v["approved"])
         flows = list(desk.monitor.flows)
-        self.assertTrue(any(f["kind"] == "challenge" and f["from"] == "devil" and f["to"] == "structure" for f in flows))
+        self.assertTrue(any(f["kind"] == "challenge" and f["from"] == "tech_lead" and f["to"] == "structure" for f in flows))
         self.assertTrue(any(f["kind"] == "reply" and f["from"] == "structure" for f in flows))
         self.assertTrue(any(f["from"] == "engine" and ("SELL" in f["text"] or "BUY" in f["text"]) for f in flows))
         self.assertIn("Debate", ui.ai_report({**v, "direction": "BUY", "style_label": "x", "confidence": 20,
@@ -353,7 +358,10 @@ class AgentPlanTests(unittest.TestCase):
         desk = TradingDesk(["k1", "k2"], "big-a", 1.5, 70, 5, ["big-b", "big-c", "x-lite", "y-lite"])
         analyst_first = [desk.slots_for(a["key"])[0] for a in ANALYSTS]
         self.assertTrue(all("lite" in s for s in analyst_first))
-        self.assertEqual(sum(s.endswith("#1") for s in analyst_first), 4)  # half the analysts on each key
+        self.assertEqual(sum(s.endswith("#1") for s in analyst_first), 9)  # half the analysts on each key
+        from agents import ALL_AGENTS
+        homes = [desk.home_key(a["key"]) for a in ALL_AGENTS]
+        self.assertEqual((homes.count(1), homes.count(2)), (13, 13))    # 26 agents split 13 / 13
         self.assertTrue(all("lite" not in desk.slots_for(v["key"])[0] for v in VERIFIERS))
         self.assertEqual(desk.slots_for("head")[0], "big-a#1")
         self.assertNotEqual(desk.slots_for("auditor")[0].split("#")[1], "1")
@@ -362,7 +370,8 @@ class AgentPlanTests(unittest.TestCase):
         from agents import market_brief
         _, market, _ = first_setup()
         vol = json.loads(market_brief(market, "volume"))
-        self.assertEqual(set(vol["M15"]), {"price", "volume"})
+        self.assertEqual(set(vol["M15"]), {"price", "volume", "indicators"})
+        self.assertEqual(set(vol["M15"]["indicators"]), {"obv"} & set(market["15min"]["ind"]) - {None} or set())
         liq = json.loads(market_brief(market, "liquidity"))
         self.assertIn("key_levels", liq)
         self.assertNotIn("indicators", liq["H1"])
@@ -900,7 +909,7 @@ class DashboardTests(unittest.TestCase):
             self.assertIn(b"API keys & Gemini models", page)
             self.assertIn("current", before)
             self.assertTrue(all(a["slot"] for a in before["agents"]))
-            self.assertEqual(len(before["agents"]), 13)
+            self.assertEqual(len(before["agents"]), 26)
             self.assertIsNone(before["market"])
             self.assertEqual(png[:4], b"\x89PNG")
             self.assertEqual(len(after["market"]["tfs"]), 5)
@@ -1048,3 +1057,56 @@ class MultiMarketTests(unittest.TestCase):
         self.assertEqual(len(out), 1500)
         self.assertEqual(len(pages), 2)
         self.assertTrue(all(a["time"] < b["time"] for a, b in zip(out, out[1:])))
+
+
+class StrategyAndIndicatorTests(unittest.TestCase):
+    def test_new_indicators(self):
+        import indicators as ind
+        up = [{"time": f"2026-09-{1 + i // 24:02d} {i % 24:02d}:00:00", "open": 100 + i, "high": 101.5 + i,
+               "low": 99.5 + i, "close": 101 + i} for i in range(120)]
+        self.assertEqual(ind.ichimoku(up)["position"], "above cloud")
+        self.assertEqual(ind.heikin_ashi_trend(up), "bullish")
+        self.assertGreater(ind.stochastic(up)["k"], 80)
+        self.assertGreater(ind.williams_r(up), -20)
+        self.assertEqual(ind.donchian(up)["breakout"], "up")
+        piv = ind.pivots([{"high": 110, "low": 90, "close": 100}, up[-1]])
+        self.assertEqual((piv["P"], piv["R1"], piv["S1"]), (100, 110, 90))
+        fib = ind.fib_levels(200, 100)
+        self.assertAlmostEqual(fib["0.705"], 129.5)
+
+    def test_strategy_board(self):
+        import strategies
+        setup, market, _ = first_setup()
+        board = strategies.evaluate(market, setup["direction"], setup["timeframes"], setup["entry"])
+        self.assertGreaterEqual(len(board["results"]), 12)
+        self.assertEqual(board["agrees"] + board["against"] + board["neutral"], len(board["results"]))
+        self.assertTrue({"trend", "breakout", "reversion", "smc", "momentum"} <= set(board["groups"]))
+        flipped = strategies.evaluate(market, "SELL" if setup["direction"] == "BUY" else "BUY",
+                                      setup["timeframes"], setup["entry"])
+        self.assertLessEqual(flipped["agrees"], board["agrees"] + board["against"])
+        self.assertTrue(all(" - " in line for line in strategies.brief(board, ("trend",))))
+
+    def test_headline_categories(self):
+        from news import categorize
+        self.assertEqual(categorize("Iran missile strikes lift gold"), ["gold", "world"])
+        self.assertIn("macro", categorize("Powell signals rate cuts as CPI cools"))
+        self.assertIn("crypto", categorize("Bitcoin ETF flows hit record"))
+
+    def test_desk_gets_its_own_data(self):
+        import agents
+        setup, market, _ = first_setup()
+        ctx = {"_market": market, "_board": {}, "instrument": "XAU/USD (gold)", "_expiry": 60,
+               "_extra": {"calendar": ["Thu 12:30 UTC High USD: CPI"],
+                          "headlines": {"world": ["10:00 UTC bbc: Oil jumps on Gulf tensions"]}}}
+        spec = {a["key"]: a for a in agents.ANALYSTS}
+        cal = json.loads(agents.agent_data(spec["calendar"], ctx))
+        self.assertIn("CPI", str(cal["economic_calendar_next_hours"]))
+        world = json.loads(agents.agent_data(spec["world"], ctx))
+        self.assertIn("Gulf", str(world["world_headlines_last_24h"]))
+        self.assertNotIn("M15", world)  # a news agent gets no chart data
+        mom = json.loads(agents.agent_data(spec["momentum"], ctx))
+        self.assertTrue(set(mom["M15"]["indicators"]) <= set(spec["momentum"]["ind"]))
+        self.assertEqual(len(agents.ALL_AGENTS), 26)
+        link = agents.links()
+        self.assertEqual(link["world"]["to"], ["macro_lead"])
+        self.assertIn("head", link["tech_lead"]["to"])

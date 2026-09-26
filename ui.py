@@ -57,9 +57,7 @@ def signal_card(t: dict) -> str:
         lines.append("<i>AI desk offline – rule engine signal only</i>")
     else:
         lines.append(f"🧠 <b>AI Confidence:</b> {t['confidence']}%  {bar(t['confidence'])}")
-        agents = "  ".join(f"{r['icon']}{'✅' if r['vote'] == 'TAKE' else '❌' if r['vote'] == 'SKIP' else '⚠️'}"
-                           for r in t.get("reports", []))
-        lines.append(f"🤖 <b>AI Desk:</b> {t['votes']}/{len(t.get('reports', [])) or 8} agents agree   {agents}")
+        lines.append(f"🤖 <b>AI Desk:</b> {desk_line(t)}")
     lines.append("")
     lines.append("📌 <b>Confluences</b>")
     lines += [f"  • {escape(c)}" for c in t["confluences"][:7]]
@@ -102,6 +100,20 @@ def lot_line(user: dict | None, t: dict, contract: float = 100) -> str:
     return f"💰 <b>Your lot: {lots:.2f}</b>  (risk ${risk_usd:,.2f} = {user.get('risk', 1.0):g}% of ${user['balance']:,.0f})"
 
 
+def desk_line(t: dict) -> str:
+    """How every layer of the AI desk voted, in one line."""
+    reports = t.get("reports", [])
+    if not t.get("per_desk"):
+        agents = " ".join(f"{r['icon']}{'✅' if r['vote'] == 'TAKE' else '❌' if r['vote'] == 'SKIP' else '⚠️'}"
+                          for r in reports)
+        return f"{t.get('votes', 0)}/{len(reports) or 8} agree  {agents}"
+    d, v, b = t["per_desk"], t.get("desk_votes") or {}, t.get("board") or {}
+    out = f"📐 {d.get('tech')} · 🧭 {d.get('strategy')} · 🌍 {d.get('macro')} · leads {v.get('leads')}/3 · verifiers {v.get('verifiers')}/3"
+    if b.get("agrees") is not None:
+        out += f" · 📋 strategies {b['agrees']}✅ {b['against']}❌"
+    return out
+
+
 def signal_caption(t: dict, lot: str = "") -> str:
     """Short version of the signal card that fits a photo caption (Telegram limit: 1024 characters)."""
     bull = t["direction"] == "BUY"
@@ -120,10 +132,8 @@ def signal_caption(t: dict, lot: str = "") -> str:
     if t.get("engine_only"):
         lines.append(f"🤖 Engine score {t['score']}% {bar(t['score'])} · AI offline")
     else:
-        agents = "".join(f"{r['icon']}{'✅' if r['vote'] == 'TAKE' else '❌' if r['vote'] == 'SKIP' else '⚠️'} "
-                         for r in t.get("reports", []))
         lines.append(f"🧠 Confidence {t['confidence']}% {bar(t['confidence'])}")
-        lines.append(f"🤖 {t['votes']}/{len(t.get('reports', [])) or 8} agree  {agents}")
+        lines.append(f"🤖 {desk_line(t)}")
     lines += [f"• {escape(c)}" for c in t["confluences"][:3]]
     if lot:
         lines.append(lot)
@@ -191,8 +201,15 @@ def ai_report(t: dict) -> str:
     for r in t["reports"]:
         if r.get("stage") != last_stage:
             last_stage = r.get("stage")
-            lines.append({1: "<b>Stage 1 · Analysts</b>", 2: "<b>Stage 2 · Verifiers</b>"}.get(last_stage, ""))
+            lines.append({1: "<b>Stage 1 · Analysts</b>", 2: "<b>Stage 2 · Desk leads</b>",
+                          3: "<b>Stage 3 · Verifiers</b>"}.get(last_stage, "") if t.get("per_desk") else
+                         {1: "<b>Stage 1 · Analysts</b>", 2: "<b>Stage 2 · Verifiers</b>"}.get(last_stage, ""))
         vote = {"TAKE": "✅ TAKE", "SKIP": "❌ SKIP"}.get(r["vote"], "⚠️ N/A")
+        if t.get("per_desk") and r.get("stage") == 1:  # 18 analysts: one compact line each
+            lines.append(f"{r['icon']} {escape(r['name'])} — {vote} ({r['score']})"
+                         + (" 🗣 Debate" + (" (changed)" if r.get("changed") else "") if r.get("debate") else "")
+                         + f": <i>{escape(r['summary'][:110])}</i>")
+            continue
         model = f"  <i>[{escape(r['model'])}]</i>" if r.get("model") else ""
         lines.append(f"{r['icon']} <b>{escape(r['name'])}</b> — {vote} ({r['score']}){model}")
         lines.append(f"<i>{escape(r['summary'])}</i>")
@@ -206,7 +223,11 @@ def ai_report(t: dict) -> str:
         lines.append(f"\n✅ <b>Signal Auditor</b> — {'approved' if t['audit']['approve'] else 'vetoed'}")
         if t["audit"].get("note"):
             lines.append(f"<i>{escape(t['audit']['note'])}</i>")
-    return "\n".join(lines)
+    text = "\n".join(lines)
+    while len(text) > 4000 and len(lines) > 5:  # Telegram message limit: drop the oldest detail lines
+        lines.pop(len(lines) // 2)
+        text = "\n".join(lines)
+    return text
 
 
 # ---------- menus ----------
@@ -217,7 +238,7 @@ def main_menu(user: dict, is_admin: bool) -> tuple[str, InlineKeyboardMarkup]:
     text = (
         "🏆 <b>GOLD SMC AI SIGNALS</b> 🏆\n"
         f"{LINE}\n"
-        "🤖 13 AI agents scan <b>🥇 Gold (XAU/USD)</b> and <b>₿ Bitcoin (BTC/USD)</b> on M5 → D1\n"
+        "🤖 26 AI agents scan <b>🥇 Gold (XAU/USD)</b> and <b>₿ Bitcoin (BTC/USD)</b> on M5 → D1\n"
         "💧 Smart Money Concepts · 📊 Volume · 📰 News filter\n"
         "🎯 Auto TP/SL tracking · 📈 Charts · 💰 Lot sizes\n\n"
         f"🔔 Alerts: <b>{'ON' if user.get('subscribed') else 'OFF'}</b>\n"
@@ -376,9 +397,11 @@ HELP = (
     "PDH/PDL, weekly high/low, the Asian range, premium/discount, killzones and volume.\n"
     "3️⃣ A setup needs: higher-timeframe bias + a sweep or structure shift + an OB/FVG to enter from + "
     "a clear path to TP1.\n"
-    "4️⃣ A <b>13-agent AI desk</b> works as a pipeline: 8 analysts (structure, liquidity, order blocks, FVGs, "
-    "volume, price action, indicators, news) → 3 verifiers who cross-check their reports (confluence, risk, "
-    "devil's advocate) → 👑 Head Trader → ✅ Signal Auditor.\n"
+    "4️⃣ A <b>26-agent AI desk</b> works as a pipeline: 18 analysts in 3 desks – 📐 technical (structure, "
+    "liquidity, order blocks, FVGs, volume, candles, momentum, trend, volatility), 🧭 strategy (multi-timeframe, "
+    "ICT/Fibonacci, levels & pivots, trend-following, breakout/reversion) and 🌍 macro (calendar, world events, "
+    "Fed & dollar, intermarket) → 3 desk leads who check them → 3 verifiers (confluence, risk, devil's advocate) "
+    "→ 👑 Head Trader → ✅ Signal Auditor. A signal needs every layer to agree.\n"
     "5️⃣ 📰 No new trades 30 min around high-impact USD news; you get a warning before it.\n"
     "6️⃣ Signals come with a 📈 chart, 💰 your lot size, and are <b>tracked live</b>: entry, TP1/TP2/TP3, "
     "SL, expiry – as replies on the signal.\n"

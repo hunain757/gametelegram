@@ -9,7 +9,9 @@ Each trading style uses three timeframes:
 
 import smc
 import volume
-from indicators import adx, bollinger, ema, macd, rsi, stoch_rsi, supertrend, vwap
+from indicators import (adx, bollinger, cci, donchian, ema, fib_levels, heikin_ashi_trend, ichimoku, macd,
+                        obv_trend, pivots, rsi, rsi_divergence, squeeze, stoch_rsi, stochastic, supertrend, vwap,
+                        williams_r)
 from levels import BUY_SIDE, SELL_SIDE, key_levels
 from patterns import daily_range
 
@@ -49,10 +51,22 @@ def analyze_market(candles_by_tf: dict[str, list[dict]], volume_by_tf: dict[str,
                 "stoch_rsi": stoch_rsi(closes),
                 "bollinger": bollinger(closes),
                 "vwap": vwap(candles, volume_by_tf.get(tf)) if tf in ("5min", "15min") else None,
+                "stochastic": stochastic(candles),
+                "cci": cci(candles),
+                "williams_r": williams_r(candles),
+                "ichimoku": ichimoku(candles),
+                "heikin_ashi": heikin_ashi_trend(candles),
+                "rsi_divergence": rsi_divergence(candles),
+                "donchian": donchian(candles),
+                "squeeze": squeeze(candles),
+                "obv": obv_trend(volume_by_tf.get(tf)),
             },
         }
+        rng = market[tf]["smc"]["range"]
+        market[tf]["fib"] = fib_levels(rng["high"], rng["low"])
     market["levels"] = key_levels(candles_by_tf.get("1day"), candles_by_tf.get("5min"))
     market["adr"] = daily_range(candles_by_tf.get("1day"))
+    market["pivots"] = {k: round(v, 2) for k, v in pivots(candles_by_tf.get("1day")).items()}
     return market
 
 

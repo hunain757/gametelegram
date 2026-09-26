@@ -44,6 +44,7 @@ section h2{margin:0 0 10px;font-size:12px;text-transform:uppercase;letter-spacin
 .edge{stroke:#1d2636;stroke-width:1.1;fill:none}.edge.hot{stroke:var(--gold);stroke-width:2;opacity:.9;transition:stroke .6s}
 .pulse{fill:var(--gold2);filter:drop-shadow(0 0 6px var(--gold))}.pulse.back{fill:#ff8a96;filter:drop-shadow(0 0 6px #f04f5a)}
 .stage{fill:var(--mut);font-size:11px;letter-spacing:1px;text-transform:uppercase}
+.desklabel{fill:#aab4c8;font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase}.kbadge{font-size:9px;font-weight:800}
 #detail .nm{font-size:16px;font-weight:800}#detail .role{color:var(--mut);font-size:12px;margin:2px 0 8px}
 .badge{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;background:#263045;color:var(--mut);font-weight:800;text-transform:uppercase}
 .b-TAKE{background:var(--green);color:#03170d}.b-SKIP{background:#5a1f29;color:#ffc0c8}.b-thinking{background:var(--amber);color:#1a1000}.b-waiting{background:var(--blue);color:#fff}.b-error{background:var(--red);color:#fff}
@@ -74,8 +75,17 @@ background:var(--panel2);border:1px solid var(--line);font-size:13px;animation:f
 @media(max-width:800px){.msg{grid-template-columns:1fr}}
 .banner{padding:12px 16px;border-radius:12px;border:1px solid #6b2a2f;background:#2a1216;color:#ffd0d4;font-size:14px}
 .banner b{color:#fff}.news div{padding:5px 0;border-bottom:1px dashed #19212f;font-size:13px}
+/* detail / directory / board */
+.job{font-size:13px;margin:6px 0}.chips{font-size:12px;margin:6px 0;line-height:1.9}.chip{display:inline-block;background:#1b2436;border:1px solid var(--line);border-radius:99px;padding:0 8px;margin:0 4px 0 0;font-size:11px;color:#b8c3d8}
+.flowline{font-size:12px;color:var(--mut);margin:6px 0 8px;line-height:1.6}.lnk{color:var(--gold2);text-decoration:none}
+.dirwrap{max-height:560px;overflow:auto}.dir td{font-size:12px}.dir tr{cursor:pointer}.dir tr:hover td{background:#131a27}.selrow td{background:#1d190d!important}
+.jobc{max-width:280px;color:#b8c3d8}.dir th{position:sticky;top:0;background:var(--panel);z-index:1}
+.boardwrap{max-height:560px;overflow:auto}.bgroup{margin-bottom:10px}.bgt{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--gold);margin:4px 0}
+.brow{padding:5px 0;border-bottom:1px dashed #19212f;font-size:12.5px}.vchip{margin-right:4px}
+.ncat{font-size:10px;padding:0 6px;border-radius:99px;background:#263045;color:var(--mut);margin-right:4px;text-transform:uppercase}
+.ncat.world{background:#3a1f12;color:#ffb38a}.ncat.macro{background:#12283a;color:#8cc8ff}.ncat.gold{background:#3a2c10;color:var(--gold2)}.ncat.crypto{background:#2a1a3a;color:#d9b3ff}
 /* live review + model health */
-.stages{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:10px 0}
+.stages{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin:10px 0}
 .stg{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px}
 .stg .n{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.8px}.stg .c{font:700 18px ui-monospace,Consolas,monospace}
 .stg.run{border-color:var(--amber);box-shadow:0 0 12px rgba(255,171,26,.25)}.stg.ok{border-color:var(--green)}.stg.err{border-color:var(--red)}
@@ -89,13 +99,13 @@ background:var(--panel2);border:1px solid var(--line);font-size:13px;animation:f
 </head>
 <body>
 <header>
-  <div class="brand"><span style="font-size:24px">🏆</span><div><b>Gold AI Control Room</b><br><small>Gold & Bitcoin · 13-agent desk · local only</small></div></div>
+  <div class="brand"><span style="font-size:24px">🏆</span><div><b>Gold AI Control Room</b><br><small>Gold & Bitcoin · 26-agent desk · local only</small></div></div>
   <div class="symtabs" id="symtabs"></div>
   <div class="ticker"><span class="px" id="px">—</span><span class="src" id="pxsrc">waiting for data</span></div>
   <div class="pills" id="pills"></div>
   <div style="display:flex;gap:8px">
     <button id="scanBtn" onclick="act('scan')">⚡ Scan now</button>
-    <button id="practiceBtn" onclick="act('practice')" title="Run the whole 13-agent desk on live data now – no signal is sent">🎓 Practice AI review</button>
+    <button id="practiceBtn" onclick="act('practice')" title="Run the whole 26-agent desk on live data now – no signal is sent">🎓 Practice AI review</button>
     <button class="alt" id="pingBtn" onclick="act('ping')">🩺 Test agents</button>
   </div>
 </header>
@@ -103,7 +113,7 @@ background:var(--panel2);border:1px solid var(--line);font-size:13px;animation:f
   <div id="banner"></div>
   <div class="row">
     <section><h2><span>🧠 Agent network – how information flows</span><span id="phase"></span></h2>
-      <svg id="net" viewBox="0 0 1240 560"></svg>
+      <svg id="net" viewBox="0 0 1400 940"></svg>
     </section>
     <section id="detail"><h2>🔍 Agent details</h2><div id="detailBody" class="empty">Click any agent in the network.</div>
       <div class="mini" id="mini"></div></section>
@@ -111,6 +121,11 @@ background:var(--panel2);border:1px solid var(--line);font-size:13px;animation:f
   <section><h2><span>💬 Agent conversation – what each agent sends to the next</span>
       <span class="toggles"><label><input type="checkbox" id="onlySel"> only the selected agent</label></span></h2>
     <div id="chat" class="chat"></div></section>
+  <div class="row">
+    <section><h2><span>🗂 Agent directory – every agent, its only job, its data, who it talks to</span><span class="role">click a row</span></h2>
+      <div class="dirwrap" id="directory"></div></section>
+    <section><h2><span>📋 Strategy board</span><span id="boardSum"></span></h2><div class="boardwrap" id="board"></div></section>
+  </div>
   <div class="row">
     <section><h2><span>📈 Live chart</span>
         <span class="tabs" id="tabs"></span></h2>
@@ -160,43 +175,67 @@ const NS = "http://www.w3.org/2000/svg";
 const net = $("net");
 let pos = {};
 function el(tag, attrs, parent){ const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); (parent||net).appendChild(e); return e; }
+const KEYCOL = ["#3d9bff", "#b36bff", "#22c7b8", "#ffab1a"];
+const DESKCOL = {tech: "rgba(61,155,255,.06)", strategy: "rgba(245,197,66,.06)", macro: "rgba(34,199,122,.06)"};
+let deskBoxes = [];
 function layout(agents){
-  pos = {};
-  const col = {0: 75, 1: 330, 2: 640, 3: 870, 4: 1060};
-  pos.engine = {x: col[0], y: 280, w: 130, h: 54, icon: "⚙️", name: "SMC Engine", sub: "finds setups"};
-  const byStage = {}; agents.forEach(a => (byStage[a.stage] = byStage[a.stage] || []).push(a));
-  for (const st of [1,2,3,4]) {
-    const list = byStage[st] || [], gap = st === 1 ? 62 : 110, top = 280 - (list.length - 1) * gap / 2;
-    list.forEach((a, i) => pos[a.key] = {x: col[st], y: top + i * gap, w: st === 1 ? 210 : st === 2 ? 180 : 160, h: 48,
-      icon: a.icon, name: a.name.replace(" Analyst","").replace(" Specialist","").replace(" & Pattern Reader"," Reader"), sub: ""});
+  pos = {}; deskBoxes = [];
+  const X = {0: 70, 1: 300, 2: 610, 3: 840, 4: 1045, 5: 1215}, MID = 470;
+  pos.engine = {x: X[0], y: MID, w: 120, h: 54, icon: "⚙️", name: "SMC Engine", sub: "finds setups"};
+  let y = 100;
+  const desks = state.desks || {};
+  for (const d of Object.keys(desks)) {
+    const members = agents.filter(a => a.stage === 1 && a.desk === d);
+    if (!members.length) continue;
+    const top = y;
+    members.forEach(a => { pos[a.key] = {x: X[1], y, w: 236, h: 38, icon: a.icon, desk: d, key: a.home_key,
+      name: a.name.replace(" Analyst", "").replace(" Specialist", "").replace(" & Pattern Reader", " Reader").replace(" Strategist", ""), sub: ""}; y += 44; });
+    deskBoxes.push({d, top: top - 48, bottom: y - 44 + 8, label: desks[d].icon + " " + desks[d].name + " · " + members.length});
+    const lead = agents.find(a => a.stage === 2 && a.desk === d);
+    if (lead) pos[lead.key] = {x: X[2], y: (top + y - 44) / 2, w: 218, h: 48, icon: lead.icon, key: lead.home_key, name: lead.name, sub: ""};
+    y += 58;
   }
-  pos.telegram = {x: 1185, y: 280, w: 100, h: 48, icon: "📨", name: "Telegram", sub: "signal out"};
+  const ver = agents.filter(a => a.stage === 3);
+  ver.forEach((a, i) => pos[a.key] = {x: X[3], y: MID + (i - (ver.length - 1) / 2) * 130, w: 180, h: 48, icon: a.icon, key: a.home_key, name: a.name, sub: ""});
+  agents.filter(a => a.stage >= 4).forEach(a => pos[a.key] = {x: X[a.stage], y: MID, w: 150, h: 52, icon: a.icon, key: a.home_key, name: a.name, sub: ""});
+  pos.telegram = {x: 1335, y: MID, w: 96, h: 48, icon: "📨", name: "Telegram", sub: "signal out"};
 }
 const EDGES = [];
 function buildNet(agents){
   net.textContent = ""; EDGES.length = 0; layout(agents);
-  const stageNames = state.stages || [];
-  [[75,"Engine"],[330,stageNames[0]],[640,stageNames[1]],[870,stageNames[2]],[1060,stageNames[3]],[1185,"Output"]].forEach(([x,t]) =>
-    el("text", {x, y: 18, "text-anchor":"middle", class:"stage"}).textContent = (t || "").replace("Stage ", "S"));
-  const an = agents.filter(a => a.stage === 1).map(a => a.key), ve = agents.filter(a => a.stage === 2).map(a => a.key);
+  const st = state.stages || [];
+  [[70,"Engine"],[300,st[0]],[610,st[1]],[840,st[2]],[1045,st[3]],[1215,st[4]],[1335,"Output"]].forEach(([x,t]) =>
+    el("text", {x, y: 22, "text-anchor":"middle", class:"stage"}).textContent = (t || "").replace("Stage ", "S"));
+  deskBoxes.forEach(b => {
+    el("rect", {x: 168, y: b.top, width: 560, height: b.bottom - b.top + 19, rx: 14, fill: DESKCOL[b.d], stroke: "#1f2838"});
+    el("text", {x: 182, y: b.top + 17, class: "desklabel"}).textContent = b.label;
+  });
   const pairs = [];
-  an.forEach(k => pairs.push(["engine", k]));
-  an.forEach(a => ve.forEach(v => pairs.push([a, v])));
-  an.concat(ve).forEach(k => pairs.push([k, "head"]));
-  pairs.push(["head","auditor"], ["auditor","telegram"]);
+  agents.forEach(a => { (a.receives || []).forEach(src => { if (src === "engine") pairs.push(["engine", a.key]); });
+                        (a.sends || []).forEach(dst => pairs.push([a.key, dst])); });
   const g = el("g", {});
+  const seen = new Set();
   pairs.forEach(([a,b]) => {
-    const p = pos[a], q = pos[b]; if (!p || !q) return;
+    const p = pos[a], q = pos[b]; if (!p || !q || seen.has(a + ">" + b)) return; seen.add(a + ">" + b);
     const x1 = p.x + p.w/2, y1 = p.y, x2 = q.x - q.w/2, y2 = q.y, mx = (x1 + x2) / 2;
     const d = `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`;
     EDGES.push({a, b, path: el("path", {d, class: "edge"}, g)});
   });
   for (const k in pos) {
     const p = pos[k], n = el("g", {class: "node", id: "n-" + k, transform: `translate(${p.x - p.w/2},${p.y - p.h/2})`});
-    el("rect", {width: p.w, height: p.h, rx: 10}, n);
-    el("text", {x: 12, y: 21}, n).textContent = p.icon + "  " + p.name;
-    el("text", {x: 12, y: 38, class: "sub", id: "s-" + k}, n).textContent = p.sub;
+    el("rect", {width: p.w, height: p.h, rx: 9}, n);
+    if (p.key) { el("rect", {width: 4, height: p.h - 12, x: 3, y: 6, rx: 2, fill: KEYCOL[(p.key - 1) % 4], class: "keybar"}, n);
+                 el("text", {x: p.w - 8, y: 14, "text-anchor": "end", class: "kbadge", fill: KEYCOL[(p.key - 1) % 4]}, n).textContent = "K" + p.key; }
+    const small = p.h < 44;
+    el("text", {x: 12, y: small ? 16 : 21}, n).textContent = p.icon + "  " + p.name;
+    el("text", {x: 12, y: small ? 31 : 38, class: "sub", id: "s-" + k}, n).textContent = p.sub;
     n.onclick = () => { selected = k; render(); renderChat(state.flows || []); };
+  }
+  const lg = el("g", {transform: "translate(20, 928)"});
+  for (let k = 1; k <= (state.keys || 1); k++) {
+    el("rect", {x: (k - 1) * 150, y: -9, width: 10, height: 10, rx: 2, fill: KEYCOL[(k - 1) % 4]}, lg);
+    el("text", {x: (k - 1) * 150 + 16, y: 0, class: "stage"}, lg).textContent =
+      `API key ${k}: ${agents.filter(a => a.home_key === k).length} agents`;
   }
 }
 function paintNodes(agents){
@@ -245,14 +284,20 @@ function renderChat(flows){
   H.chat = list.length ? list.map(f => `<div class="msg ${esc(f.kind)}"><span class="t">${esc(f.t)}</span>
       <span class="who">${esc(who(f.from))} → ${esc(who(f.to))}<span class="kind">${esc(f.kind)}</span></span>
       <span>${esc(f.text)}</span></div>`).join("")
-    : '<div class="empty">No messages yet. Press 🎓 Practice AI review to watch the 13 agents work on live data – or wait for the engine to find a real setup.</div>';
+    : '<div class="empty">No messages yet. Press 🎓 Practice AI review to watch the 26 agents work on live data – or wait for the engine to find a real setup.</div>';
 }
+function link(k){ return `<a href="#" class="lnk" onclick="selected='${k}';render();renderChat(state.flows||[]);return false">${esc(who(k))}</a>`; }
 function renderDetail(agents){
   const a = agents.find(x => x.key === selected);
-  if (!a) { H.detailBody = '<span class="empty">The SMC engine scans M5→D1 every few minutes and hands real setups to the analysts.</span>'; }
+  if (!a) { H.detailBody = '<span class="empty">The SMC engine scans M5→D1 every few minutes and hands real setups to the 18 analysts.</span>'; }
   else {
     const badge = a.status === "done" && a.vote ? a.vote : a.status;
-    H.detailBody = `<div class="nm">${a.icon} ${esc(a.name)}</div><div class="role">Stage ${a.stage} · ${esc(a.role)}</div>
+    const desk = a.desk && state.desks ? state.desks[a.desk] : null;
+    H.detailBody = `<div class="nm">${a.icon} ${esc(a.name)}</div>
+      <div class="role">Stage ${a.stage}${desk ? " · " + desk.icon + " " + esc(desk.name) : ""} · <span style="color:${KEYCOL[(a.home_key - 1) % 4]}">API key ${a.home_key}</span></div>
+      <div class="job"><b>Job:</b> ${esc(a.role)}</div>
+      ${(a.inputs || []).length ? `<div class="chips"><b>Receives data:</b> ${a.inputs.map(x => `<span class="chip">${esc(x)}</span>`).join("")}</div>` : ""}
+      <div class="flowline">⬅ from ${(a.receives || []).map(link).join(", ")}<br>➡ to ${(a.sends || []).map(link).join(", ")}</div>
       <span class="badge b-${esc(badge)}">${esc(badge)}${a.score != null && a.status === "done" ? " " + a.score : ""}</span>
       ${a.score != null ? `<div class="bar"><i style="width:${Math.max(0, Math.min(100, a.score))}%"></i></div>` : ""}
       <div style="margin-top:8px">${esc(a.summary) || '<span class="empty">Waiting for the next setup.</span>'}</div>
@@ -261,6 +306,26 @@ function renderDetail(agents){
   }
   H.mini = agents.map(x => `<div onclick="selected='${x.key}';render()">${x.icon} ${esc(x.name.split(" ")[0])}
      <span class="badge b-${x.status === "done" && x.vote ? x.vote : x.status}" style="float:right">${x.status === "done" && x.vote ? x.vote : x.status}</span></div>`).join("");
+}
+function renderDirectory(s){
+  const desks = s.desks || {};
+  const rows = s.agents.map((a, i) => {
+    const badge = a.status === "done" && a.vote ? a.vote : a.status;
+    return `<tr class="${a.key === selected ? "selrow" : ""}" onclick="selected='${a.key}';render()">
+      <td>${i + 1}</td><td><b>${a.icon} ${esc(a.name)}</b><br><span class="role">${a.desk ? esc(desks[a.desk].icon + " " + desks[a.desk].name) : "S" + a.stage}</span></td>
+      <td class="jobc">${esc(a.role)}</td><td class="jobc">${(a.inputs || []).map(esc).join(", ") || "reports from " + a.receives.map(k => esc(who(k).split(" ").slice(1).join(" "))).join(", ")}</td>
+      <td>${a.sends.map(k => esc(who(k))).join("<br>")}</td>
+      <td><span style="color:${KEYCOL[(a.home_key - 1) % 4]};font-weight:800">K${a.home_key}</span><br><span class="role">${esc(a.model || a.slot || "")}</span></td>
+      <td><span class="badge b-${esc(badge)}">${esc(badge)}${a.score != null && a.status === "done" ? " " + a.score : ""}</span><br><span class="role">${a.seconds != null ? a.seconds + "s" : ""}</span></td></tr>`; }).join("");
+  H.directory = `<table class="dir"><tr><th>#</th><th>Agent</th><th>Only job</th><th>Data it receives</th><th>Sends to</th><th>Key · model</th><th>Now</th></tr>${rows}</table>`;
+}
+function renderBoard(b){
+  if (!b) { H.board = '<div class="empty">The strategy board runs with every AI review (17 classic strategies vote on the setup).</div>'; H.boardSum = ""; return; }
+  H.boardSum = `<span class="pill ok">✅ ${b.agrees}</span> <span class="pill bad">❌ ${b.against}</span> <span class="pill">➖ ${b.neutral}</span> <span class="pill">${esc(b.direction)}</span>`;
+  const groups = {}; b.results.forEach(r => (groups[r.group] = groups[r.group] || []).push(r));
+  H.board = Object.entries(groups).map(([g, list]) => `<div class="bgroup"><div class="bgt">${esc((b.groups[g] || {}).label || g)}</div>` +
+    list.map(r => `<div class="brow"><span class="vchip v-${r.verdict}">${r.verdict === "agrees" ? "✅" : r.verdict === "against" ? "❌" : "➖"}</span>
+      <b>${esc(r.name)}</b> <span class="role">[${esc(r.tf)}]</span><br><span class="role">${esc(r.detail)}</span></div>`).join("") + "</div>").join("");
 }
 
 /* ---------------- live chart ---------------- */
@@ -400,16 +465,17 @@ function render(){
   H.log = s.log.map(l => `<div class="k-${l.kind}"><span class="t">${l.t}</span>${esc(l.text)}</div>`).join("") || '<div class="empty">Waiting for the first scan…</div>';
   H.reviews = s.reviews.length ? `<table><tr><th>Time</th><th>Setup</th><th>Desk</th><th>Result</th></tr>` +
     s.reviews.map(r => `<tr><td>${r.t}</td><td>${esc(r.style)} ${r.direction} @ ${r.entry}<br><span class="role">engine ${r.score}</span></td>
-      <td>${r.reports.map(x => x.icon + (x.vote === "TAKE" ? "✅" : x.vote === "SKIP" ? "❌" : "⚠️")).join(" ")}<br><span class="role">${r.votes}/${r.reports.length}</span></td>
+      <td>${[1, 2, 3].map(st => { const l = r.reports.filter(x => (x.stage || 1) === st); return l.length ? `${["", "Analysts", "Leads", "Verifiers"][st]} <b>${l.filter(x => x.vote === "TAKE").length}/${l.length}</b>` : ""; }).filter(Boolean).join("<br>")}
+        ${r.board ? `<br><span class="role">📋 strategies ${esc(r.board)}</span>` : ""}</td>
       <td class="${r.approved ? "ok" : "bad"}">${r.approved ? "✅ SENT" : "❌ SKIPPED"}<br><span class="role">${esc(r.reason || "")}</span></td></tr>`).join("") + "</table>"
     : '<div class="empty">No setup reviewed yet. The desk only works when the engine finds a real setup.</div>';
   H.trades = s.trades.length ? `<table><tr><th>Trade</th><th>Entry</th><th>SL</th><th>TPs</th><th>Status</th></tr>` +
     s.trades.map(t => `<tr><td>${esc(t.symbol || "")} ${t.direction}<br><span class="role">${esc(t.style_label)}</span></td><td>${t.entry}</td><td>${t.stop_loss}</td>
       <td>${t.tps.join("<br>")}</td><td>${t.status}<br>TP ${t.stage}/3</td></tr>`).join("") + "</table>" : '<div class="empty">No open trades.</div>';
   const cal = (s.calendar || []).map(e => `<div>${e.impact === "High" ? "🔴" : "🟠"} <b>${esc(e.time)}</b> ${esc(e.title)} <span class="role">${esc([e.forecast && "F " + e.forecast, e.previous && "P " + e.previous].filter(Boolean).join(" · "))}</span></div>`).join("");
-  const hl = (s.headlines || []).map(h => `<div>${h.gold ? "🥇" : "🗞"} <span class="role">${esc(h.time)} ${esc(h.source)}</span><br>${h.link ? `<a href="${esc(h.link)}" target="_blank" rel="noopener">${esc(h.title)}</a>` : esc(h.title)}</div>`).join("");
+  const hl = (s.headlines || []).map(h => `<div>${(h.cats || []).map(c => `<span class="ncat ${c}">${c}</span>`).join("")} <span class="role">${esc(h.time)} ${esc(h.source)}</span><br>${h.link ? `<a href="${esc(h.link)}" target="_blank" rel="noopener">${esc(h.title)}</a>` : esc(h.title)}</div>`).join("");
   H.news = (cal ? "<b>📅 Next 48h (USD)</b>" + cal : '<div class="role">📅 No high/medium USD events in the next 48h.</div>') +
-    (hl ? "<br><b>🗞 Headlines</b>" + hl : `<div class="role">🗞 ${s.news_error ? "Headlines unavailable: " + esc(s.news_error.slice(0, 140)) : "No gold/USD headlines in the last 24h yet."}</div>`);
+    (hl ? "<br><b>🗞 Headlines</b>" + hl : `<div class="role">🗞 ${s.news_error ? "Headlines unavailable: " + esc(s.news_error.slice(0, 140)) : "No gold / USD / world / crypto headlines in the last 24h yet."}</div>`);
   H.market = mk ? `<table><tr><th>TF</th><th>Trend</th><th>Last event</th><th>Zone</th><th>RSI</th><th>Candles</th></tr>` +
     mk.tfs.map(r => `<tr><td><b>${r.label}</b></td><td class="${r.trend === "bullish" ? "ok" : r.trend === "bearish" ? "bad" : ""}">${r.trend || "ranging"}</td>
       <td>${esc(r.event || "–")}</td><td>${r.zone}</td><td>${r.rsi ?? "–"}</td><td>${esc(r.patterns || "")}</td></tr>`).join("") + "</table>" +
@@ -420,17 +486,16 @@ function render(){
     "Scans today": st.scans_today, "Twelve Data": st.td_requests + " / 800 requests", "Gemini": `${st.ai_calls} calls (${st.ai_failures} retried)`,
     "Gemini models": models.length ? `${ready}/${models.length} ready` + models.filter(m => !m.ready).map(m => `<br><span class="role">${esc(m.model)}: ${esc(m.reason)}</span>`).join("") : "–",
     "Volume feed": st.volume_ok ? "✅ OK" : "⚠️ unavailable", "News calendar": st.news_ok ? "✅ OK" : "⚠️ unavailable", "Telegram users": st.users,
-    "Signal types": s.settings.styles.join(", "), "Rules": `conf ≥ ${s.settings.min_confidence}%, ≥ ${s.settings.min_votes}/8 analysts, ≥ 2/3 verifiers, auditor OK`,
+    "Signal types": s.settings.styles.join(", "), "Rules": `Head TAKE, conf ≥ ${s.settings.min_confidence}%, ≥ ${Math.round(100 * s.settings.min_votes / 8)}% of analysts, ≥ 2/3 desk leads, ≥ 2/3 verifiers, strategy board not against, auditor OK`,
     "Last error": st.last_error ? `<span class="bad">${esc(st.last_error.slice(0, 160))}</span>` : "none"});
-  renderLive(s); renderKeys(models);
+  renderLive(s); renderKeys(models); renderDirectory(s); renderBoard(s.board);
   const p = s.performance;
   H.perf = p.trades ? kv({"Finished trades": p.trades, "Win rate (TP1+)": p.win_rate + "%", "Total": p.total_r + "R",
     "Wins / losses": p.wins + " / " + p.losses, "Hit TP3": p.tp3}) : '<span class="empty">No finished trades yet</span>';
 }
 function renderLive(s){
-  const cur = s.current, by = Object.fromEntries(s.agents.map(a => [a.key, a]));
-  const stages = [["Analysts", s.agents.filter(a => a.stage === 1)], ["Verifiers", s.agents.filter(a => a.stage === 2)],
-                  ["Head Trader", s.agents.filter(a => a.stage === 3)], ["Auditor", s.agents.filter(a => a.stage === 4)]];
+  const cur = s.current;
+  const stages = (s.stages || []).map((n, i) => [n.replace(/^Stage \d+ · /, ""), s.agents.filter(a => a.stage === i + 1)]);
   const all = s.agents, take = all.filter(a => a.status === "done" && a.vote === "TAKE").length,
         skip = all.filter(a => a.status === "done" && a.vote === "SKIP").length, err = all.filter(a => a.status === "error").length;
   const html = (cur ? `<div><b>${esc(cur.label)}</b> ${cur.practice ? '<span class="tag">practice</span>' : ""}</div>` : '<div class="empty">No review yet – press 🎓 Practice AI review or wait for a real setup.</div>') +
@@ -439,7 +504,9 @@ function renderLive(s){
             run = list.some(a => a.status === "thinking");
       return `<div class="stg ${run ? "run" : bad ? "err" : done === list.length && done ? "ok" : ""}"><div class="n">${n}</div><div class="c">${done}/${list.length}</div>
         <div class="bar"><i style="width:${list.length ? 100 * done / list.length : 0}%"></i></div></div>`; }).join("") + `</div>` +
-    `<div class="tally"><span class="ok">✅ TAKE <b>${take}</b></span><span class="bad">❌ SKIP <b>${skip}</b></span><span class="warn">⚠ errors <b>${err}</b></span></div>` +
+    `<div class="tally">${Object.entries(s.desks || {}).map(([d, v]) => { const m = s.agents.filter(a => a.stage === 1 && a.desk === d);
+        return `<span>${v.icon} <b>${m.filter(a => a.status === "done" && a.vote === "TAKE").length}/${m.length}</b></span>`; }).join("")}</div>
+    <div class="tally" style="margin-top:6px"><span class="ok">✅ TAKE <b>${take}</b></span><span class="bad">❌ SKIP <b>${skip}</b></span><span class="warn">⚠ errors <b>${err}</b></span></div>` +
     (cur ? (cur.end == null ? `<div class="verdict run">🧠 Desk is working…</div>`
       : `<div class="verdict ${cur.approved ? "take" : "skip"}">${cur.approved ? "✅ APPROVED – signal " + (cur.practice ? "(practice, not sent)" : "sent") : "❌ REJECTED – no signal"}</div>`) : "");
   H.live_review = html;
