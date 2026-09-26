@@ -1,20 +1,50 @@
-# Gold AI Signal Bot (Telegram)
+# 🏆 Gold SMC AI Signal Bot (Telegram)
 
-A Telegram bot that scans the **gold market (XAU/USD)** with Google Gemini AI and sends a
-BUY/SELL signal **only when there is a strong trade**. If there is no good trade, it stays silent.
+A Telegram bot that scans **gold (XAU/USD)** around the clock with a **Smart Money Concepts engine**,
+**volume analysis** and a **desk of 6 Gemini AI agents**, sends **scalping / intraday / swing** signals
+with entry, SL and 3 TPs, and **tracks every trade live** (entry fill, TP1/TP2/TP3, SL, expiry).
 
 ## How it works
 
-1. Every 15 minutes (configurable) it fetches gold candles for **15min, 1h and 4h** from Twelve Data.
-2. It computes EMA 20/50/200, RSI, ATR, MACD and recent swing high/low for each timeframe.
-3. It sends this data to **Gemini**, which answers "trade / no trade" with entry, SL, TP1, TP2 and confidence.
-4. The bot double-checks the AI answer. It only sends the signal if **all** of these pass:
-   - Confidence ≥ `MIN_CONFIDENCE` (default 70%)
-   - Levels are in the right order (e.g. for BUY: SL < Entry < TP1 ≤ TP2)
-   - Risk:Reward ≥ `MIN_RISK_REWARD` (default 1.5)
-   - Entry is close to the current price
-   - No other signal was sent in the last `COOLDOWN_MINUTES`
-5. It skips scanning while the gold market is closed (weekend).
+```
+every 5 min ─► Twelve Data: XAU/USD M5 · M15 · H1 · H4 · D1   (+ Binance PAXG/USDT volume)
+                │
+                ▼
+        SMC ENGINE (per timeframe)
+        • swings, BOS / CHoCH, trend
+        • order blocks, fair value gaps
+        • liquidity pools, equal highs/lows, liquidity sweeps
+        • premium / discount, sessions & killzones
+        • volume: relative volume, delta (buy/sell pressure), POC & value area
+                │
+                ▼
+        SETUP FINDER (per style)          bias TF → confirm TF → entry TF
+        ⚡ Scalping   H1 → M15 → M5         trigger: CHoCH/BOS or liquidity sweep
+        📊 Intraday   H4 → H1  → M15        entry: order block / FVG retest
+        🌊 Swing      D1 → H4  → H1         SL: beyond POI, sweep wick and nearby liquidity
+                │                            TPs: next liquidity pools (min 1:1.5)
+                ▼ (only setups with confluence score ≥ MIN_ENGINE_SCORE)
+        AI DESK (Gemini, each agent on its own model)
+        🏗 Structure  💧 Liquidity/OB  📊 Volume  ⚙️ Momentum  🛡 Risk   → vote TAKE/SKIP
+        👑 Head Trader reads all 5 reports → final TAKE/SKIP, confidence, fine-tuned levels
+                │
+                ▼ (Head Trader TAKE + confidence ≥ 70 + ≥ 3/5 agents agree)
+        TELEGRAM signal card  ─►  live tracking replies on the signal:
+        ✅ entry filled · 🎯 TP1 (move SL to BE) · 🎯 TP2 · 🏆 TP3 · 🛑 SL · ⌛ expired
+```
+
+## Telegram features
+
+- **Signal cards** with entry / SL / TP1–TP3 (pips and R:R), AI confidence bar, each agent's vote,
+  confluence list and the Head Trader's reasoning
+- Buttons on each signal: **📍 Live Status** (floating pips, TPs hit) and **🧠 AI Desk Report** (every agent's analysis)
+- **Menu** (`/start`): 📡 Active Trades · 📜 History · 📊 Performance (win rate, R) · 🌍 Market Now
+  (structure on every TF, liquidity, order blocks, FVGs, volume) · 🧠 AI Market View · ⚙️ Signal Types
+  (turn scalping / intraday / swing on or off) · 🔔 Alerts on/off · ⚡ Scan now (admin)
+- **Daily report** (Mon–Fri) with win rate and total R
+- Optional **channel** posting (`CHANNEL_ID`)
+
+Commands: `/start` `/menu` `/trades` `/history` `/stats` `/market` `/scan` `/help` `/stop`
 
 ## Keys you need
 
@@ -23,6 +53,8 @@ BUY/SELL signal **only when there is a strong trade**. If there is no good trade
 | `TELEGRAM_BOT_TOKEN` | Telegram → @BotFather → `/newbot` |
 | `GEMINI_API_KEY` | https://aistudio.google.com/apikey |
 | `TWELVEDATA_API_KEY` | https://twelvedata.com (the free plan is enough) |
+
+Volume comes from Binance's public PAXG/USDT market data, which needs no key.
 
 ## Run it on Windows (easiest)
 
@@ -33,37 +65,35 @@ BUY/SELL signal **only when there is a strong trade**. If there is no good trade
 
 To change a key later, delete `.env` and run `start.bat` again (or edit `.env` in Notepad).
 
-## Run it on your PC (manual)
+> If Telegram is blocked on your internet, turn on a VPN (e.g. Cloudflare WARP) before starting the bot,
+> or set `PROXY_URL` in `.env`.
+
+## Run it manually
 
 ```bash
-git clone https://github.com/hunain757/gametelegram.git
-cd gametelegram
 python -m venv venv
 # Windows: venv\Scripts\activate    |  Linux/Mac: source venv/bin/activate
 pip install -r requirements.txt
-copy .env.example .env      # Linux/Mac: cp .env.example .env
-# Open .env and paste your 3 keys
+cp .env.example .env      # then paste your keys into .env
 python bot.py
 ```
 
-Then open your bot on Telegram and send `/start`.
+## 24/7
 
-> ⚠️ Never upload `.env` to GitHub. It is already in `.gitignore`.
+The bot scans only while it is running. To keep it on all the time, run it on a machine that
+stays on (a small VPS or a hosting service). Gold is closed on weekends (Fri ~21:00 → Sun ~22:00 UTC),
+so the bot does not scan then.
 
-## Commands
+## Free-plan limits (handled by the bot)
 
-| Command | What it does |
-|---|---|
-| `/start` | Subscribe to signals |
-| `/stop` | Unsubscribe |
-| `/status` | Market open/closed, last scan result and the AI's view |
-| `/last` | Show the last signal sent |
-| `/scan` | Scan right now (only `ADMIN_IDS` if set) |
+- **Twelve Data**: 800 requests/day, 8/min. Higher timeframes are cached, so a 5-minute scan uses ~450/day.
+- **Gemini**: ~5 requests/minute *per model*. Each agent uses a different model, busy or overloaded models
+  are skipped automatically, and the AI desk runs only when the engine has found a real setup.
 
-## Settings (`.env`)
+## Settings
 
-See `.env.example`. You can also set `CHANNEL_ID` to post signals to a Telegram channel
-(add the bot as an admin of the channel first).
+All optional settings (styles, scan interval, score / confidence / vote thresholds, R:R, models,
+channel, admins, proxy) are documented in `.env.example`.
 
 ## Tests
 
@@ -72,4 +102,5 @@ python -m unittest discover -s tests -t .
 ```
 
 ---
-⚠️ These signals are not financial advice. AI can be wrong. Always use a stop loss and proper risk management.
+⚠️ These signals are not financial advice. No bot or AI can guarantee profits or catch every move.
+Always use a stop loss and risk only a small part of your account per trade.

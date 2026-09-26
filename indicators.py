@@ -52,29 +52,3 @@ def macd(closes: list[float]) -> dict | None:
         return None
     return {"line": line[-1], "signal": signal[-1], "histogram": line[-1] - signal[-1]}
 
-
-def summarize(candles: list[dict], recent: int = 12) -> dict:
-    """Condense one timeframe into the numbers the AI needs to judge it."""
-    closes = [c["close"] for c in candles]
-    last_n = candles[-20:]
-
-    def last(series):
-        value = series[-1] if series else None
-        return round(value, 2) if value is not None else None
-
-    macd_values = macd(closes)
-    return {
-        "last_close": round(closes[-1], 2),
-        "ema20": last(ema(closes, 20)),
-        "ema50": last(ema(closes, 50)),
-        "ema200": last(ema(closes, 200)),
-        "rsi14": last([rsi(closes)]),
-        "atr14": last([atr(candles)]),
-        "macd": {k: round(v, 3) for k, v in macd_values.items()} if macd_values else None,
-        "swing_high_20": round(max(c["high"] for c in last_n), 2),
-        "swing_low_20": round(min(c["low"] for c in last_n), 2),
-        "recent_candles": [
-            {k: (round(c[k], 2) if k != "time" else c[k]) for k in ("time", "open", "high", "low", "close")}
-            for c in candles[-recent:]
-        ],
-    }
