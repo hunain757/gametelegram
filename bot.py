@@ -147,6 +147,8 @@ class GoldBot:
             self.candles, self.volumes = candles, volumes
             self.market = analyze_market(candles, volumes)
             self.last_scan = datetime.now(timezone.utc)
+            await self.news.refresh()
+            await self.headlines.refresh()
             self.desk.monitor.event(f"💤 Market closed – chart & market data refreshed "
                                     f"(XAU/USD {candles['5min'][-1]['close']:.2f})")
 
@@ -687,6 +689,8 @@ class GoldBot:
             "stages": stages,
             "flows": flows,
             "data_age": self.data_age(),
+            "ai_models": self.desk.pool.status(),
+            "news_error": self.headlines.error if not self.headlines.items else None,
             "calendar": [{"title": e["title"], "impact": e["impact"], "time": e["time"].strftime("%a %H:%M UTC"),
                           "forecast": e["forecast"], "previous": e["previous"]}
                          for e in self.news.upcoming(datetime.now(timezone.utc), 48)][:10],

@@ -306,6 +306,40 @@ class AgentTests(unittest.TestCase):
         self.assertTrue(v.get("ai_down"))
 
 
+class GeminiErrorTests(unittest.TestCase):
+    def test_classify_errors(self):
+        from agents import classify_error
+        day = RuntimeError("429 RESOURCE_EXHAUSTED quotaId: GenerateRequestsPerDayPerProjectPerModel-FreeTier")
+        minute = RuntimeError("429 RESOURCE_EXHAUSTED GenerateRequestsPerMinute... Please retry in 41.7s.")
+        self.assertEqual(classify_error(day)[0], "quota_day")
+        self.assertGreater(classify_error(day)[2], 60)
+        kind, text, wait = classify_error(minute)
+        self.assertEqual((kind, round(wait)), ("quota_min", 43))
+        self.assertEqual(classify_error(RuntimeError("503 UNAVAILABLE high demand"))[0], "busy")
+        self.assertEqual(classify_error(RuntimeError("404 NOT_FOUND no longer available"))[0], "missing")
+        self.assertEqual(classify_error(RuntimeError("400 API key not valid"))[0], "key")
+
+    def test_ping_uses_one_call_per_model_and_backup(self):
+        desk = fake_desk()
+
+        class Models:
+            calls = 0
+
+            async def generate_content(self, model, contents, config):
+                Models.calls += 1
+                if model == "m1":
+                    raise RuntimeError("429 RESOURCE_EXHAUSTED GenerateRequestsPerDayPerProjectPerModel")
+                return types.SimpleNamespace(text='{"ok": true}')
+        desk.client = types.SimpleNamespace(aio=types.SimpleNamespace(models=Models()))
+        results = asyncio.run(desk.ping())
+        self.assertEqual(Models.calls, 2)  # 2 models, not 13 agents
+        self.assertEqual({r["model"]: r["ok"] for r in results}, {"m1": False, "m2": True})
+        self.assertTrue(all(a["status"] == "done" for a in desk.monitor.agents.values()))
+        self.assertEqual(asyncio.run(desk.ping()), [])  # throttled
+        self.assertFalse(desk.pool.status()[0]["ready"])
+        self.assertIn("daily quota", desk.pool.status()[0]["reason"])
+
+
 class ModelPoolTests(unittest.TestCase):
     def test_spreads_and_skips_rate_limited_models(self):
         from agents import ModelPool

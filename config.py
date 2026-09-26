@@ -67,7 +67,8 @@ def load_config() -> Config:
         gemini_api_key=os.environ["GEMINI_API_KEY"],
         twelvedata_api_key=os.environ["TWELVEDATA_API_KEY"],
         gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
-        gemini_fallback_models=_list(os.getenv("GEMINI_FALLBACK_MODELS", "gemini-3.6-flash,gemini-3.5-flash,gemini-flash-latest,gemini-3-flash-preview,gemini-3.7-flash")),
+        gemini_fallback_models=_list(os.getenv("GEMINI_FALLBACK_MODELS", "gemini-3.6-flash,gemini-3.5-flash,gemini-flash-latest,gemini-3-flash-preview,gemini-3.7-flash,"
+                                                           "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-flash-lite-latest")),
         gemini_rpm_per_model=int(os.getenv("GEMINI_RPM_PER_MODEL", "4")),
         symbol=os.getenv("SYMBOL", "XAU/USD"),
         volume_symbol=os.getenv("VOLUME_SYMBOL", "PAXGUSDT"),

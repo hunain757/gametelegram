@@ -62,7 +62,9 @@ ul.pts{margin:6px 0 0;padding-left:18px;color:var(--mut)}
 .log .t{color:#5d6882;margin-right:6px}.k-take{color:var(--green)}.k-skip{color:#ff9aa8}.k-error{color:var(--red)}.k-signal{color:var(--gold);font-weight:700}
 table{width:100%;border-collapse:collapse;font-size:12.5px}td,th{padding:6px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{color:var(--mut);font-weight:600}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:5px 12px;font-size:13px}.kv span:nth-child(odd){color:var(--mut)}
-.empty{color:var(--mut);font-style:italic}.news div{padding:5px 0;border-bottom:1px dashed #19212f;font-size:13px}
+.empty{color:var(--mut);font-style:italic}
+.banner{padding:12px 16px;border-radius:12px;border:1px solid #6b2a2f;background:#2a1216;color:#ffd0d4;font-size:14px}
+.banner b{color:#fff}.news div{padding:5px 0;border-bottom:1px dashed #19212f;font-size:13px}
 </style>
 </head>
 <body>
@@ -76,6 +78,7 @@ table{width:100%;border-collapse:collapse;font-size:12.5px}td,th{padding:6px;bor
   </div>
 </header>
 <main>
+  <div id="banner"></div>
   <div class="row">
     <section><h2><span>🧠 Agent network – how information flows</span><span id="phase"></span></h2>
       <svg id="net" viewBox="0 0 1240 560"></svg>
@@ -171,6 +174,9 @@ function paintNodes(agents){
     let sub = pos[k].sub;
     if (a) {
       if (a.status === "done" && a.vote) { cls += " " + a.vote; sub = `${a.vote} · ${a.score ?? ""}${a.seconds != null ? " · " + a.seconds + "s" : ""}`; }
+      else if (a.status === "done") { cls += " TAKE"; sub = "online ✔" + (a.seconds != null ? " · " + a.seconds + "s" : ""); }
+      else if (a.status === "error") { cls += " error"; sub = "⚠ " + ({quota_day: "daily quota used", quota_min: "rate limit, retrying",
+        busy: "Google busy", key: "key problem", missing: "model missing"}[a.err] || "error"); }
       else { cls += " " + a.status; sub = a.status === "idle" ? "idle" : a.status + "…"; }
     }
     if (k === "engine") sub = state.phase === "scanning" ? "scanning…" : "finds setups";
@@ -301,6 +307,11 @@ function render(){
     st.fail_count ? pill("⚠️ " + st.fail_count + " failed scans", "bad") : "",
   ].join("");
   $("phase").textContent = phase;
+  const models = s.ai_models || [], ready = models.filter(m => m.ready).length;
+  const dayOut = models.filter(m => m.kind === "quota_day");
+  $("banner").innerHTML = models.length && !ready ? `<div class="banner">⛔ <b>AI desk paused:</b> all ${models.length} Gemini models are resting` +
+      (dayOut.length ? ` – the free <b>daily quota</b> is used up. It resets at midnight Pacific time (≈ 07:00 UTC, in ~${Math.max(...dayOut.map(m => m.back_in_min))} min).` : ".") +
+      ` The engine keeps scanning; only very strong engine-only setups are sent meanwhile. Tip: don't press "Test all agents" often – each test uses quota.</div>` : "";
   paintNodes(s.agents); renderDetail(s.agents);
   $("log").innerHTML = s.log.map(l => `<div class="k-${l.kind}"><span class="t">${l.t}</span>${esc(l.text)}</div>`).join("") || '<div class="empty">Waiting for the first scan…</div>';
   $("reviews").innerHTML = s.reviews.length ? `<table><tr><th>Time</th><th>Setup</th><th>Desk</th><th>Result</th></tr>` +
@@ -313,7 +324,8 @@ function render(){
       <td>${t.tps.join("<br>")}</td><td>${t.status}<br>TP ${t.stage}/3</td></tr>`).join("") + "</table>" : '<div class="empty">No open trades.</div>';
   const cal = (s.calendar || []).map(e => `<div>${e.impact === "High" ? "🔴" : "🟠"} <b>${esc(e.time)}</b> ${esc(e.title)} <span class="role">${esc([e.forecast && "F " + e.forecast, e.previous && "P " + e.previous].filter(Boolean).join(" · "))}</span></div>`).join("");
   const hl = (s.headlines || []).map(h => `<div>${h.gold ? "🥇" : "🗞"} <span class="role">${esc(h.time)} ${esc(h.source)}</span><br>${h.link ? `<a href="${esc(h.link)}" target="_blank" rel="noopener">${esc(h.title)}</a>` : esc(h.title)}</div>`).join("");
-  $("news").innerHTML = (cal ? "<b>📅 Next 48h (USD)</b>" + cal : "") + (hl ? "<br><b>🗞 Headlines</b>" + hl : "") || '<span class="empty">No news loaded yet.</span>';
+  $("news").innerHTML = (cal ? "<b>📅 Next 48h (USD)</b>" + cal : '<div class="role">📅 No high/medium USD events in the next 48h.</div>') +
+    (hl ? "<br><b>🗞 Headlines</b>" + hl : `<div class="role">🗞 ${s.news_error ? "Headlines unavailable: " + esc(s.news_error.slice(0, 140)) : "No gold/USD headlines in the last 24h yet."}</div>`);
   $("market").innerHTML = s.market ? `<table><tr><th>TF</th><th>Trend</th><th>Last event</th><th>Zone</th><th>RSI</th><th>Candles</th></tr>` +
     s.market.tfs.map(r => `<tr><td><b>${r.label}</b></td><td class="${r.trend === "bullish" ? "ok" : r.trend === "bearish" ? "bad" : ""}">${r.trend || "ranging"}</td>
       <td>${esc(r.event || "–")}</td><td>${r.zone}</td><td>${r.rsi ?? "–"}</td><td>${esc(r.patterns || "")}</td></tr>`).join("") + "</table>" +
@@ -322,6 +334,7 @@ function render(){
   const kv = o => Object.entries(o).map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("");
   $("system").innerHTML = kv({"Uptime": st.uptime, "Price source": age ? esc(age.source) : "–", "Last candle": age ? `${age.last_candle} (${age.minutes} min ago)` : "–",
     "Scans today": st.scans_today, "Twelve Data": st.td_requests + " / 800 requests", "Gemini": `${st.ai_calls} calls (${st.ai_failures} retried)`,
+    "Gemini models": models.length ? `${ready}/${models.length} ready` + models.filter(m => !m.ready).map(m => `<br><span class="role">${esc(m.model)}: ${esc(m.reason)}</span>`).join("") : "–",
     "Volume feed": st.volume_ok ? "✅ OK" : "⚠️ unavailable", "News calendar": st.news_ok ? "✅ OK" : "⚠️ unavailable", "Telegram users": st.users,
     "Signal types": s.settings.styles.join(", "), "Rules": `conf ≥ ${s.settings.min_confidence}%, ≥ ${s.settings.min_votes}/8 analysts, ≥ 2/3 verifiers, auditor OK`,
     "Last error": st.last_error ? `<span class="bad">${esc(st.last_error.slice(0, 160))}</span>` : "none"});

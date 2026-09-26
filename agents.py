@@ -12,6 +12,7 @@ import logging
 import re
 import time
 from collections import deque
+from datetime import datetime, timedelta, timezone
 
 from google import genai
 from google.genai import types
@@ -243,6 +244,35 @@ def parse_json(text: str) -> dict:
     return json.loads(match.group(0))
 
 
+def seconds_until_quota_reset(now: datetime | None = None) -> float:
+    """Gemini free quotas reset at midnight Pacific time (~07:00 UTC in summer, 08:00 in winter)."""
+    now = now or datetime.now(timezone.utc)
+    reset = now.replace(hour=7 if 3 <= now.month <= 10 else 8, minute=5, second=0, microsecond=0)
+    if reset <= now:
+        reset += timedelta(days=1)
+    return (reset - now).total_seconds()
+
+
+def classify_error(error: Exception) -> tuple[str, str, float]:
+    """(kind, friendly text, seconds to rest the model) for a Gemini error."""
+    t = str(error)
+    low = t.lower()
+    if "429" in t or "resource_exhausted" in low or "quota" in low:
+        if "perday" in low or "per_day" in low or "per day" in low or "daily" in low:
+            wait = seconds_until_quota_reset()
+            return "quota_day", f"Free daily quota used up – resets in ~{int(wait // 3600)}h {int(wait % 3600 // 60)}m", wait
+        m = re.search(r"retry in ([\d.]+)s", t)
+        wait = float(m.group(1)) + 1 if m else 60.0
+        return "quota_min", f"Per-minute limit hit – free again in {int(wait)}s", wait
+    if "503" in t or "unavailable" in low or "overloaded" in low or "high demand" in low:
+        return "busy", "Google model overloaded right now – switched to another model", 30.0
+    if "404" in t or "not_found" in low or "no longer available" in low:
+        return "missing", "Model not available for this key", 86400.0
+    if "api key" in low or "api_key" in low or "401" in t or "403" in t or "permission" in low:
+        return "key", "Gemini key rejected – check GEMINI_API_KEY", 3600.0
+    return "other", t[:140], 30.0
+
+
 class ModelPool:
     """Spreads calls over several Gemini models and respects the free plan's per-model rate limit.
 
@@ -255,6 +285,7 @@ class ModelPool:
         self.rpm = rpm
         self.calls = {m: deque() for m in models}
         self.cool_until = {m: 0.0 for m in models}
+        self.last_error: dict[str, dict] = {}
 
     def _ready_at(self, m: str, now: float) -> float:
         q = self.calls[m]
@@ -278,9 +309,23 @@ class ModelPool:
             await asyncio.sleep(min(max(min(self._ready_at(m, now) for m in left) - now, 0.5), 65))
 
     def penalize(self, m: str, error: Exception):
-        text = str(error)
-        wait = 86400 if "404" in text else 60 if "429" in text else 30
+        kind, friendly, wait = classify_error(error)
         self.cool_until[m] = time.monotonic() + wait
+        self.last_error[m] = {"kind": kind, "text": friendly, "until": time.time() + wait}
+
+    def status(self) -> list[dict]:
+        """Per-model state for the dashboard."""
+        now_m, now = time.monotonic(), time.time()
+        out = []
+        for m in self.models:
+            err = self.last_error.get(m)
+            cooling = self.cool_until[m] > now_m
+            out.append({"model": m, "ready": not cooling,
+                        "kind": err["kind"] if err and cooling else None,
+                        "reason": err["text"] if err and cooling else "",
+                        "back_in_min": int(max(err["until"] - now, 0) // 60) if err and cooling else 0,
+                        "calls_last_min": len(self.calls[m])})
+        return out
 
 
 class TradingDesk:
@@ -350,36 +395,71 @@ class TradingDesk:
             return report
         except Exception as e:
             log.warning("%s failed: %s", agent["name"], e)
-            mon.agent(agent["key"], "error", summary=str(e)[:160], seconds=round(time.monotonic() - started, 1))
-            mon.event(f"{agent['icon']} {agent['name']} failed: {str(e)[:120]}", "error")
+            kind, friendly, _ = classify_error(e)
+            mon.agent(agent["key"], "error", summary=friendly, err=kind, seconds=round(time.monotonic() - started, 1))
+            mon.event(f"{agent['icon']} {agent['name']} failed: {friendly}", "error")
             return {"key": agent["key"], "name": agent["name"], "icon": agent["icon"], "vote": "ERROR",
                     "stage": 2 if agent in VERIFIERS else 1, "score": 0, "summary": "unavailable", "points": []}
 
+    def agent_models(self) -> dict[str, str]:
+        """Which model each agent tries first."""
+        keys = ["head"] + [a["key"] for a in SPECIALISTS] + ["auditor"]
+        return {k: self.model_for(i) for i, k in enumerate(keys)}
+
     async def ping(self) -> list[dict]:
-        """Health check: every agent sends a tiny request on its own model."""
+        """Health check that spends as little free quota as possible: one tiny request per MODEL
+        (not per agent), then every agent is marked by the model it uses."""
         mon = self.monitor
-        mon.event(f"🩺 Testing all {len(SPECIALISTS) + 2} agents…")
+        now = time.time()
+        if now - getattr(self, "_last_ping", 0) < 90:
+            mon.event("🩺 Agent test was run less than 90 s ago – please wait (it uses your free Gemini quota)", "skip")
+            return []
+        self._last_ping = now
+        mapping = self.agent_models()
+        mon.event(f"🩺 Testing {len(self.pool.models)} Gemini models used by the {len(mapping)} agents…")
+        for key in mapping:
+            mon.agent(key, "thinking", summary="Health check…", vote=None, score=None, points=[], err=None)
 
-        async def one(i: int, key: str, name: str):
-            mon.agent(key, "thinking", summary="Health check…", vote=None, score=None, points=[])
+        async def one(model: str) -> dict:
             started = time.monotonic()
+            if self.pool.cool_until.get(model, 0) > time.monotonic():
+                err = self.pool.last_error.get(model, {})
+                return {"model": model, "ok": False, "kind": err.get("kind"), "error": err.get("text", "resting")}
             try:
-                text, model = await self._ask('Reply with exactly {"ok": true}', preferred=self.model_for(i))
-                ok = bool(parse_json(text).get("ok"))
-                secs = round(time.monotonic() - started, 1)
-                mon.agent(key, "done" if ok else "error", model=model, seconds=secs,
-                          summary=f"Online ✔ answered in {secs}s" if ok else "Unexpected answer")
-                return {"agent": name, "ok": ok, "model": model, "seconds": secs}
+                resp = await self.client.aio.models.generate_content(
+                    model=model, contents='Reply with exactly {"ok": true}',
+                    config=types.GenerateContentConfig(temperature=0, response_mime_type="application/json"))
+                self._count(False)
+                ok = bool(parse_json(resp.text or "").get("ok"))
+                return {"model": model, "ok": ok, "seconds": round(time.monotonic() - started, 1)}
             except Exception as e:
-                mon.agent(key, "error", summary=str(e)[:160])
-                return {"agent": name, "ok": False, "error": str(e)[:160]}
+                self._count(True)
+                self.pool.penalize(model, e)
+                kind, friendly, _ = classify_error(e)
+                return {"model": model, "ok": False, "kind": kind, "error": friendly}
 
-        jobs = [one(0, "head", "Head Trader")] + [one(i + 1, a["key"], a["name"]) for i, a in enumerate(SPECIALISTS)]
-        jobs.append(one(len(SPECIALISTS) + 1, "auditor", "Signal Auditor"))
-        results = await asyncio.gather(*jobs)
-        ok = sum(r["ok"] for r in results)
-        mon.event(f"🩺 Agent test finished: {ok}/{len(results)} online", "take" if ok == len(results) else "error")
-        return results
+        results = {r["model"]: r for r in await asyncio.gather(*(one(m) for m in self.pool.models))}
+        online = [m for m, r in results.items() if r["ok"]]
+        for key, model in mapping.items():
+            r = results.get(model, {})
+            if r.get("ok"):
+                mon.agent(key, "done", vote=None, model=model, seconds=r.get("seconds"), err=None,
+                          summary=f"Online ✔ ({model} answered in {r.get('seconds')}s)")
+            elif online:
+                mon.agent(key, "done", vote=None, model=online[0], err=None,
+                          summary=f"Online ✔ via backup model {online[0]} ({model}: {r.get('error')})")
+            else:
+                mon.agent(key, "error", err=r.get("kind"), summary=r.get("error") or "no model available")
+        ok_agents = len(mapping) if online else 0
+        mon.event(f"🩺 Models online: {len(online)}/{len(results)} → agents working: {ok_agents}/{len(mapping)}",
+                  "take" if online else "error")
+        if not online:
+            kinds = {r.get("kind") for r in results.values()}
+            if "quota_day" in kinds:
+                mon.event("⛔ All Gemini models used their free daily quota. The AI desk resumes after the reset "
+                          "(midnight Pacific ≈ 07:00 UTC). Engine-only signals (score ≥ ENGINE_ONLY_SCORE) still work.",
+                          "error")
+        return list(results.values())
 
     async def review(self, setup: dict, market: dict, session: dict) -> dict:
         """Run the whole desk on one setup. Returns a verdict dict with 'approved'."""
