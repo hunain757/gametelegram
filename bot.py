@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 
 from telegram import Update
 from telegram.constants import ParseMode
+from telegram.error import NetworkError
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from analyzer import Analyzer, validate_signal
@@ -22,6 +23,12 @@ from storage import Storage
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("goldbot")
+
+NETWORK_HELP = (
+    "Could not reach Telegram (api.telegram.org). Telegram is probably blocked on this internet.\n"
+    "Fix: turn on a VPN (e.g. Cloudflare WARP / 1.1.1.1) and run again, or set PROXY_URL in .env\n"
+    "(a SOCKS5/HTTP proxy - the MTProto proxy used by the Telegram app will NOT work)."
+)
 
 DISCLAIMER = "⚠️ Not financial advice. Trade at your own risk and always use a stop loss."
 
@@ -159,7 +166,10 @@ def format_signal(sig: dict, symbol: str) -> str:
 def main():
     cfg = load_config()
     bot = GoldSignalBot(cfg)
-    app = Application.builder().token(cfg.telegram_token).build()
+    builder = Application.builder().token(cfg.telegram_token).connect_timeout(20).read_timeout(20)
+    if cfg.proxy_url:
+        builder = builder.proxy(cfg.proxy_url).get_updates_proxy(cfg.proxy_url)
+    app = builder.build()
 
     app.add_handler(CommandHandler(["start", "subscribe"], bot.cmd_start))
     app.add_handler(CommandHandler(["stop", "unsubscribe"], bot.cmd_stop))
@@ -170,7 +180,10 @@ def main():
     app.job_queue.run_repeating(bot.scheduled_scan, interval=cfg.scan_interval_minutes * 60, first=10)
 
     log.info("Gold signal bot started (scan every %s min)", cfg.scan_interval_minutes)
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    try:
+        app.run_polling(allowed_updates=Update.ALL_TYPES)
+    except NetworkError as e:  # includes TimedOut
+        raise SystemExit(f"\n{NETWORK_HELP}\n(error: {e})")
 
 
 if __name__ == "__main__":

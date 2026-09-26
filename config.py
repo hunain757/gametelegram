@@ -26,6 +26,7 @@ class Config:
     channel_id: str
     admin_ids: list[int]
     data_file: str
+    proxy_url: str
 
 
 def load_config() -> Config:
@@ -53,4 +54,5 @@ def load_config() -> Config:
         channel_id=os.getenv("CHANNEL_ID", ""),
         admin_ids=_int_list(os.getenv("ADMIN_IDS", "")),
         data_file=os.getenv("DATA_FILE", "data.json"),
+        proxy_url=os.getenv("PROXY_URL", ""),
     )
