@@ -152,7 +152,15 @@ Set `DASHBOARD_PORT=0` to turn it off, or `DASHBOARD_OPEN=off` to stop it openin
 | `TELEGRAM_BOT_TOKEN` | Telegram → @BotFather → `/newbot` |
 | `GEMINI_API_KEY` | https://aistudio.google.com/apikey |
 | `GEMINI_API_KEYS` (optional) | more Gemini keys, comma separated – each has its own free quota and the bot rotates across all of them |
+| `MISTRAL_API_KEY` (recommended) | https://console.mistral.ai/api-keys – free "Experiment" plan, roughly 1 billion tokens a month, no card (phone verification) |
+| `GROQ_API_KEY` (optional) | https://console.groq.com/keys – free, very fast, ~1,000 requests a day per model |
 | `TWELVEDATA_API_KEY` | https://twelvedata.com (the free plan is enough) |
+
+**Which AI does the desk use?** With a Mistral (or Groq) key the 18 analysts run on the small/medium models
+and the desk leads, verifiers, Head Trader and Auditor on the largest model; Gemini becomes the automatic
+fallback. Requests to one Mistral key are spaced about 1 per second, which is its free limit. Without those keys
+everything runs on Gemini as before. Limits are per account – a second key helps only if it comes from another
+account.
 
 Volume comes from Binance's public PAXG/USDT market data, which needs no key.
 

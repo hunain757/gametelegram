@@ -69,7 +69,7 @@ class GoldBot:
         self.markets: dict[str, dict] = {}
         self.desk = TradingDesk(cfg.gemini_api_keys, cfg.gemini_model, cfg.min_risk_reward,
                                 cfg.min_confidence, cfg.min_agent_votes, cfg.gemini_fallback_models,
-                                cfg.gemini_rpm_per_model)
+                                cfg.gemini_rpm_per_model, providers=cfg.ai_providers)
         self.desk.pool.restore(self.storage.data.get("ai_pool"))
         self.news = NewsCalendar(cfg.news_currencies)
         self.headlines = Headlines(cfg.news_feeds)
@@ -772,7 +772,9 @@ class GoldBot:
     def _slot_label(self, agent_key: str) -> str:
         from agents import slot_label
         slots = self.desk.slots_for(agent_key)
-        return slot_label(slots[0]) if slots else ""
+        if not slots:
+            return ""
+        return self.desk.label(slots[0]) if hasattr(self.desk, "label") else slot_label(slots[0])
 
     def _market_summary(self, key: str) -> dict | None:
         market = self.markets.get(key)
@@ -826,6 +828,7 @@ class GoldBot:
             "desks": DESKS,
             "board": mon.board,
             "keys": len(getattr(self.desk, "clients", [None])),
+            "key_names": self.desk.key_names() if hasattr(self.desk, "key_names") else ["Gemini 1"],
             "flows": flows,
             "data_age": self.data_age(),
             "data_ages": {i["key"]: self.data_age(i["key"]) for i in self.instruments},

@@ -193,6 +193,7 @@ const NS = "http://www.w3.org/2000/svg";
 const net = $("net");
 let pos = {};
 function el(tag, attrs, parent){ const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); (parent||net).appendChild(e); return e; }
+function keyName(k){ return ((state && state.key_names) || [])[k - 1] || "Key " + k; }
 const KEYCOL = ["#3d9bff", "#b36bff", "#22c7b8", "#ffab1a"];
 const CODECOL = {tech: "#16335a", strategy: "#4a3a10", macro: "#133d2b"};
 const DESKCOL = {tech: "rgba(61,155,255,.06)", strategy: "rgba(245,197,66,.06)", macro: "rgba(34,199,122,.06)"};
@@ -246,7 +247,7 @@ function buildNet(agents){
     const p = pos[k], n = el("g", {class: "node", id: "n-" + k, transform: `translate(${p.x - p.w/2},${p.y - p.h/2})`});
     el("rect", {width: p.w, height: p.h, rx: 9}, n);
     if (p.key) { el("rect", {width: 4, height: p.h - 12, x: 3, y: 6, rx: 2, style: `fill:${KEYCOL[(p.key - 1) % 4]};stroke:none`}, n);
-                 el("text", {x: p.w - 8, y: p.h - 7, "text-anchor": "end", class: "kbadge", style: `fill:${KEYCOL[(p.key - 1) % 4]}`}, n).textContent = "KEY " + p.key; }
+                 el("text", {x: p.w - 8, y: p.h - 7, "text-anchor": "end", class: "kbadge", style: `fill:${KEYCOL[(p.key - 1) % 4]}`}, n).textContent = keyName(p.key).toUpperCase(); }
     const small = p.h < 44, bw = Math.max(26, 7 * String(p.icon).length + 10);
     el("rect", {x: 12, y: small ? 7 : 9, width: bw, height: 16, rx: 4, style: `fill:${CODECOL[p.desk] || "#223049"};stroke:none;animation:none`}, n);
     el("text", {x: 12 + bw / 2, y: small ? 19 : 21, "text-anchor": "middle", class: "codet"}, n).textContent = p.icon;
@@ -259,7 +260,7 @@ function buildNet(agents){
   for (let k = 1; k <= (state.keys || 1); k++) {
     el("rect", {x: (k - 1) * 220, y: -9, width: 10, height: 10, rx: 2, fill: KEYCOL[(k - 1) % 4]}, lg);
     el("text", {x: (k - 1) * 220 + 16, y: 0, class: "stage"}, lg).textContent =
-      `API key ${k}: ${agents.filter(a => a.home_key === k).length} agents`;
+      `${keyName(k)}: ${agents.filter(a => a.home_key === k).length} agents`;
   }
 }
 function paintNodes(agents){
@@ -318,7 +319,7 @@ function renderDetail(agents){
     const badge = a.status === "done" && a.vote ? a.vote : a.status;
     const desk = a.desk && state.desks ? state.desks[a.desk] : null;
     H.detailBody = `<div class="nm"><span class="codeb ${a.desk || ""}">${esc(a.icon)}</span> ${esc(a.name)}</div>
-      <div class="role">Stage ${a.stage}${desk ? " · " + esc(desk.name) : ""} · <span style="color:${KEYCOL[(a.home_key - 1) % 4]}">API key ${a.home_key}</span></div>
+      <div class="role">Stage ${a.stage}${desk ? " · " + esc(desk.name) : ""} · <span style="color:${KEYCOL[(a.home_key - 1) % 4]}">${esc(keyName(a.home_key))}</span></div>
       <div class="job"><b>Job:</b> ${esc(a.role)}</div>
       ${a.record && a.record.n ? `<div class="job"><b>Track record:</b> right ${a.record.accuracy}% of ${a.record.n} finished signals · vote weight ${a.record.weight.toFixed(2)}</div>` : '<div class="role">Track record: builds up after finished signals</div>'}
       ${(a.inputs || []).length ? `<div class="chips"><b>Receives data:</b> ${a.inputs.map(x => `<span class="chip">${esc(x)}</span>`).join("")}</div>` : ""}
@@ -340,7 +341,7 @@ function renderDirectory(s){
       <td>${i + 1}</td><td><span class="codeb ${a.desk || ""}">${esc(a.icon)}</span> <b>${esc(a.name)}</b><br><span class="role">${a.desk ? esc(desks[a.desk].name) : "Stage " + a.stage}</span></td>
       <td class="jobc">${esc(a.role)}</td><td class="jobc">${(a.inputs || []).map(esc).join(", ") || "reports from " + a.receives.map(k => esc(who(k).split(" ").slice(1).join(" "))).join(", ")}</td>
       <td>${a.sends.map(k => esc(who(k))).join("<br>")}</td>
-      <td><span style="color:${KEYCOL[(a.home_key - 1) % 4]};font-weight:800">K${a.home_key}</span><br><span class="role">${esc(a.model || a.slot || "")}</span></td>
+      <td><span style="color:${KEYCOL[(a.home_key - 1) % 4]};font-weight:800">${esc(keyName(a.home_key))}</span><br><span class="role">${esc(a.model || a.slot || "")}</span></td>
       <td>${a.record && a.record.n ? `<b>${a.record.accuracy}%</b><br><span class="role">${a.record.n} signals · w ${a.record.weight.toFixed(2)}</span>` : '<span class="role">–</span>'}</td>
       <td><span class="badge b-${esc(badge)}">${esc(badge)}${a.score != null && a.status === "done" ? " " + a.score : ""}</span><br><span class="role">${a.seconds != null ? a.seconds + "s" : ""}</span></td></tr>`; }).join("");
   H.directory = `<table class="dir"><tr><th>#</th><th>Agent</th><th>Only job</th><th>Data it receives</th><th>Sends to</th><th>Key · model</th><th>Record</th><th>Now</th></tr>${rows}</table>`;
@@ -486,10 +487,10 @@ function render(){
   $("phase").textContent = phase;
   const models = s.ai_models || [], ready = models.filter(m => m.ready).length;
   const dayOut = models.filter(m => m.kind === "quota_day");
-  H.banner = models.length && !ready ? `<div class="banner"><b>AI desk paused:</b> all ${models.length} Gemini models are resting` +
+  H.banner = models.length && !ready ? `<div class="banner"><b>AI desk paused:</b> all ${models.length} AI model slots are resting` +
       (dayOut.length ? ` – the free <b>daily quota</b> is used up. It resets at midnight Pacific time (≈ 07:00 UTC, in ~${Math.max(...dayOut.map(m => m.back_in_min))} min).` : ".") +
       ` The engine keeps scanning; only very strong engine-only setups are sent meanwhile. Tip: don't press "Test all agents" often – each test uses quota.</div>`
-    : dayOut.length * 2 >= models.length ? `<div class="banner warnb"><b>Low on Gemini quota:</b> ${dayOut.length} of ${models.length} model slots used their free daily quota
+    : dayOut.length * 2 >= models.length ? `<div class="banner warnb"><b>Low on AI quota:</b> ${dayOut.length} of ${models.length} model slots used their free daily quota
       (reset ≈ 07:00 UTC). A full review needs about 26–30 requests, so reviews may stop early. Add a key from a <b>different Google account</b>
       (GEMINI_API_KEYS in .env) and avoid pressing Practice / Test often.</div>` : "";
   paintNodes(s.agents); renderDetail(s.agents);
@@ -538,7 +539,7 @@ function renderKpis(s, mk, models){
     k("Total", p.trades ? (p.total_r >= 0 ? "+" : "") + p.total_r + "R" : "–", p.trades ? "TP3 hit " + p.tp3 : "", p.trades ? (p.total_r >= 0 ? "ok" : "bad") : ""),
     k("Desk reviews", (s.reviews || []).length, approved + " approved"),
     k("Gemini today", st.ai_calls, st.ai_failures + " retried"),
-    k("Model slots", models.length ? ready + "/" + models.length : "–", (s.keys || 1) + " API key" + ((s.keys || 1) > 1 ? "s" : ""), models.length && !ready ? "bad" : "ok"),
+    k("Model slots", models.length ? ready + "/" + models.length : "–", esc((s.key_names || []).join(" · ") || "1 API key"), models.length && !ready ? "bad" : "ok"),
   ].join("");
 }
 function renderLive(s){
@@ -563,10 +564,10 @@ function renderKeys(models){
   if (!models.length) { H.keys = '<div class="empty">No Gemini key configured.</div>'; H.keysSum = ""; return; }
   const keys = [...new Set(models.map(m => m.key))].sort();
   H.keysSum = keys.map(k => { const ms = models.filter(m => m.key === k), r = ms.filter(m => m.ready).length;
-    return `<span class="pill ${r ? "ok" : "bad"}">key ${k}: ${r}/${ms.length} ready</span>`; }).join(" ");
+    return `<span class="pill ${r ? "ok" : "bad"}">${esc(keyName(k))}: ${r}/${ms.length} ready</span>`; }).join(" ");
   const used = {}; (state.agents || []).forEach(a => { if (a.slot) (used[a.slot] = used[a.slot] || []).push(`<span class="codeb ${a.desk || ""}">${esc(a.icon)}</span>`); });
   H.keys = `<table><tr><th>Model</th><th>Key</th><th>Tier</th><th>Health</th><th>OK / fail</th><th>Latency</th><th>Sent today</th><th>Last min</th><th>Agents</th></tr>` +
-    models.map(m => `<tr><td>${esc(m.name)}</td><td>key ${m.key}</td><td><span class="tag ${m.lite ? "lite" : "strong"}">${m.lite ? "lite" : "strong"}</span></td>
+    models.map(m => `<tr><td>${esc(m.name)}</td><td>${esc(keyName(m.key))}</td><td><span class="tag ${m.lite ? "lite" : "strong"}">${m.lite ? "lite" : "strong"}</span></td>
       <td><span class="hb ${m.ready ? "g" : "r"}"></span>${m.ready ? "ready" : `<span class="bad">resting${m.back_in_min ? " " + m.back_in_min + " min" : ""}</span><br><span class="role">${esc((m.reason || "").slice(0, 90))}</span>`}</td>
       <td><span class="ok">${m.ok}</span> / <span class="${m.fail ? "bad" : ""}">${m.fail}</span></td><td>${m.latency != null ? m.latency + "s" : "–"}</td><td>${m.today ?? 0}</td>
       <td>${m.calls_last_min}</td><td>${(used[m.model] || []).join(" ")}</td></tr>`).join("") + "</table>";

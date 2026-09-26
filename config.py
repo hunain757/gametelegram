@@ -10,6 +10,25 @@ import news
 load_dotenv()
 
 
+# Other free AI APIs (OpenAI-compatible). Keys from .env; each key gets its own slots in the model pool.
+PROVIDERS = {
+    "Mistral": {"base": "https://api.mistral.ai/v1", "env": "MISTRAL",
+                "models": "mistral-large-latest,mistral-medium-latest,mistral-small-latest", "interval": 1.1},
+    "Groq": {"base": "https://api.groq.com/openai/v1", "env": "GROQ",
+             "models": "openai/gpt-oss-120b,openai/gpt-oss-20b", "interval": 2.1},
+}
+
+
+def _providers() -> list[dict]:
+    out = []
+    for name, p in PROVIDERS.items():
+        keys = list(dict.fromkeys(_list(os.getenv(f"{p['env']}_API_KEY", "")) + _list(os.getenv(f"{p['env']}_API_KEYS", ""))))
+        models = _list(os.getenv(f"{p['env']}_MODELS", p["models"]))
+        for k in keys:
+            out.append({"name": name, "base": p["base"], "key": k, "models": models, "interval": p["interval"]})
+    return out
+
+
 def _list(raw: str) -> list[str]:
     return [x for x in raw.replace(" ", "").split(",") if x]
 
@@ -31,6 +50,7 @@ class Config:
     gemini_model: str
     gemini_fallback_models: list[str]
     gemini_rpm_per_model: int
+    ai_providers: list
     symbol: str
     volume_symbol: str
     styles: list[str]
@@ -84,6 +104,7 @@ def load_config() -> Config:
         gemini_fallback_models=_list(os.getenv("GEMINI_FALLBACK_MODELS", "gemini-3.6-flash,gemini-3.5-flash,gemini-flash-latest,gemini-3-flash-preview,gemini-3.7-flash,"
                                                            "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-flash-lite-latest")),
         gemini_rpm_per_model=int(os.getenv("GEMINI_RPM_PER_MODEL", "4")),
+        ai_providers=_providers(),
         symbol=os.getenv("SYMBOL", "XAU/USD"),
         volume_symbol=os.getenv("VOLUME_SYMBOL", "PAXGUSDT"),
         styles=styles,

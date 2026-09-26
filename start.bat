@@ -10,7 +10,7 @@ venv\Scripts\python -c "import telegram, google.genai, dotenv, socksio, matplotl
 if errorlevel 1 venv\Scripts\python -m pip install -r requirements.txt
 if errorlevel 1 goto failed
 
-if exist .env goto run
+if exist .env goto extras
 echo.
 echo Pehli baar: apni 3 keys paste karein (right-click = paste).
 echo Ye sirf aapke PC par .env file mein save hongi, GitHub par nahi jayengi.
@@ -24,6 +24,18 @@ set /p GX=Aur Gemini keys (optional, comma se alag, warna Enter):
 >> .env echo TWELVEDATA_API_KEY=%TD%
 >> .env echo GEMINI_API_KEYS=%GX%
 echo Keys save ho gayin.
+
+:extras
+rem Mistral: sab se bada free quota. Agar .env mein nahi hai to ek dafa poochho.
+findstr /b /c:"MISTRAL_API_KEY=" .env >nul 2>nul
+if not errorlevel 1 goto run
+echo.
+echo Mistral API key (console.mistral.ai/api-keys se) - sab se zyada free quota deta hai.
+set MK=
+set /p MK=Mistral API key paste karein (ya skip ke liye Enter): 
+if "%MK%"=="" goto run
+>> .env echo MISTRAL_API_KEY=%MK%
+echo Mistral key save ho gayi.
 
 :run
 echo.

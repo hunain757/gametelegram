@@ -23,6 +23,7 @@ import time
 from collections import deque
 from datetime import datetime, timedelta, timezone
 
+import httpx
 from google import genai
 from google.genai import types
 
@@ -540,7 +541,7 @@ def classify_error(error: Exception) -> tuple[str, str, float]:
     t = str(error)
     low = t.lower()
     if "429" in t or "resource_exhausted" in low or "quota" in low:
-        if "perday" in low or "per_day" in low or "per day" in low or "daily" in low:
+        if "perday" in low or "per_day" in low or "per day" in low or "daily" in low or "month" in low:
             wait = seconds_until_quota_reset()
             return "quota_day", f"Free daily quota used up – resets in ~{int(wait // 3600)}h {int(wait % 3600 // 60)}m", wait
         m = re.search(r"retry in ([\d.]+)s", t)
@@ -551,9 +552,9 @@ def classify_error(error: Exception) -> tuple[str, str, float]:
     if "404" in t or "not_found" in low or "no longer available" in low:
         return "missing", "Model not available for this key", 86400.0
     if "api key" in low or "api_key" in low or "401" in t or "403" in t or "permission" in low:
-        return "key", "Gemini key rejected – check GEMINI_API_KEY", 3600.0
-    if "all gemini models are resting" in low:
-        return "exhausted", "All Gemini models are resting (daily quota used or busy)", 0.0
+        return "key", "API key rejected – check the key in .env", 3600.0
+    if "all ai models are resting" in low:
+        return "exhausted", "All AI models are resting (daily quota used or busy)", 0.0
     return "other", t[:140], 30.0
 
 
@@ -568,6 +569,7 @@ class ModelPool:
     def __init__(self, models: list[str], rpm: int = 4):
         self.models = models
         self.rpm = rpm
+        self.rpm_map: dict[str, int] = {}
         self.calls = {m: deque() for m in models}
         self.cool_until = {m: 0.0 for m in models}
         self.last_error: dict[str, dict] = {}
@@ -580,7 +582,7 @@ class ModelPool:
         q = self.calls[m]
         while q and now - q[0] > 60:
             q.popleft()
-        slot = q[0] + 60 if len(q) >= self.rpm else now
+        slot = q[0] + 60 if len(q) >= self.rpm_map.get(m, self.rpm) else now
         return max(slot, self.cool_until[m])
 
     def health(self, m: str) -> float:
@@ -671,7 +673,7 @@ class ModelPool:
                 reason += (" – this key hit the daily limit without being used: it is probably in the SAME Google "
                            "project/account as key 1 (keys of one project share one quota). Make it in another "
                            "Google account.")
-            out.append({"model": slot_label(m), "name": model, "key": k + 1, "lite": "lite" in model,
+            out.append({"model": slot_label(m), "name": model, "key": k + 1, "lite": is_lite(model),
                         "ready": not cooling,
                         "kind": err["kind"] if err and cooling else None,
                         "reason": reason,
@@ -680,6 +682,12 @@ class ModelPool:
                         "ok": self.ok[m], "fail": self.fail[m],
                         "latency": round(self.latency[m], 1) if m in self.latency else None})
         return out
+
+
+def is_lite(model: str) -> bool:
+    """Small / fast models, used for the narrow analyst jobs."""
+    m = model.lower()
+    return any(x in m for x in ("lite", "small", "mini", "-8b", "20b", "flash-8b"))
 
 
 def split_slot(slot: str) -> tuple[str, int]:
@@ -695,17 +703,31 @@ def slot_label(slot: str) -> str:
 
 class TradingDesk:
     def __init__(self, api_key: str | list[str], model: str, min_rr: float, min_confidence: int, min_votes: int,
-                 fallback_models: list[str] | None = None, rpm_per_model: int = 4):
+                 fallback_models: list[str] | None = None, rpm_per_model: int = 4, providers: list[dict] | None = None):
         keys = [api_key] if isinstance(api_key, str) else [k for k in api_key if k]
         self.clients = [genai.Client(api_key=k) for k in keys]
-        self.client = self.clients[0]
+        self.client = self.clients[0] if self.clients else None
+        self.key_info = [{"name": "Gemini", "kind": "gemini", "n": i + 1} for i in range(len(keys))]
+        # Other free APIs (Mistral, Groq – OpenAI-compatible): each key is one more "key" in the pool.
+        extra = []
+        for p in providers or []:
+            self.clients.append(None)
+            n = sum(1 for x in self.key_info if x["name"] == p["name"]) + 1
+            self.key_info.append({"name": p["name"], "kind": "openai", "n": n, "base": p["base"], "key": p["key"],
+                                  "interval": p.get("interval", 1.1)})
+            extra.append((len(self.clients) - 1, list(p["models"])))
+        multi = len(self.clients) > 1
         models = [model] + [m for m in (fallback_models or []) if m != model]
         # Every model on every key is its own "slot" with its own free quota. Neighbouring agents get
         # different keys, so one key's limits never stop the whole desk.
-        slots = [f"{m}#{k + 1}" for m in models for k in range(len(keys))] if len(keys) > 1 else models
+        slots = [f"{m}#{k + 1}" for m in models for k in range(len(keys))] if multi else models
+        slots += [f"{m}#{k + 1}" for k, ms in extra for m in ms]
         self.pool = ModelPool(slots, rpm_per_model)
+        for k, ms in extra:  # these providers limit per account (spaced in _generate), not per model
+            for m in ms:
+                self.pool.rpm_map[f"{m}#{k + 1}"] = 40
         self.base_models = models
-        self.plan = self._make_plan(models, len(keys))
+        self.plan = self._make_plan(models, len(keys), extra, multi)
         self.min_rr = min_rr
         self.min_confidence = min_confidence
         self.min_votes = min_votes
@@ -720,7 +742,28 @@ class TradingDesk:
         self.usage["failures"] += failed
 
     @staticmethod
-    def _make_plan(models: list[str], n_keys: int) -> dict[str, list[str]]:
+    def _make_plan(models: list[str], n_keys: int, extra=(), multi: bool | None = None) -> dict[str, list[str]]:
+        """With other providers (Mistral/Groq) configured they go first – they have far bigger free quotas –
+        and the Gemini plan below becomes the fallback."""
+        base = TradingDesk._gemini_plan(models, n_keys, n_keys > 1 if multi is None else multi)
+        ex = [f"{m}#{k + 1}" for k, ms in extra for m in ms]
+        if not ex:
+            return base
+        lite = [x for x in ex if is_lite(split_slot(x)[0])]
+        strong = [x for x in ex if x not in lite]
+        fast = lite + strong[1:] or strong  # analysts: small + mid models; decisions: the biggest first
+        plan = {}
+        for i, a in enumerate(ANALYSTS):
+            n = i % max(len(fast), 1)
+            plan[a["key"]] = fast[n:] + fast[:n] + [x for x in strong if x not in fast] + base[a["key"]]
+        for i, a in enumerate(LEADS + VERIFIERS + [HEAD, AUDITOR]):
+            order = strong or lite
+            n = i % max(len(order), 1) if a in VERIFIERS else 0
+            plan[a["key"]] = order[n:] + order[:n] + [x for x in lite if x not in order] + base[a["key"]]
+        return plan
+
+    @staticmethod
+    def _gemini_plan(models: list[str], n_keys: int, multi: bool) -> dict[str, list[str]]:
         """Which model × key each agent tries first.
 
         Every agent has a home key. With 2 keys the 26 agents split 13 / 13:
@@ -732,8 +775,10 @@ class TradingDesk:
         Leads, verifiers, Head Trader and Auditor judge everything → the strongest models.
         After its own list an agent can still fall back to any healthy slot on any key.
         """
+        n_keys = max(n_keys, 1)
+
         def slot(m: str, k: int) -> str:
-            return f"{m}#{k + 1}" if n_keys > 1 else m
+            return f"{m}#{k + 1}" if multi else m
 
         def rot(lst: list[str], n: int) -> list[str]:
             n %= max(len(lst), 1)
@@ -757,6 +802,58 @@ class TradingDesk:
     def home_key(self, key: str) -> int:
         slots = self.slots_for(key)
         return split_slot(slots[0])[1] + 1 if slots and "#" in slots[0] else 1
+
+    def provider(self, k: int) -> dict:
+        info = getattr(self, "key_info", None) or []
+        return info[k] if k < len(info) else {"name": "Gemini", "kind": "gemini", "n": k + 1}
+
+    def key_names(self) -> list[str]:
+        return [f"{x['name']} {x['n']}" for x in getattr(self, "key_info", None) or []] or ["Gemini 1"]
+
+    def label(self, slot: str) -> str:
+        model, k = split_slot(slot)
+        if "#" not in slot:
+            return model
+        p = self.provider(k)
+        return f"{model} · {p['name']} key {p['n']}"
+
+    async def _generate(self, slot: str, prompt: str, json_mode: bool = True, config=None,
+                        temperature: float = 0.2) -> str:
+        """One request to whichever provider owns this slot."""
+        name, k = split_slot(slot)
+        p = self.provider(k)
+        if p["kind"] == "openai":
+            await self._space(k, p.get("interval", 1.1))
+            body = {"model": name, "temperature": temperature, "messages": [{"role": "user", "content": prompt}]}
+            if json_mode:
+                body["response_format"] = {"type": "json_object"}
+            async with httpx.AsyncClient(timeout=120) as http:
+                r = await http.post(p["base"].rstrip("/") + "/chat/completions", json=body,
+                                    headers={"Authorization": f"Bearer {p['key']}"})
+            if r.status_code != 200:
+                text = r.text[:300]
+                if r.status_code == 429 and "month" not in text.lower():
+                    text += f" (retry in {r.headers.get('retry-after') or 5}s)"
+                raise RuntimeError(f"{r.status_code} {p['name']}: {text}")
+            content = r.json()["choices"][0]["message"].get("content") or ""
+            return content if isinstance(content, str) else "".join(c.get("text", "") for c in content)
+        config = config or types.GenerateContentConfig(
+            temperature=temperature, response_mime_type="application/json" if json_mode else "text/plain")
+        clients = getattr(self, "clients", None)
+        client = clients[k] if clients and k < len(clients) and clients[k] else self.client
+        resp = await client.aio.models.generate_content(model=name, contents=prompt, config=config)
+        return resp.text or ""
+
+    async def _space(self, k: int, interval: float):
+        """Accounts limited to ~1 request/second (Mistral free): keep requests on one key spaced out."""
+        locks = self.__dict__.setdefault("_locks", {})
+        nxt = self.__dict__.setdefault("_next_at", {})
+        lock = locks.setdefault(k, asyncio.Lock())
+        async with lock:
+            wait = nxt.get(k, 0) - time.monotonic()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            nxt[k] = time.monotonic() + interval
 
     def slots_for(self, key: str) -> list[str]:
         plan = getattr(self, "plan", None) or {}
@@ -785,21 +882,19 @@ class TradingDesk:
         while True:
             model = await self.pool.acquire(preferred or self.pool.models[0], tried)
             if model is None:
-                raise last_error if tried else RuntimeError("all Gemini models are resting (daily quota used or busy)")
+                raise last_error if tried else RuntimeError("all AI models are resting (daily quota used or busy)")
             try:
-                name, k = split_slot(model)
-                client = self.clients[k] if hasattr(self, "clients") else self.client
                 started = time.monotonic()
-                resp = await client.aio.models.generate_content(model=name, contents=prompt, config=config)
+                text = await self._generate(model, prompt, json_mode, config)
                 self._count(False)
                 self.pool.success(model, time.monotonic() - started)
-                return resp.text or "", slot_label(model)
+                return text, self.label(model)
             except Exception as e:
                 self._count(True)
                 last_error = e
                 tried.add(model)
                 self.pool.penalize(model, e)
-                log.warning("Gemini %s failed: %s", model, str(e)[:120])
+                log.warning("AI %s failed: %s", self.label(model), str(e)[:120])
 
 
     def agent_models(self) -> dict[str, str]:
@@ -827,13 +922,10 @@ class TradingDesk:
                 err = self.pool.last_error.get(model, {})
                 return {"model": model, "ok": False, "kind": err.get("kind"), "error": err.get("text", "resting")}
             try:
-                name, k = split_slot(model)
-                client = self.clients[k] if hasattr(self, "clients") else self.client
-                resp = await client.aio.models.generate_content(
-                    model=name, contents='Reply with exactly {"ok": true}',
-                    config=types.GenerateContentConfig(temperature=0, response_mime_type="application/json"))
+                text = await self._generate(model, 'Reply with exactly this JSON object: {"ok": true}', True,
+                                            temperature=0)
                 self._count(False)
-                ok = bool(parse_json(resp.text or "").get("ok"))
+                ok = bool(parse_json(text).get("ok"))
                 return {"model": model, "ok": ok, "seconds": round(time.monotonic() - started, 1)}
             except Exception as e:
                 self._count(True)

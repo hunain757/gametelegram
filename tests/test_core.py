@@ -1190,3 +1190,83 @@ class QuotaHandlingTests(unittest.TestCase):
         first = desk.fake.calls
         asyncio.run(desk.review(setup, market, SESSION))
         self.assertEqual(desk.fake.calls - first, first - 18)  # all 18 analysts reused, the rest asked again
+
+
+class ProviderTests(unittest.TestCase):
+    def make(self):
+        from agents import TradingDesk
+        prov = [{"name": "Mistral", "base": "https://api.mistral.test/v1", "key": "mk",
+                 "models": ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"], "interval": 0}]
+        return TradingDesk(["gk"], "gem-a", 1.5, 70, 5, ["gem-lite"], providers=prov)
+
+    def test_mistral_goes_first_and_gemini_is_fallback(self):
+        from agents import ANALYSTS
+        desk = self.make()
+        self.assertIn("mistral-small-latest#2", desk.pool.models)
+        self.assertIn("gem-a#1", desk.pool.models)
+        firsts = {desk.slots_for(a["key"])[0] for a in ANALYSTS}
+        self.assertEqual(firsts, {"mistral-small-latest#2", "mistral-medium-latest#2"})
+        self.assertEqual(desk.slots_for("head")[0], "mistral-large-latest#2")
+        self.assertTrue(any(s.endswith("#1") for s in desk.slots_for("head")))  # Gemini as fallback
+        self.assertEqual(desk.key_names(), ["Gemini 1", "Mistral 1"])
+        self.assertEqual(desk.label("mistral-large-latest#2"), "mistral-large-latest · Mistral key 1")
+        self.assertEqual(desk.home_key("structure"), 2)
+
+    def test_openai_compatible_call_and_errors(self):
+        import agents
+        desk = self.make()
+        seen = []
+
+        class Resp:
+            def __init__(self, code, data=None, text="", headers=None):
+                self.status_code, self._d, self.text, self.headers = code, data, text, headers or {}
+
+            def json(self):
+                return self._d
+
+        replies = [Resp(200, {"choices": [{"message": {"content": '{"vote": "TAKE", "score": 77}'}}]}),
+                   Resp(429, text='{"message":"Requests rate limit exceeded"}'),
+                   Resp(401, text="Unauthorized")]
+
+        class Client:
+            def __init__(self, **kw):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def post(self, url, json, headers):
+                seen.append((url, json, headers))
+                return replies.pop(0)
+
+        orig = agents.httpx.AsyncClient
+        agents.httpx.AsyncClient = Client
+        try:
+            text = asyncio.run(desk._generate("mistral-large-latest#2", "hi"))
+            with self.assertRaises(RuntimeError) as busy:
+                asyncio.run(desk._generate("mistral-large-latest#2", "hi"))
+            with self.assertRaises(RuntimeError) as bad:
+                asyncio.run(desk._generate("mistral-large-latest#2", "hi"))
+        finally:
+            agents.httpx.AsyncClient = orig
+        self.assertEqual(parse_json(text)["score"], 77)
+        url, body, headers = seen[0]
+        self.assertEqual(url, "https://api.mistral.test/v1/chat/completions")
+        self.assertEqual((body["model"], body["response_format"]["type"]), ("mistral-large-latest", "json_object"))
+        self.assertEqual(headers["Authorization"], "Bearer mk")
+        kind, _, wait = agents.classify_error(busy.exception)
+        self.assertEqual((kind, wait), ("quota_min", 6.0))  # short rest, not a minute
+        self.assertEqual(agents.classify_error(bad.exception)[0], "key")
+
+    def test_config_reads_provider_keys(self):
+        import config
+        os.environ["MISTRAL_API_KEY"] = "abc"
+        try:
+            provs = config._providers()
+        finally:
+            os.environ.pop("MISTRAL_API_KEY")
+        self.assertEqual([(p["name"], p["key"]) for p in provs], [("Mistral", "abc")])
+        self.assertIn("mistral-large-latest", provs[0]["models"])
