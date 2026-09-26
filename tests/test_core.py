@@ -293,6 +293,10 @@ class AgentTests(unittest.TestCase):
         flows = list(desk.monitor.flows)
         self.assertTrue(any(f["from"] == "structure" and f["to"] == "confluence" for f in flows))
         self.assertTrue(any(f["from"] == "head" and f["to"] == "auditor" for f in flows))
+        cur = desk.monitor.current  # live-review panel: which setup, when it started/ended and the outcome
+        self.assertIn(setup["direction"], cur["label"])
+        self.assertTrue(cur["approved"])
+        self.assertGreaterEqual(cur["end"], cur["ts"])
 
     def test_auditor_can_veto(self):
         setup, market, _ = first_setup()
@@ -341,6 +345,45 @@ class DebateTests(unittest.TestCase):
         self.assertEqual(split_slot("m-b#2"), ("m-b", 1))
         self.assertEqual(len(desk.clients), 2)
         self.assertEqual(desk.pool.status()[1]["model"], "m-a · key 2")
+
+
+class AgentPlanTests(unittest.TestCase):
+    def test_plan_spreads_keys_and_tiers(self):
+        from agents import ANALYSTS, VERIFIERS, TradingDesk
+        desk = TradingDesk(["k1", "k2"], "big-a", 1.5, 70, 5, ["big-b", "big-c", "x-lite", "y-lite"])
+        analyst_first = [desk.slots_for(a["key"])[0] for a in ANALYSTS]
+        self.assertTrue(all("lite" in s for s in analyst_first))
+        self.assertEqual(sum(s.endswith("#1") for s in analyst_first), 4)  # half the analysts on each key
+        self.assertTrue(all("lite" not in desk.slots_for(v["key"])[0] for v in VERIFIERS))
+        self.assertEqual(desk.slots_for("head")[0], "big-a#1")
+        self.assertNotEqual(desk.slots_for("auditor")[0].split("#")[1], "1")
+
+    def test_focused_briefs(self):
+        from agents import market_brief
+        _, market, _ = first_setup()
+        vol = json.loads(market_brief(market, "volume"))
+        self.assertEqual(set(vol["M15"]), {"price", "volume"})
+        liq = json.loads(market_brief(market, "liquidity"))
+        self.assertIn("key_levels", liq)
+        self.assertNotIn("indicators", liq["H1"])
+        full = json.loads(market_brief(market))
+        self.assertIn("indicators", full["H1"])
+
+    def test_pool_learns_and_backs_off(self):
+        from agents import ModelPool
+        pool = ModelPool(["a", "b", "c"], rpm=10)
+        pool.success("c", 1.0)
+        pool.success("c", 1.0)
+        pool.penalize("b", RuntimeError("503 UNAVAILABLE"))
+        self.assertEqual(pool.order("a")[:2], ["a", "c"])  # preferred first, then the healthiest
+        first = pool.cool_until["b"] - time.monotonic()
+        pool.penalize("b", RuntimeError("503 UNAVAILABLE"))
+        self.assertGreater(pool.cool_until["b"] - time.monotonic(), first * 1.5)  # growing back-off
+        pool.penalize("a", RuntimeError("429 RESOURCE_EXHAUSTED GenerateRequestsPerDayPerProjectPerModel"))
+        saved = pool.export()
+        fresh = ModelPool(["a", "b", "c"])
+        fresh.restore(saved)
+        self.assertFalse(fresh.status()[0]["ready"])  # still resting after a restart
 
 
 class GeminiErrorTests(unittest.TestCase):
@@ -854,6 +897,9 @@ class DashboardTests(unittest.TestCase):
             page, before, png, after = asyncio.run(run())
             self.assertIn(b"Gold AI Control Room", page)
             self.assertIn(b"Agent network", page)
+            self.assertIn(b"API keys & Gemini models", page)
+            self.assertIn("current", before)
+            self.assertTrue(all(a["slot"] for a in before["agents"]))
             self.assertEqual(len(before["agents"]), 13)
             self.assertIsNone(before["market"])
             self.assertEqual(png[:4], b"\x89PNG")

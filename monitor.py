@@ -19,6 +19,7 @@ class Monitor:
         self.flows: deque = deque(maxlen=400)
         self._seq = 0
         self.phase = "starting"
+        self.current = None  # the review in progress (or the last one), for the live-review panel
         self.agents = {k: {"status": "idle", "vote": None, "score": None, "summary": "", "points": [],
                            "model": None, "at": None, "seconds": None} for k in AGENT_KEYS}
 
@@ -41,3 +42,10 @@ class Monitor:
         self._seq += 1
         self.flows.append({"id": self._seq, "from": src, "to": dst, "t": _now(), "ts": time.time(),
                            "text": text[:300], "kind": kind})
+
+    def review_start(self, label: str, practice: bool = False):
+        self.current = {"label": label, "practice": practice, "ts": time.time(), "end": None, "approved": None}
+
+    def review_end(self, approved: bool):
+        if self.current:
+            self.current.update(end=time.time(), approved=approved)

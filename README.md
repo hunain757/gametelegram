@@ -127,6 +127,27 @@ Set `DASHBOARD_PORT=0` to turn it off, or `DASHBOARD_OPEN=off` to stop it openin
 
 Volume comes from Binance's public PAXG/USDT market data, which needs no key.
 
+### How the agents are spread over your Gemini keys
+
+Every *model × key* pair is its own "slot" with its own rate limit. The desk plans the work so no slot is
+overloaded and the strongest models are kept for the decisions that matter:
+
+| Agents | Models | Keys |
+|---|---|---|
+| 8 analysts (stage 1) | fast *lite* models (big free daily quota) | alternate: key 1, key 2, key 1, … |
+| 3 verifiers (stage 2) | strong *flash* models | spread over all keys |
+| 👑 Head Trader (stage 3) | strongest model | key 1 first |
+| 🛡 Auditor (stage 4) | strongest model | key 2 first (an independent second opinion) |
+
+If a slot hits a limit it rests (short back-off for "busy", until the daily reset for "quota used"), the
+agent automatically moves to the next healthy slot, and resting slots are remembered across restarts.
+Each agent gets only the data of its own specialty (~1.5–2.5k characters instead of the full 12k brief),
+which keeps every call far below the free tokens-per-minute limit.
+
+**How many keys?** 1 key works for light use. 2 keys comfortably cover gold *or* bitcoin all day. For gold
+**and** bitcoin 24/7 plus practice reviews, add a 3rd key: `GEMINI_API_KEYS=key2,key3` in `.env`.
+The dashboard's **🔑 API keys & Gemini models** panel shows every slot, its health, latency and which agents use it.
+
 ## Run it on Windows (easiest)
 
 1. Install Python from https://www.python.org/downloads/ (tick **"Add python.exe to PATH"**).

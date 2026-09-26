@@ -70,6 +70,7 @@ class GoldBot:
         self.desk = TradingDesk(cfg.gemini_api_keys, cfg.gemini_model, cfg.min_risk_reward,
                                 cfg.min_confidence, cfg.min_agent_votes, cfg.gemini_fallback_models,
                                 cfg.gemini_rpm_per_model)
+        self.desk.pool.restore(self.storage.data.get("ai_pool"))
         self.news = NewsCalendar(cfg.news_currencies)
         self.headlines = Headlines(cfg.news_feeds)
         self.scan_lock = asyncio.Lock()
@@ -248,6 +249,7 @@ class GoldBot:
                 log.warning("Could not refresh %s: %s", key, e)
 
         self.last_notes = notes
+        self.save_ai_state()
         log.info("Scan done: %s", " | ".join(notes))
         return notes
 
@@ -770,6 +772,11 @@ class GoldBot:
              "head": "Reads all 11 reports → TAKE/SKIP, confidence, levels",
              "auditor": "Final check of the signal – can veto"}
 
+    def _slot_label(self, agent_key: str) -> str:
+        from agents import slot_label
+        slots = self.desk.slots_for(agent_key)
+        return slot_label(slots[0]) if slots else ""
+
     def _market_summary(self, key: str) -> dict | None:
         market = self.markets.get(key)
         if not market:
@@ -794,7 +801,7 @@ class GoldBot:
 
         mon = self.desk.monitor
         agents = [{"key": a["key"], "name": a["name"], "icon": a["icon"], "role": self.ROLES.get(a["key"], ""),
-                   "stage": stage_no, **dict(mon.agents.get(a["key"], {}))}
+                   "stage": stage_no, "slot": self._slot_label(a["key"]), **dict(mon.agents.get(a["key"], {}))}
                   for stage_no, (_, members) in enumerate(PIPELINE, 1) for a in members]
         stages = [name for name, _ in PIPELINE]
         flows = list(mon.flows)[-250:]
@@ -815,6 +822,7 @@ class GoldBot:
             "data_age": self.data_age(),
             "data_ages": {i["key"]: self.data_age(i["key"]) for i in self.instruments},
             "ai_models": self.desk.pool.status(),
+            "current": self.desk.monitor.current,
             "news_error": self.headlines.error if not self.headlines.items else None,
             "calendar": [{"title": e["title"], "impact": e["impact"], "time": e["time"].strftime("%a %H:%M UTC"),
                           "forecast": e["forecast"], "previous": e["previous"]}
@@ -955,6 +963,11 @@ class GoldBot:
         except Exception:
             log.exception("Dashboard scan failed")
 
+    def save_ai_state(self):
+        """Remember which model/key slots are out of daily quota across restarts."""
+        self.storage.data["ai_pool"] = self.desk.pool.export()
+        self.storage.save()
+
     def track_record(self, style: str, key: str | None = None) -> str:
         """Short summary of how this style's recent signals ended, given to the Head Trader."""
         closed = [t for t in self.storage.closed_trades() if t["style"] == style
@@ -1009,6 +1022,7 @@ class GoldBot:
                                               instrument=inst["ai_name"])
             finally:
                 mon.set_phase("idle")
+                self.save_ai_state()
 
     async def dashboard_practice(self, key: str | None = None):
         try:
@@ -1020,6 +1034,7 @@ class GoldBot:
     async def dashboard_ping(self):
         try:
             await self.desk.ping()
+            self.save_ai_state()
         except Exception:
             log.exception("Agent test failed")
 

@@ -96,19 +96,26 @@ PIPELINE = [("Stage 1 · Analysts", ANALYSTS), ("Stage 2 · Verifiers", VERIFIER
             ("Stage 3 · Decision", [HEAD]), ("Stage 4 · Final check", [AUDITOR])]
 
 SPECIALIST_PROMPT = """You are the {name} on a professional {instrument} trading desk that trades Smart Money Concepts.
-Your job: {focus}
+YOUR ONLY JOB: {focus}
 
-A rule-based engine proposed this setup:
+Rules you must follow:
+1. Judge ONLY your specialty. Eight other specialists cover everything else - do not comment on their areas.
+2. Use ONLY the data below. Every point must quote an exact number, level or candle from it, so the verifiers
+   can check it. Never invent prices.
+3. If your data is missing or does not clearly support the trade, vote SKIP with a score of 40 or less and say why.
+4. Your report is sent to the Confluence Verifier, the Risk Manager and the Devil's Advocate, who will challenge it.
+
+Setup proposed by the engine:
 {setup}
 
-Current market read (per timeframe):
+Your data (per timeframe, only what your specialty needs):
 {market}
 
 Session and upcoming news: {session}
 
-Judge ONLY from your specialty and be strict: say SKIP if your part of the picture is weak.
 Reply with JSON only:
-{{"vote": "TAKE" or "SKIP", "score": 0-100, "summary": "one short sentence", "points": ["up to 3 short points"]}}
+{{"vote": "TAKE" or "SKIP", "score": 0-100, "summary": "one short sentence about YOUR specialty only",
+  "evidence": ["up to 3 exact data points you used, e.g. 'H1 bearish BOS @ 2617.89'"]}}
 """
 
 HEAD_PROMPT = """You are the Head Trader of a professional {instrument} desk that trades Smart Money Concepts.
@@ -166,10 +173,11 @@ Market read (per timeframe):
 
 Session and upcoming news: {session}
 
-The 8 analysts sent you their reports:
+The 8 analysts sent you their reports (with the evidence they cite):
 {reports}
 
-Be strict. Reply with JSON only:
+Check each analyst's evidence against the market data above - call out any claim the data does not support.
+Judge only from your own role. Be strict. Reply with JSON only:
 {{"vote": "TAKE" or "SKIP", "score": 0-100, "summary": "one short sentence", "points": ["up to 3 short points"]}}
 """
 
@@ -216,8 +224,34 @@ def _indicators(ind: dict) -> dict:
     return out
 
 
-def market_brief(market: dict) -> str:
-    """Compact JSON of the per-timeframe read, for prompts."""
+# The slice of the market read each analyst is allowed to see: one specialty, one set of data.
+AGENT_FIELDS = {
+    "structure": ("price", "atr", "trend", "structure_events", "range"),
+    "liquidity": ("price", "atr", "buy_side_liquidity", "sell_side_liquidity", "equal_highs", "equal_lows",
+                  "recent_sweeps", "key_levels"),
+    "orderblocks": ("price", "atr", "order_blocks", "breaker_blocks", "structure_events"),
+    "imbalance": ("price", "atr", "fvgs", "range"),
+    "volume": ("price", "volume"),
+    "price_action": ("price", "atr", "recent_candles", "candle_patterns"),
+    "indicators": ("price", "atr", "indicators"),
+    "session_news": ("price", "atr", "range", "key_levels", "average_daily_range"),
+}
+
+
+def market_brief(market: dict, agent: str | None = None) -> str:
+    """Compact JSON of the per-timeframe read. With `agent`, only that specialist's fields."""
+    fields = AGENT_FIELDS.get(agent)
+    full = _full_brief(market)
+    if not fields:
+        return json.dumps(full, indent=1)
+    out = {k: full[k] for k in ("key_levels", "average_daily_range") if k in fields}
+    for tf, data in full.items():
+        if isinstance(data, dict) and "price" in data:
+            out[tf] = {k: v for k, v in data.items() if k in fields}
+    return json.dumps(out, indent=1)
+
+
+def _full_brief(market: dict) -> dict:
     out = {"key_levels": market.get("levels", {}), "average_daily_range": market.get("adr", {})}
     for tf, m in market.items():
         if tf in ("levels", "adr"):
@@ -245,7 +279,7 @@ def market_brief(market: dict) -> str:
             "volume": v if not v.get("available") else {k: v[k] for k in (
                 "relative_volume_last_closed", "delta", "pressure", "poc", "value_area_high", "value_area_low", "bubbles")},
         }
-    return json.dumps(out, indent=1)
+    return out
 
 
 def setup_brief(setup: dict) -> str:
@@ -255,7 +289,8 @@ def setup_brief(setup: dict) -> str:
 
 
 def _reports_text(reports: list[dict]) -> str:
-    return "\n".join(f"- {r['name']}: {r['vote']} ({r['score']}) - {r['summary']} {r['points']}" for r in reports)
+    return "\n".join(f"- {r['name']}: {r['vote']} ({r['score']}) - {r['summary']} | evidence: {r['points']}"
+                     for r in reports)
 
 
 def parse_json(text: str) -> dict:
@@ -296,10 +331,11 @@ def classify_error(error: Exception) -> tuple[str, str, float]:
 
 
 class ModelPool:
-    """Spreads calls over several Gemini models and respects the free plan's per-model rate limit.
+    """Spreads calls over Gemini "slots" (model × API key) and learns which ones work.
 
-    The free tier allows only a few requests per minute *per model*, so each agent gets its
-    own model, and a busy / rate-limited / overloaded model is skipped in favour of the next.
+    * the free tier limits requests per minute per model, so calls are rate-limited per slot
+    * a failing slot rests: quota errors until the quota resets, overloads with growing back-off
+    * healthy slots (high success rate, no recent failures) are tried first
     """
 
     def __init__(self, models: list[str], rpm: int = 4):
@@ -308,6 +344,10 @@ class ModelPool:
         self.calls = {m: deque() for m in models}
         self.cool_until = {m: 0.0 for m in models}
         self.last_error: dict[str, dict] = {}
+        self.ok = {m: 0 for m in models}
+        self.fail = {m: 0 for m in models}
+        self.streak = {m: 0 for m in models}
+        self.latency: dict[str, float] = {}
 
     def _ready_at(self, m: str, now: float) -> float:
         q = self.calls[m]
@@ -316,9 +356,17 @@ class ModelPool:
         slot = q[0] + 60 if len(q) >= self.rpm else now
         return max(slot, self.cool_until[m])
 
-    async def acquire(self, preferred: str, tried: set) -> str | None:
-        """Next usable model. Waits only for a rate-limit slot, never for a model that is erroring."""
-        order = [preferred] + [m for m in self.models if m != preferred]
+    def health(self, m: str) -> float:
+        return (self.ok[m] + 1) / (self.ok[m] + self.fail[m] + 2) - 0.15 * self.streak[m]
+
+    def order(self, preferred) -> list[str]:
+        pref = [m for m in ([preferred] if isinstance(preferred, str) else preferred or []) if m in self.calls]
+        rest = sorted((m for m in self.models if m not in pref), key=self.health, reverse=True)
+        return pref + rest
+
+    async def acquire(self, preferred, tried: set) -> str | None:
+        """Next usable slot. Waits only for a rate-limit slot, never for a slot that is resting."""
+        order = self.order(preferred)
         while True:
             now = time.monotonic()
             left = [m for m in order if m not in tried and self.cool_until[m] <= now]
@@ -330,23 +378,48 @@ class ModelPool:
                     return m
             await asyncio.sleep(min(max(min(self._ready_at(m, now) for m in left) - now, 0.5), 65))
 
+    def success(self, m: str, seconds: float):
+        self.ok[m] += 1
+        self.streak[m] = 0
+        prev = self.latency.get(m)
+        self.latency[m] = seconds if prev is None else 0.7 * prev + 0.3 * seconds
+
     def penalize(self, m: str, error: Exception):
         kind, friendly, wait = classify_error(error)
+        self.fail[m] += 1
+        self.streak[m] += 1
+        if kind in ("busy", "other"):  # back off harder each time a slot keeps failing
+            wait = min(wait * 2 ** (self.streak[m] - 1), 900)
         self.cool_until[m] = time.monotonic() + wait
         self.last_error[m] = {"kind": kind, "text": friendly, "until": time.time() + wait}
 
+    def export(self) -> dict:
+        """Resting slots in wall-clock time, so a restart does not re-discover dead quotas."""
+        now = time.time()
+        return {m: e for m, e in self.last_error.items() if e["until"] > now and e["kind"] in ("quota_day", "missing")}
+
+    def restore(self, saved: dict | None):
+        now_w, now_m = time.time(), time.monotonic()
+        for m, e in (saved or {}).items():
+            if m in self.cool_until and e.get("until", 0) > now_w:
+                self.cool_until[m] = now_m + (e["until"] - now_w)
+                self.last_error[m] = e
+
     def status(self) -> list[dict]:
-        """Per-model state for the dashboard."""
+        """Per-slot state for the dashboard."""
         now_m, now = time.monotonic(), time.time()
         out = []
         for m in self.models:
             err = self.last_error.get(m)
             cooling = self.cool_until[m] > now_m
-            out.append({"model": slot_label(m), "ready": not cooling,
+            model, k = split_slot(m)
+            out.append({"model": slot_label(m), "name": model, "key": k + 1, "lite": "lite" in model,
+                        "ready": not cooling,
                         "kind": err["kind"] if err and cooling else None,
                         "reason": err["text"] if err and cooling else "",
                         "back_in_min": int(max(err["until"] - now, 0) // 60) if err and cooling else 0,
-                        "calls_last_min": len(self.calls[m])})
+                        "calls_last_min": len(self.calls[m]), "ok": self.ok[m], "fail": self.fail[m],
+                        "latency": round(self.latency[m], 1) if m in self.latency else None})
         return out
 
 
@@ -372,6 +445,8 @@ class TradingDesk:
         # different keys, so one key's limits never stop the whole desk.
         slots = [f"{m}#{k + 1}" for m in models for k in range(len(keys))] if len(keys) > 1 else models
         self.pool = ModelPool(slots, rpm_per_model)
+        self.base_models = models
+        self.plan = self._make_plan(models, len(keys))
         self.min_rr = min_rr
         self.min_confidence = min_confidence
         self.min_votes = min_votes
@@ -385,12 +460,54 @@ class TradingDesk:
         self.usage["calls"] += 1
         self.usage["failures"] += failed
 
+    @staticmethod
+    def _make_plan(models: list[str], n_keys: int) -> dict[str, list[str]]:
+        """Which model × key each agent tries first.
+
+        * the 8 analysts have narrow, data-bound jobs -> fast "lite" models (much bigger free quota),
+          split evenly across the API keys so one key's limits never stop the desk
+        * verifiers, Head Trader and Signal Auditor judge everything -> the strongest models
+        * after its own list an agent can still fall back to any healthy slot
+        """
+        def slot(m: str, k: int) -> str:
+            return f"{m}#{k + 1}" if n_keys > 1 else m
+
+        def rot(lst: list[str], n: int) -> list[str]:
+            n %= max(len(lst), 1)
+            return lst[n:] + lst[:n]
+        lite = [m for m in models if "lite" in m] or models
+        strong = [m for m in models if "lite" not in m] or models
+        plan = {}
+        for i, a in enumerate(ANALYSTS):
+            k = i % n_keys
+            plan[a["key"]] = [slot(m, k) for m in rot(lite, i // n_keys)] + [slot(m, k) for m in strong]
+        for i, v in enumerate(VERIFIERS):
+            k = i % n_keys
+            plan[v["key"]] = [slot(m, k) for m in rot(strong, 1 + i)] + [slot(m, k) for m in lite]
+        plan["head"] = [slot(m, 0) for m in strong] + [slot(m, n_keys - 1) for m in strong]
+        plan["auditor"] = [slot(m, (1 % n_keys)) for m in rot(strong, 1)] + [slot(m, 0) for m in strong]
+        return plan
+
+    def slots_for(self, key: str) -> list[str]:
+        plan = getattr(self, "plan", None) or {}
+        return plan.get(key) or self.pool.models
+
     def model_for(self, i: int) -> str:
-        """Head trader uses the main model; specialists are spread over the others."""
         models = self.pool.models
         return models[i % len(models)]
 
-    async def _ask(self, prompt: str, preferred: str | None = None, json_mode: bool = True) -> tuple[str, str]:
+    async def _ask_json(self, prompt: str, preferred) -> tuple[dict, str]:
+        """Ask for JSON; if a model answers with something unparsable, ask the next slot once."""
+        text, model = await self._ask(prompt, preferred)
+        try:
+            return parse_json(text), model
+        except (ValueError, json.JSONDecodeError):
+            log.warning("Unparsable JSON from %s, asking another model", model)
+            order = self.pool.order(preferred)
+            text, model = await self._ask(prompt, [m for m in order if slot_label(m) != model])
+            return parse_json(text), model
+
+    async def _ask(self, prompt: str, preferred=None, json_mode: bool = True) -> tuple[str, str]:
         """Returns (text, model used)."""
         config = types.GenerateContentConfig(
             temperature=0.2, response_mime_type="application/json" if json_mode else "text/plain")
@@ -402,8 +519,10 @@ class TradingDesk:
             try:
                 name, k = split_slot(model)
                 client = self.clients[k] if hasattr(self, "clients") else self.client
+                started = time.monotonic()
                 resp = await client.aio.models.generate_content(model=name, contents=prompt, config=config)
                 self._count(False)
+                self.pool.success(model, time.monotonic() - started)
                 return resp.text or "", slot_label(model)
             except Exception as e:
                 self._count(True)
@@ -423,15 +542,17 @@ class TradingDesk:
                     mon.message(src[0], agent["key"], src[1])
                 else:
                     mon.message(src, agent["key"])
-            text, model = await self._ask(template.format(name=agent["name"], focus=agent["focus"], **ctx),
-                                          preferred=self.model_for(i + 1))
-            data = parse_json(text)
+            actx = dict(ctx)
+            if template is SPECIALIST_PROMPT and "_market" in ctx:
+                actx["market"] = market_brief(ctx["_market"], agent["key"])
+            data, model = await self._ask_json(template.format(name=agent["name"], focus=agent["focus"], **actx),
+                                               self.slots_for(agent["key"]))
             vote = str(data.get("vote", "SKIP")).upper()
             report = {"key": agent["key"], "name": agent["name"], "icon": agent["icon"], "model": model,
                       "stage": 2 if agent in VERIFIERS else 1,
                       "vote": "TAKE" if vote == "TAKE" else "SKIP", "score": int(data.get("score") or 0),
                       "summary": str(data.get("summary", ""))[:200],
-                      "points": [str(p)[:150] for p in (data.get("points") or [])][:3]}
+                      "points": [str(p)[:150] for p in (data.get("evidence") or data.get("points") or [])][:3]}
             mon.agent(agent["key"], "done", vote=report["vote"], score=report["score"], summary=report["summary"],
                       points=report["points"], model=model, seconds=round(time.monotonic() - started, 1))
             mon.event(f"{agent['icon']} {agent['name']}: {report['vote']} ({report['score']}) – {report['summary']}",
@@ -448,7 +569,7 @@ class TradingDesk:
     def agent_models(self) -> dict[str, str]:
         """Which model each agent tries first."""
         keys = ["head"] + [a["key"] for a in SPECIALISTS] + ["auditor"]
-        return {k: self.model_for(i) for i, k in enumerate(keys)}
+        return {k: self.slots_for(k)[0] for k in keys}
 
     async def ping(self) -> list[dict]:
         """Health check that spends as little free quota as possible: one tiny request per MODEL
@@ -512,14 +633,17 @@ class TradingDesk:
                      practice: bool = False, instrument: str = "XAU/USD (gold)") -> dict:
         """Run the whole desk on one setup. Returns a verdict dict with 'approved'."""
         ctx = {"setup": setup_brief(setup), "market": market_brief(market), "session": json.dumps(session),
-               "history": history, "instrument": instrument}
+               "history": history, "instrument": instrument, "_market": market}
         mon = getattr(self, "monitor", None) or Monitor()
         mon.set_phase("ai_review")
         for a in VERIFIERS + [HEAD, AUDITOR]:
             mon.agent(a["key"], "waiting", summary="Waiting for reports…", vote=None, score=None, points=[])
         mon.event(("🧪 PRACTICE review (no signal will be sent): " if practice else "🧠 AI desk reviewing ")
                   + f"{setup.get('symbol_name', 'XAU/USD')} {setup['style_label']} {setup['direction']} @ {setup['entry']} (engine score {setup['score']})")
+        mon.review_start(f"{setup.get('symbol_name', 'XAU/USD')} {setup['style_label']} {setup['direction']} @ {setup['entry']}",
+                         practice)
         verdict = await self._review(setup, ctx, mon)
+        mon.review_end(verdict["approved"])
         mon.agent("head", "done" if not verdict.get("ai_down") else "error",
                   vote="TAKE" if verdict["approved"] else "SKIP", score=verdict["confidence"],
                   summary=verdict.get("reason") or verdict.get("reject_reason") or "")
@@ -560,7 +684,7 @@ class TradingDesk:
                 text, model = await self._ask(DEBATE_PROMPT.format(
                     instrument=ctx.get("instrument", "XAU/USD (gold)"), name=agent["name"], focus=agent["focus"], own=f"{r['vote']} {r['score']} – {r['summary']}",
                     challenges=challenges, setup=ctx["setup"], market=ctx["market"]),
-                    preferred=self.model_for(ANALYSTS.index(agent) + 1))
+                    preferred=self.slots_for(agent["key"]))
                 d = parse_json(text)
             except Exception as e:
                 kind, friendly, _ = classify_error(e)
@@ -621,7 +745,7 @@ class TradingDesk:
             text, _ = await self._ask(HEAD_PROMPT.format(reports=_reports_text(reports), min_rr=self.min_rr,
                                                          history=ctx.get("history") or "no closed trades yet",
                                                          **{k: v for k, v in ctx.items() if k != "history"}),
-                                      preferred=self.model_for(0))
+                                      preferred=self.slots_for("head"))
             head = parse_json(text)
         except Exception as e:
             # Reports did arrive, so this is not "AI down": decide on the votes alone, with a clear majority.
@@ -678,7 +802,7 @@ class TradingDesk:
             text, model = await self._ask(AUDITOR_PROMPT.format(
                 instrument=ctx.get("instrument", "XAU/USD (gold)"), setup=ctx["setup"], decision=json.dumps({k: head.get(k) for k in ("decision", "confidence", "reason")}),
                 levels=json.dumps(final), reports=_reports_text(reports), min_rr=self.min_rr),
-                preferred=self.model_for(len(SPECIALISTS) + 1))
+                preferred=self.slots_for("auditor"))
             audit = parse_json(text)
             approve = audit.get("approve") is True or str(audit.get("approve")).lower() == "true"
             note = str(audit.get("note", ""))[:200]
@@ -701,5 +825,6 @@ class TradingDesk:
     async def market_view(self, market: dict, session: dict, instrument: str = "XAU/USD (gold)") -> str:
         text, _ = await self._ask(MARKET_VIEW_PROMPT.format(market=market_brief(market), session=json.dumps(session),
                                                             instrument=instrument),
+                                  preferred=self.slots_for("head"),
                                   json_mode=False)
         return text.strip()

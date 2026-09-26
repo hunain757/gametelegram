@@ -74,6 +74,17 @@ background:var(--panel2);border:1px solid var(--line);font-size:13px;animation:f
 @media(max-width:800px){.msg{grid-template-columns:1fr}}
 .banner{padding:12px 16px;border-radius:12px;border:1px solid #6b2a2f;background:#2a1216;color:#ffd0d4;font-size:14px}
 .banner b{color:#fff}.news div{padding:5px 0;border-bottom:1px dashed #19212f;font-size:13px}
+/* live review + model health */
+.stages{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:10px 0}
+.stg{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px}
+.stg .n{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.8px}.stg .c{font:700 18px ui-monospace,Consolas,monospace}
+.stg.run{border-color:var(--amber);box-shadow:0 0 12px rgba(255,171,26,.25)}.stg.ok{border-color:var(--green)}.stg.err{border-color:var(--red)}
+.tally{display:flex;gap:14px;font-size:13px;flex-wrap:wrap}.tally b{font:700 16px ui-monospace,Consolas,monospace}
+.verdict{margin-top:10px;padding:10px;border-radius:10px;font-weight:800;text-align:center}
+.verdict.take{background:#0f2a1f;border:1px solid var(--green);color:var(--green)}.verdict.skip{background:#2b1217;border:1px solid var(--red);color:#ff9aa8}
+.verdict.run{background:#2a2110;border:1px solid var(--amber);color:var(--amber)}
+.hb{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px}.hb.g{background:var(--green);box-shadow:0 0 6px var(--green)}.hb.r{background:var(--red)}
+.tag{font-size:10px;padding:1px 6px;border-radius:99px;background:#263045;color:var(--mut);text-transform:uppercase}.tag.lite{background:#123049;color:#8cc8ff}.tag.strong{background:#3a2c10;color:var(--gold2)}
 </style>
 </head>
 <body>
@@ -117,6 +128,10 @@ background:var(--panel2);border:1px solid var(--line);font-size:13px;animation:f
     <section><h2>⚡ Live activity</h2><div class="log" id="log"></div></section>
   </div>
   <div class="grid3">
+    <section><h2><span>🎬 Live review – stage by stage</span><span id="rvTimer"></span></h2><div id="live_review"></div></section>
+    <section style="grid-column:span 2"><h2><span>🔑 API keys & Gemini models</span><span id="keysSum"></span></h2><div id="keys"></div></section>
+  </div>
+  <div class="grid3">
     <section><h2>🧠 Last AI decisions</h2><div id="reviews"></div></section>
     <section><h2>📡 Open trades</h2><div id="trades"></div></section>
     <section><h2>📰 News & calendar</h2><div id="news" class="news"></div></section>
@@ -127,6 +142,8 @@ background:var(--panel2);border:1px solid var(--line);font-size:13px;animation:f
 </main>
 <script>
 const $ = id => document.getElementById(id);
+// Only touch the DOM when a panel really changed: no flicker, scroll position and text selection survive.
+const H = new Proxy({}, {set(o, k, v){ if (o[k] !== v) { o[k] = v; const e = $(k); if (e) e.innerHTML = v; } return true; }});
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const TFS = [["5min","M5",300],["15min","M15",900],["1h","H1",3600],["4h","H4",14400],["1day","D1",86400]];
 let tf = "15min", tfSec = 900, chartVersion = "", state = null, selected = "head", lastFlowId = 0, lastPx = null;
@@ -157,7 +174,7 @@ function layout(agents){
 }
 const EDGES = [];
 function buildNet(agents){
-  net.innerHTML = ""; EDGES.length = 0; layout(agents);
+  net.textContent = ""; EDGES.length = 0; layout(agents);
   const stageNames = state.stages || [];
   [[75,"Engine"],[330,stageNames[0]],[640,stageNames[1]],[870,stageNames[2]],[1060,stageNames[3]],[1185,"Output"]].forEach(([x,t]) =>
     el("text", {x, y: 18, "text-anchor":"middle", class:"stage"}).textContent = (t || "").replace("Stage ", "S"));
@@ -225,24 +242,24 @@ function who(k){ const a = state && state.agents.find(x => x.key === k); return 
 function renderChat(flows){
   const only = $("onlySel").checked;
   const list = flows.filter(f => f.text && (!only || f.from === selected || f.to === selected)).slice(-80).reverse();
-  $("chat").innerHTML = list.length ? list.map(f => `<div class="msg ${esc(f.kind)}"><span class="t">${esc(f.t)}</span>
+  H.chat = list.length ? list.map(f => `<div class="msg ${esc(f.kind)}"><span class="t">${esc(f.t)}</span>
       <span class="who">${esc(who(f.from))} → ${esc(who(f.to))}<span class="kind">${esc(f.kind)}</span></span>
       <span>${esc(f.text)}</span></div>`).join("")
     : '<div class="empty">No messages yet. Press 🎓 Practice AI review to watch the 13 agents work on live data – or wait for the engine to find a real setup.</div>';
 }
 function renderDetail(agents){
   const a = agents.find(x => x.key === selected);
-  if (!a) { $("detailBody").innerHTML = '<span class="empty">The SMC engine scans M5→D1 every few minutes and hands real setups to the analysts.</span>'; }
+  if (!a) { H.detailBody = '<span class="empty">The SMC engine scans M5→D1 every few minutes and hands real setups to the analysts.</span>'; }
   else {
     const badge = a.status === "done" && a.vote ? a.vote : a.status;
-    $("detailBody").innerHTML = `<div class="nm">${a.icon} ${esc(a.name)}</div><div class="role">Stage ${a.stage} · ${esc(a.role)}</div>
+    H.detailBody = `<div class="nm">${a.icon} ${esc(a.name)}</div><div class="role">Stage ${a.stage} · ${esc(a.role)}</div>
       <span class="badge b-${esc(badge)}">${esc(badge)}${a.score != null && a.status === "done" ? " " + a.score : ""}</span>
       ${a.score != null ? `<div class="bar"><i style="width:${Math.max(0, Math.min(100, a.score))}%"></i></div>` : ""}
       <div style="margin-top:8px">${esc(a.summary) || '<span class="empty">Waiting for the next setup.</span>'}</div>
       ${(a.points||[]).length ? `<ul class="pts">${a.points.map(p => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
-      <div class="role" style="margin-top:8px">${[a.model, a.seconds != null ? a.seconds + "s" : "", a.at ? a.at + " UTC" : ""].filter(Boolean).map(esc).join(" · ")}</div>`;
+      <div class="role" style="margin-top:8px">${[a.model || a.slot, a.seconds != null ? a.seconds + "s" : "", a.at ? a.at + " UTC" : ""].filter(Boolean).map(esc).join(" · ")}</div>`;
   }
-  $("mini").innerHTML = agents.map(x => `<div onclick="selected='${x.key}';render()">${x.icon} ${esc(x.name.split(" ")[0])}
+  H.mini = agents.map(x => `<div onclick="selected='${x.key}';render()">${x.icon} ${esc(x.name.split(" ")[0])}
      <span class="badge b-${x.status === "done" && x.vote ? x.vote : x.status}" style="float:right">${x.status === "done" && x.vote ? x.vote : x.status}</span></div>`).join("");
 }
 
@@ -259,14 +276,22 @@ let chartData = null, priceLines = [], liveBar = null;
 function clearLines(){ priceLines.forEach(l => series.removePriceLine(l)); priceLines = []; }
 function line(price, color, title, style, axis){ priceLines.push(series.createPriceLine({price, color, lineWidth: 1,
   lineStyle: style ?? LightweightCharts.LineStyle.Dashed, axisLabelVisible: axis ?? false, title})); }
+let chartReq = 0, viewKey = "";
 async function loadChart(){
-  const r = await fetch(`/api/candles?tf=${tf}&sym=${sym}`); chartData = await r.json();
-  if (!chartData) { $("legend").textContent = "No market data yet – press ⚡ Scan now"; series.setData([]); return; }
+  const my = ++chartReq, want = tf + sym;
+  let d; try { d = await (await fetch(`/api/candles?tf=${tf}&sym=${sym}`)).json(); } catch (e) { return; }
+  if (my !== chartReq) return;  // a newer request (other TF / symbol) was started meanwhile: drop this stale answer
+  chartData = d;
+  if (!chartData || !chartData.candles.length) { $("legend").textContent = "No market data yet – press ⚡ Scan now"; series.setData([]); series.setMarkers([]); clearLines(); drawOverlay(); return; }
+  const keep = viewKey === want ? chart.timeScale().getVisibleLogicalRange() : null;
   series.setData(chartData.candles); series.setMarkers(chartData.markers);
   liveBar = Object.assign({}, chartData.candles[chartData.candles.length - 1]);
   drawLines();
   const n = chartData.candles.length;
-  chart.timeScale().setVisibleLogicalRange({from: Math.max(n - 140, 0), to: n + 8});
+  // New TF / symbol: jump to the latest candles. Same chart refreshed after a scan: keep the user's zoom & scroll.
+  if (keep) chart.timeScale().setVisibleLogicalRange(keep);
+  else chart.timeScale().setVisibleLogicalRange({from: Math.max(n - 140, 0), to: n + 8});
+  viewKey = want;
   $("legend").textContent = `${chartData.symbol} · ${TFS.find(t => t[0] === tf)[1]} · ${chartData.candles.length} real candles` +
     (chartData.market_open ? " · live" : " · market closed (no live updates)") + " · arrows = BOS/CHoCH · ● = sweep";
   drawOverlay();
@@ -285,7 +310,8 @@ function drawLines(){
 }
 function drawOverlay(){
   const w = wrap.clientWidth, h = wrap.clientHeight, dpr = devicePixelRatio || 1;
-  overlay.width = w * dpr; overlay.height = h * dpr; overlay.style.width = w + "px"; overlay.style.height = h + "px";
+  if (overlay.width !== Math.round(w * dpr) || overlay.height !== Math.round(h * dpr)) {  // resizing reallocates: only when needed
+    overlay.width = Math.round(w * dpr); overlay.height = Math.round(h * dpr); overlay.style.width = w + "px"; overlay.style.height = h + "px"; }
   octx.setTransform(dpr, 0, 0, dpr, 0, 0); octx.clearRect(0, 0, w, h);
   if (!chartData) return;
   const ps = chart.priceScale("right").width(), right = w - ps, ts = chart.timeScale();
@@ -314,25 +340,25 @@ function drawOverlay(){
 }
 // Redraw the overlay every frame while the chart is on screen, so zones never drift when the price scale
 // is dragged, zoomed or auto-scaled.
-let lastSig = "";
+let lastSig = "", showSig = JSON.stringify(show);
 (function loop(){
   const r = wrap.getBoundingClientRect();
   if (chartData && r.bottom > 0 && r.top < innerHeight) {
     const lr = chart.timeScale().getVisibleLogicalRange(), p0 = series.priceToCoordinate(chartData.candles[chartData.candles.length - 1].close);
-    const sig = [r.width, r.height, lr && lr.from, lr && lr.to, p0, JSON.stringify(show)].join("|");
+    const sig = [r.width, r.height, lr && lr.from, lr && lr.to, p0, series.priceToCoordinate(liveBar ? liveBar.close : 0), showSig].join("|");
     if (sig !== lastSig) { lastSig = sig; drawOverlay(); }
   }
   requestAnimationFrame(loop);
 })();
 $("onlySel").onchange = () => renderChat(state ? state.flows || [] : []);
-document.querySelectorAll(".toggles input[data-o]").forEach(c => c.onchange = () => { show[c.dataset.o] = c.checked; drawLines(); drawOverlay(); });
-$("tabs").innerHTML = TFS.map(([k, l]) => `<button class="alt" data-tf="${k}">${l}</button>`).join("");
-$("tabs").onclick = e => { const b = e.target.closest("button"); if (!b) return; tf = b.dataset.tf; tfSec = TFS.find(t => t[0] === tf)[2]; paintTabs(); loadChart(); };
+document.querySelectorAll(".toggles input[data-o]").forEach(c => c.onchange = () => { show[c.dataset.o] = c.checked; showSig = JSON.stringify(show); drawLines(); drawOverlay(); });
+H.tabs = TFS.map(([k, l]) => `<button class="alt" data-tf="${k}">${l}</button>`).join("");
+$("tabs").onclick = e => { const b = e.target.closest("button"); if (!b) return; tf = b.dataset.tf; tfSec = TFS.find(t => t[0] === tf)[2]; paintTabs(); liveBar = null; if (state) chartVersion = state.chart_version + tf + sym; loadChart(); };
 function paintTabs(){ document.querySelectorAll("#tabs button").forEach(b => b.className = b.dataset.tf === tf ? "" : "alt"); }
 
 async function live(){
-  let v; try { v = await (await fetch("/api/live?sym=" + sym)).json(); } catch (e) { return; }
-  if (!v) return;
+  const want = sym; let v; try { v = await (await fetch("/api/live?sym=" + want)).json(); } catch (e) { return; }
+  if (!v || want !== sym) return;  // symbol switched while waiting
   const px = v.price, el_ = $("px");
   el_.textContent = px.toFixed(2); el_.classList.remove("up", "down");
   if (lastPx !== null && px !== lastPx) el_.classList.add(px > lastPx ? "up" : "down");
@@ -353,10 +379,10 @@ function render(){
   const phase = {scanning: "🔎 Scanning market", ai_review: "🧠 AI desk working", idle: "💤 Waiting", starting: "⏳ Starting"}[s.phase] || s.phase;
   const insts = s.instruments || [];
   if (!insts.find(i => i.key === sym) && insts.length) sym = insts[0].key;
-  $("symtabs").innerHTML = insts.length > 1 ? insts.map(i => `<button class="${i.key === sym ? "" : "alt"}" onclick="setSym('${i.key}')">${i.icon} ${esc(i.label)}${i.open ? "" : " 💤"}</button>`).join("") : "";
+  H.symtabs = insts.length > 1 ? insts.map(i => `<button class="${i.key === sym ? "" : "alt"}" onclick="setSym('${i.key}')">${i.icon} ${esc(i.label)}${i.open ? "" : " 💤"}</button>`).join("") : "";
   const age = (s.data_ages || {})[sym] || s.data_age;
   const mk = (s.markets || {})[sym] || s.market;
-  $("pills").innerHTML = [
+  H.pills = [
     pill('<span class="dot"></span>Bot running', "ok"),
     pill(age && age.open === false ? "🔴 Market closed" : "🟢 Market open", age && age.open === false ? "warn" : "ok"),
     pill(phase, s.phase === "idle" ? "" : "warn"),
@@ -367,49 +393,84 @@ function render(){
   $("phase").textContent = phase;
   const models = s.ai_models || [], ready = models.filter(m => m.ready).length;
   const dayOut = models.filter(m => m.kind === "quota_day");
-  $("banner").innerHTML = models.length && !ready ? `<div class="banner">⛔ <b>AI desk paused:</b> all ${models.length} Gemini models are resting` +
+  H.banner = models.length && !ready ? `<div class="banner">⛔ <b>AI desk paused:</b> all ${models.length} Gemini models are resting` +
       (dayOut.length ? ` – the free <b>daily quota</b> is used up. It resets at midnight Pacific time (≈ 07:00 UTC, in ~${Math.max(...dayOut.map(m => m.back_in_min))} min).` : ".") +
       ` The engine keeps scanning; only very strong engine-only setups are sent meanwhile. Tip: don't press "Test all agents" often – each test uses quota.</div>` : "";
   paintNodes(s.agents); renderDetail(s.agents);
-  $("log").innerHTML = s.log.map(l => `<div class="k-${l.kind}"><span class="t">${l.t}</span>${esc(l.text)}</div>`).join("") || '<div class="empty">Waiting for the first scan…</div>';
-  $("reviews").innerHTML = s.reviews.length ? `<table><tr><th>Time</th><th>Setup</th><th>Desk</th><th>Result</th></tr>` +
+  H.log = s.log.map(l => `<div class="k-${l.kind}"><span class="t">${l.t}</span>${esc(l.text)}</div>`).join("") || '<div class="empty">Waiting for the first scan…</div>';
+  H.reviews = s.reviews.length ? `<table><tr><th>Time</th><th>Setup</th><th>Desk</th><th>Result</th></tr>` +
     s.reviews.map(r => `<tr><td>${r.t}</td><td>${esc(r.style)} ${r.direction} @ ${r.entry}<br><span class="role">engine ${r.score}</span></td>
       <td>${r.reports.map(x => x.icon + (x.vote === "TAKE" ? "✅" : x.vote === "SKIP" ? "❌" : "⚠️")).join(" ")}<br><span class="role">${r.votes}/${r.reports.length}</span></td>
       <td class="${r.approved ? "ok" : "bad"}">${r.approved ? "✅ SENT" : "❌ SKIPPED"}<br><span class="role">${esc(r.reason || "")}</span></td></tr>`).join("") + "</table>"
     : '<div class="empty">No setup reviewed yet. The desk only works when the engine finds a real setup.</div>';
-  $("trades").innerHTML = s.trades.length ? `<table><tr><th>Trade</th><th>Entry</th><th>SL</th><th>TPs</th><th>Status</th></tr>` +
+  H.trades = s.trades.length ? `<table><tr><th>Trade</th><th>Entry</th><th>SL</th><th>TPs</th><th>Status</th></tr>` +
     s.trades.map(t => `<tr><td>${esc(t.symbol || "")} ${t.direction}<br><span class="role">${esc(t.style_label)}</span></td><td>${t.entry}</td><td>${t.stop_loss}</td>
       <td>${t.tps.join("<br>")}</td><td>${t.status}<br>TP ${t.stage}/3</td></tr>`).join("") + "</table>" : '<div class="empty">No open trades.</div>';
   const cal = (s.calendar || []).map(e => `<div>${e.impact === "High" ? "🔴" : "🟠"} <b>${esc(e.time)}</b> ${esc(e.title)} <span class="role">${esc([e.forecast && "F " + e.forecast, e.previous && "P " + e.previous].filter(Boolean).join(" · "))}</span></div>`).join("");
   const hl = (s.headlines || []).map(h => `<div>${h.gold ? "🥇" : "🗞"} <span class="role">${esc(h.time)} ${esc(h.source)}</span><br>${h.link ? `<a href="${esc(h.link)}" target="_blank" rel="noopener">${esc(h.title)}</a>` : esc(h.title)}</div>`).join("");
-  $("news").innerHTML = (cal ? "<b>📅 Next 48h (USD)</b>" + cal : '<div class="role">📅 No high/medium USD events in the next 48h.</div>') +
+  H.news = (cal ? "<b>📅 Next 48h (USD)</b>" + cal : '<div class="role">📅 No high/medium USD events in the next 48h.</div>') +
     (hl ? "<br><b>🗞 Headlines</b>" + hl : `<div class="role">🗞 ${s.news_error ? "Headlines unavailable: " + esc(s.news_error.slice(0, 140)) : "No gold/USD headlines in the last 24h yet."}</div>`);
-  $("market").innerHTML = mk ? `<table><tr><th>TF</th><th>Trend</th><th>Last event</th><th>Zone</th><th>RSI</th><th>Candles</th></tr>` +
+  H.market = mk ? `<table><tr><th>TF</th><th>Trend</th><th>Last event</th><th>Zone</th><th>RSI</th><th>Candles</th></tr>` +
     mk.tfs.map(r => `<tr><td><b>${r.label}</b></td><td class="${r.trend === "bullish" ? "ok" : r.trend === "bearish" ? "bad" : ""}">${r.trend || "ranging"}</td>
       <td>${esc(r.event || "–")}</td><td>${r.zone}</td><td>${r.rsi ?? "–"}</td><td>${esc(r.patterns || "")}</td></tr>`).join("") + "</table>" +
     `<div class="role" style="margin-top:6px">${Object.entries(mk.levels).map(([k, v]) => k + " " + v).join(" · ")}${mk.adr && mk.adr.adr ? ` · ADR ${mk.adr.adr} (${mk.adr.used_pct}% used)` : ""}</div>`
     : '<div class="empty">No market data yet.</div>';
   const kv = o => Object.entries(o).map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("");
-  $("system").innerHTML = kv({"Uptime": st.uptime, "Price source": age ? esc(age.source) : "–", "Last candle": age ? `${age.last_candle} (${age.minutes} min ago)` : "–",
+  H.system = kv({"Uptime": st.uptime, "Price source": age ? esc(age.source) : "–", "Last candle": age ? `${age.last_candle} (${age.minutes} min ago)` : "–",
     "Scans today": st.scans_today, "Twelve Data": st.td_requests + " / 800 requests", "Gemini": `${st.ai_calls} calls (${st.ai_failures} retried)`,
     "Gemini models": models.length ? `${ready}/${models.length} ready` + models.filter(m => !m.ready).map(m => `<br><span class="role">${esc(m.model)}: ${esc(m.reason)}</span>`).join("") : "–",
     "Volume feed": st.volume_ok ? "✅ OK" : "⚠️ unavailable", "News calendar": st.news_ok ? "✅ OK" : "⚠️ unavailable", "Telegram users": st.users,
     "Signal types": s.settings.styles.join(", "), "Rules": `conf ≥ ${s.settings.min_confidence}%, ≥ ${s.settings.min_votes}/8 analysts, ≥ 2/3 verifiers, auditor OK`,
     "Last error": st.last_error ? `<span class="bad">${esc(st.last_error.slice(0, 160))}</span>` : "none"});
+  renderLive(s); renderKeys(models);
   const p = s.performance;
-  $("perf").innerHTML = p.trades ? kv({"Finished trades": p.trades, "Win rate (TP1+)": p.win_rate + "%", "Total": p.total_r + "R",
+  H.perf = p.trades ? kv({"Finished trades": p.trades, "Win rate (TP1+)": p.win_rate + "%", "Total": p.total_r + "R",
     "Wins / losses": p.wins + " / " + p.losses, "Hit TP3": p.tp3}) : '<span class="empty">No finished trades yet</span>';
 }
+function renderLive(s){
+  const cur = s.current, by = Object.fromEntries(s.agents.map(a => [a.key, a]));
+  const stages = [["Analysts", s.agents.filter(a => a.stage === 1)], ["Verifiers", s.agents.filter(a => a.stage === 2)],
+                  ["Head Trader", s.agents.filter(a => a.stage === 3)], ["Auditor", s.agents.filter(a => a.stage === 4)]];
+  const all = s.agents, take = all.filter(a => a.status === "done" && a.vote === "TAKE").length,
+        skip = all.filter(a => a.status === "done" && a.vote === "SKIP").length, err = all.filter(a => a.status === "error").length;
+  const html = (cur ? `<div><b>${esc(cur.label)}</b> ${cur.practice ? '<span class="tag">practice</span>' : ""}</div>` : '<div class="empty">No review yet – press 🎓 Practice AI review or wait for a real setup.</div>') +
+    `<div class="stages">` + stages.map(([n, list]) => {
+      const done = list.filter(a => a.status === "done").length, bad = list.filter(a => a.status === "error").length,
+            run = list.some(a => a.status === "thinking");
+      return `<div class="stg ${run ? "run" : bad ? "err" : done === list.length && done ? "ok" : ""}"><div class="n">${n}</div><div class="c">${done}/${list.length}</div>
+        <div class="bar"><i style="width:${list.length ? 100 * done / list.length : 0}%"></i></div></div>`; }).join("") + `</div>` +
+    `<div class="tally"><span class="ok">✅ TAKE <b>${take}</b></span><span class="bad">❌ SKIP <b>${skip}</b></span><span class="warn">⚠ errors <b>${err}</b></span></div>` +
+    (cur ? (cur.end == null ? `<div class="verdict run">🧠 Desk is working…</div>`
+      : `<div class="verdict ${cur.approved ? "take" : "skip"}">${cur.approved ? "✅ APPROVED – signal " + (cur.practice ? "(practice, not sent)" : "sent") : "❌ REJECTED – no signal"}</div>`) : "");
+  H.live_review = html;
+}
+function renderKeys(models){
+  if (!models.length) { H.keys = '<div class="empty">No Gemini key configured.</div>'; H.keysSum = ""; return; }
+  const keys = [...new Set(models.map(m => m.key))].sort();
+  H.keysSum = keys.map(k => { const ms = models.filter(m => m.key === k), r = ms.filter(m => m.ready).length;
+    return `<span class="pill ${r ? "ok" : "bad"}">key ${k}: ${r}/${ms.length} ready</span>`; }).join(" ");
+  const used = {}; (state.agents || []).forEach(a => { if (a.slot) (used[a.slot] = used[a.slot] || []).push(a.icon); });
+  H.keys = `<table><tr><th>Model</th><th>Key</th><th>Tier</th><th>Health</th><th>OK / fail</th><th>Latency</th><th>Last min</th><th>Agents</th></tr>` +
+    models.map(m => `<tr><td>${esc(m.name)}</td><td>key ${m.key}</td><td><span class="tag ${m.lite ? "lite" : "strong"}">${m.lite ? "lite" : "strong"}</span></td>
+      <td><span class="hb ${m.ready ? "g" : "r"}"></span>${m.ready ? "ready" : `<span class="bad">resting${m.back_in_min ? " " + m.back_in_min + " min" : ""}</span><br><span class="role">${esc((m.reason || "").slice(0, 90))}</span>`}</td>
+      <td><span class="ok">${m.ok}</span> / <span class="${m.fail ? "bad" : ""}">${m.fail}</span></td><td>${m.latency != null ? m.latency + "s" : "–"}</td>
+      <td>${m.calls_last_min}</td><td>${(used[m.model] || []).join(" ")}</td></tr>`).join("") + "</table>";
+}
+function tick(){
+  const cur = state && state.current;
+  $("rvTimer").textContent = cur ? "⏱ " + Math.round(((cur.end ?? Date.now() / 1000) - cur.ts)) + "s" : "";
+}
+setInterval(tick, 1000);
 async function refresh(){
   try { state = await (await fetch("/api/state")).json(); }
-  catch (e) { $("pills").innerHTML = pill("❌ Bot not running – start it with start.bat", "bad"); return; }
+  catch (e) { H.pills = pill("❌ Bot not running – start it with start.bat", "bad"); return; }
   if (!Object.keys(pos).length || net.childElementCount === 0) buildNet(state.agents);
   render(); animateFlows(state.flows || []); renderChat(state.flows || []);
   if (state.chart_version && state.chart_version + tf + sym !== chartVersion) { chartVersion = state.chart_version + tf + sym; loadChart(); }
 }
-function setSym(k){ sym = k; try { localStorage.setItem("sym", k); } catch (e) {} lastPx = null; chartVersion = ""; liveBar = null; refresh(); live(); }
+function setSym(k){ if (k === sym) return; sym = k; try { localStorage.setItem("sym", k); } catch (e) {} lastPx = null; chartVersion = ""; liveBar = null; refresh(); live(); }
 paintTabs(); refresh(); live();
-setInterval(refresh, 2000); setInterval(live, 5000);
+setInterval(refresh, 2000); setInterval(live, 3000);
 </script>
 </body>
 </html>
