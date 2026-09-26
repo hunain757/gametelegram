@@ -230,7 +230,7 @@ def ai_report(t: dict) -> str:
         if r.get("stage") != last_stage:
             last_stage = r.get("stage")
             lines.append(f"\n<b>{names.get(last_stage, '')}</b>")
-        vote = {"TAKE": "TAKE", "SKIP": "SKIP"}.get(r["vote"], "N/A")
+        vote = {"TAKE": "TAKE", "SKIP": "SKIP", "NEUTRAL": "NEUT"}.get(r["vote"], "N/A")
         if t.get("per_desk") and r.get("stage") == 1:  # 18 analysts: one compact line each
             lines.append(f"<code>{vote:<4} {r['score']:>3}</code>  {escape(r['name'])}"
                          + (" · debated" + (", changed vote" if r.get("changed") else "") if r.get("debate") else "")

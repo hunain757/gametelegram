@@ -64,7 +64,7 @@ ANALYSTS = [
     {"key": "volume", "desk": "tech", "name": "Volume Profile & Order Flow Analyst", "icon": "VOL",
      "focus": "Volume (Binance: PAXG/USDT for gold, spot volume for crypto): relative volume, delta (buy/sell "
               "pressure), volume bubbles (institutional candles), POC / value area and OBV. Does volume confirm the "
-              "move or show absorption against it? If volume data is unavailable say so and vote SKIP.",
+              "move or show absorption against it? If volume data is unavailable say so and vote NEUTRAL.",
      "fields": ("price", "volume"), "ind": ("obv",), "extras": ()},
     {"key": "price_action", "desk": "tech", "name": "Price Action & Pattern Reader", "icon": "PA",
      "focus": "Read the candles: recent candles on each timeframe, candlestick patterns (engulfing, pin bars, "
@@ -115,18 +115,18 @@ ANALYSTS = [
     # ---------------- macro & news desk ----------------
     {"key": "calendar", "desk": "macro", "name": "Economic Calendar Analyst", "icon": "CAL",
      "focus": "The economic calendar only: which high/medium-impact USD events (CPI, NFP, FOMC, PCE, GDP, jobless "
-              "claims…) fall inside this trade's lifetime, and how close they are. A red event within the trade "
-              "window = SKIP. If no event threatens the trade, vote TAKE with a score of 60-70.",
+              "claims…) fall inside this trade's lifetime, and how close they are. A high-impact event within the "
+              "trade window = SKIP. A clear calendar = TAKE (60-70).",
      "fields": (), "extras": ("calendar",)},
     {"key": "world", "desk": "macro", "name": "Geopolitics & World Events Analyst", "icon": "GEO",
      "focus": "What is happening in the world right now: wars, conflicts, sanctions, tariffs, elections, oil and "
               "crises in the headlines. Would these events push this instrument in the trade direction (e.g. "
-              "risk-off = gold up) or against it? If no relevant headline exists, vote TAKE with a score of 55-65.",
+              "risk-off = gold up) or against it? If no relevant headline exists, vote NEUTRAL.",
      "fields": (), "extras": ("headlines:world",)},
     {"key": "macro", "desk": "macro", "name": "Central Banks & Dollar Analyst", "icon": "CB",
      "focus": "Central banks and the US dollar: Fed/FOMC tone, inflation and jobs data, yields, rate-cut/hike "
               "expectations and dollar strength in the headlines. A stronger dollar and higher yields weigh on gold "
-              "and bitcoin. Does the macro backdrop support this direction? No relevant headline = TAKE 55-65.",
+              "and bitcoin. Does the macro backdrop support this direction? No relevant headline = NEUTRAL.",
      "fields": (), "extras": ("headlines:macro",)},
     {"key": "intermarket", "desk": "macro", "name": "Intermarket & Sentiment Analyst", "icon": "IMK",
      "focus": "Other markets and sentiment: the other instrument's trend and move today, the gold/bitcoin "
@@ -213,10 +213,14 @@ STRICT RULES:
 1. Judge ONLY your job. Other specialists cover everything else - never comment on their areas.
 2. Use ONLY the data below. Every evidence item must quote an exact number, level, time or headline from it,
    so your desk lead can verify it. Never invent prices, events or news.
-3. If your data is missing or does not clearly support a {direction}, vote SKIP with a score of 40 or less
-   and say exactly what is missing or against it.
-4. Score honestly: 80-100 = your data strongly supports the {direction}, 60-79 = supports it, below 60 = weak.
-5. Your report goes to the {lead}, who checks your evidence and challenges you if it is wrong.
+3. Vote on what YOUR data shows:
+   TAKE    - your data supports the {direction} (score 60-100 by strength).
+   NEUTRAL - your data shows no clear edge either way, or your area is quiet / not relevant right now
+             (score 45-55). NEUTRAL does not block the trade.
+   SKIP    - your data clearly argues AGAINST the {direction} or shows a concrete danger (score 40 or less).
+             Name the exact number that argues against it.
+   Never SKIP only because your data is quiet or incomplete - that is NEUTRAL.
+4. Your report goes to the {lead}, who checks your evidence and challenges you if it is wrong.
 
 Setup proposed by the engine:
 {setup}
@@ -227,7 +231,7 @@ YOUR DATA:
 {data}
 
 Reply with JSON only:
-{{"vote": "TAKE" or "SKIP", "score": 0-100, "summary": "one short sentence about YOUR job only",
+{{"vote": "TAKE" or "NEUTRAL" or "SKIP", "score": 0-100, "summary": "one short sentence about YOUR job only",
   "evidence": ["2-3 exact data points you used, e.g. 'H1 bearish BOS @ 2617.89'"],
   "risk": "the one thing in YOUR data that could make this trade fail"}}
 """
@@ -238,7 +242,8 @@ Your members and their jobs:
 
 YOUR JOB:
 1. Check every member's evidence against the data below. Name any member whose claim is wrong or not supported.
-2. Weigh the members: one well-evidenced SKIP outweighs several weak TAKEs.
+2. Weigh the members: one well-evidenced SKIP outweighs several weak TAKEs. NEUTRAL members found no edge
+   either way - they neither support nor block the trade.
 3. Give ONE verdict for your desk. It is sent to the three verifiers and to the head of the desk.
 
 Setup:
@@ -273,8 +278,9 @@ Your desk lead challenges you:
 {challenges}
 
 Re-check YOUR data only. Change your vote if the challenge is right, keep it if the data supports you.
+NEUTRAL means your data has no clear edge; SKIP only for concrete evidence against the trade.
 Reply with JSON only:
-{{"vote": "TAKE" or "SKIP", "score": 0-100, "changed": true or false,
+{{"vote": "TAKE" or "NEUTRAL" or "SKIP", "score": 0-100, "changed": true or false,
   "reply": "one sentence answering the challenge with an exact number", "summary": "your updated one-sentence view"}}
 """
 
@@ -978,7 +984,8 @@ class TradingDesk:
                 score = max(0, min(int(float(data.get("score") or 0)), 100))
             except (TypeError, ValueError):
                 score = 0
-            report = dict(base, model=model, vote="TAKE" if vote == "TAKE" else "SKIP", score=score,
+            vote = vote if vote in ("TAKE", "SKIP") or (vote == "NEUTRAL" and stage == 1) else "SKIP"
+            report = dict(base, model=model, vote=vote, score=score,
                           summary=str(data.get("summary", ""))[:220],
                           points=[str(p)[:160] for p in (data.get("evidence") or data.get("points") or [])][:3],
                           risk=str(data.get("risk", ""))[:160],
@@ -987,7 +994,7 @@ class TradingDesk:
             mon.agent(key, "done", vote=report["vote"], score=score, summary=report["summary"], points=pts,
                       model=model, seconds=round(time.monotonic() - started, 1))
             mon.event(f"{agent['icon']} {agent['name']}: {report['vote']} ({score}) – {report['summary']}",
-                      "take" if report["vote"] == "TAKE" else "skip")
+                      {"TAKE": "take", "SKIP": "skip"}.get(report["vote"], "info"))
             return report
         except Exception as e:
             log.warning("%s failed: %s", agent["name"], e)
@@ -1071,7 +1078,8 @@ class TradingDesk:
             if lead["vote"] == "ERROR":
                 continue
             members = [r for r in analysts if r["desk"] == lead["desk"] and r["vote"] != "ERROR"]
-            targets = [r for r in members if r["vote"] != lead["vote"] or r["key"] in lead.get("doubtful", [])]
+            targets = [r for r in members if (r["vote"] in ("TAKE", "SKIP") and r["vote"] != lead["vote"])
+                       or r["key"] in lead.get("doubtful", [])]
             targets = sorted(targets, key=lambda r: -r["score"])[:2]  # the 2 most confident dissenters
             jobs += [(lead, r) for r in targets]
         if not jobs:
@@ -1095,7 +1103,8 @@ class TradingDesk:
                 mon.event(f"{spec['icon']} {spec['name']} could not answer ({friendly}); keeps {r['vote']}", "error")
                 return
             old = r["vote"]
-            vote = "TAKE" if str(d.get("vote", old)).upper() == "TAKE" else "SKIP"
+            vote = str(d.get("vote", old)).upper()
+            vote = vote if vote in ("TAKE", "SKIP", "NEUTRAL") else old
             try:
                 score = max(0, min(int(float(d.get("score") or r["score"])), 100))
             except (TypeError, ValueError):
@@ -1144,7 +1153,8 @@ class TradingDesk:
         mon.event(("PRACTICE review (no signal will be sent): " if practice else "AI desk reviewing ")
                   + f"{setup.get('symbol_name', 'XAU/USD')} {setup['style_label']} {setup['direction']} @ {setup['entry']} (engine score {setup['score']})")
         mon.event(f"Strategy board ({board['regime']} market): {board['agrees']} agree · {board['against']} against · {board['neutral']} neutral")
-        mon.review_start(f"{setup.get('symbol_name', 'XAU/USD')} {setup['style_label']} {setup['direction']} @ {setup['entry']}",
+        mon.review_start(f"{setup.get('symbol_name', 'XAU/USD')} {setup['style_label']} {setup['direction']} @ {setup['entry']}"
+                         + (" – PROBE (no real engine setup right now)" if setup.get("probe") else ""),
                          practice)
         verdict = await self._review(setup, ctx, mon)
         mon.review_end(verdict["approved"])
@@ -1218,21 +1228,26 @@ class TradingDesk:
             v, VERIFIER_PROMPT.format(name=v["name"], focus=v["focus"], **vctx), mon, 3, shared) for v in VERIFIERS)))
 
         answered = [r for r in analysts if r["vote"] != "ERROR"]
+        decisive = [r for r in answered if r["vote"] in ("TAKE", "SKIP")]  # NEUTRAL = no edge either way
+        neutral = len(answered) - len(decisive)
         a_votes = sum(r["vote"] == "TAKE" for r in analysts)
         l_votes = sum(r["vote"] == "TAKE" for r in leads)
         v_votes = sum(r["vote"] == "TAKE" for r in verifiers)
-        need = self._need(len(answered))
+        # Of the analysts that took a side, MIN share must say TAKE - and at least 40 % of all that answered,
+        # so a trade never passes on a handful of TAKEs among many NEUTRALs.
+        need = max(self._need(len(decisive)), math.ceil(0.4 * len(answered) - 1e-9))
         records = getattr(self, "records", None) or {}
-        wsum = sum(records.get(r["key"], {}).get("weight", 1.0) for r in answered)
-        weighted = round(100 * sum(records.get(r["key"], {}).get("weight", 1.0) for r in answered
+        wsum = sum(records.get(r["key"], {}).get("weight", 1.0) for r in decisive)
+        weighted = round(100 * sum(records.get(r["key"], {}).get("weight", 1.0) for r in decisive
                                    if r["vote"] == "TAKE") / wsum) if wsum else 0
         reports = list(analysts) + list(leads) + list(verifiers)
         per_desk = {d: f"{sum(r['vote'] == 'TAKE' for r in analysts if r['desk'] == d)}/"
                        f"{sum(1 for r in analysts if r['desk'] == d)}" for d in DESKS}
         verdict.update(reports=reports, votes=a_votes + l_votes + v_votes, analyst_votes=a_votes, lead_votes=l_votes,
                        verifier_votes=v_votes, errors=sum(r["vote"] == "ERROR" for r in reports), need=need,
-                       per_desk=per_desk, weighted_agreement=weighted)
-        tally = (f"{a_votes}/{len(answered)} analysts TAKE (need {need}), reliability-weighted agreement "
+                       per_desk=per_desk, weighted_agreement=weighted, neutral=neutral)
+        tally = (f"{a_votes} TAKE, {len(decisive) - a_votes} SKIP, {neutral} NEUTRAL of {len(answered)} analysts "
+                 f"(need {need} TAKE), reliability-weighted agreement "
                  f"{weighted}% – technical {per_desk['tech']}, strategy {per_desk['strategy']}, macro {per_desk['macro']}")
 
         # Stage 4: the Head Trader reads the desks and the verifiers.
@@ -1256,12 +1271,13 @@ class TradingDesk:
             verdict["confidence"] = round(sum(takers) / len(takers)) if takers else 0
             kind, friendly, _ = classify_error(e)
             verdict["reason"] = f"Head trader unavailable ({friendly}) – decided by the desk's votes."
-            strict_need = max(need, math.ceil(len(answered) * 0.75))
+            strict_need = max(need, math.ceil(len(decisive) * 0.75))
             verdict["approved"] = (a_votes >= strict_need and l_votes >= 2 and v_votes >= 2
                                    and board["against"] <= board["agrees"]
                                    and verdict["confidence"] >= self.min_confidence)
             if not verdict["approved"]:
                 verdict["reject_reason"] = f"head trader offline and only {a_votes}/{len(answered)} analysts agree"
+            mon.agent("auditor", "skipped", summary="Not needed – head trader unavailable")
             return verdict
 
         verdict["confidence"] = int(head.get("confidence") or 0)
@@ -1291,8 +1307,8 @@ class TradingDesk:
         if len(answered) < math.ceil(len(ANALYSTS) * 2 / 3):
             reasons.append(f"only {len(answered)}/{len(ANALYSTS)} analysts answered")
         if a_votes < need:
-            reasons.append(f"only {a_votes}/{len(answered)} analysts agree (need {need})")
-        elif records and weighted < 100 * need / max(len(answered), 1) - 1e-9:
+            reasons.append(f"only {a_votes} analysts say TAKE (need {need}; {neutral} neutral)")
+        elif records and decisive and weighted < 100 * self._need(len(decisive)) / len(decisive) - 1e-9:
             reasons.append(f"the most reliable analysts disagree (weighted agreement {weighted}%)")
         if l_votes < 2:
             reasons.append(f"only {l_votes}/{len(LEADS)} desks agree")
@@ -1302,6 +1318,7 @@ class TradingDesk:
             reasons.append(f"strategy board against ({board['against']} vs {board['agrees']})")
         if reasons:
             verdict["reject_reason"] = "; ".join(reasons)
+            mon.agent("auditor", "skipped", summary="Not needed – the desk did not approve this trade")
             return verdict
 
         # Stage 5: the Signal Auditor checks the final signal and can veto it.

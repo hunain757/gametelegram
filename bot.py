@@ -1006,14 +1006,31 @@ class GoldBot:
         trend = market["4h"]["smc"]["trend"] or market["1h"]["smc"]["trend"] or "bullish"
         bull = trend == "bullish"
         price, a = m["price"], m["smc"]["atr"] or 1.0
-        risk = 1.5 * a
         sign = 1 if bull else -1
+        want = "bullish" if bull else "bearish"
+        # Probe like a real SMC trade: limit order at the nearest order block / FVG in the H4 direction
+        # (below price for a buy, above for a sell), stop beyond the zone. Market entry only if there is none.
+        zones = [dict(z, kind=k) for k, key in (("Order Block", "order_blocks"), ("Fair Value Gap", "fvgs"))
+                 for z in m["smc"][key] if z["direction"] == want]
+        zones = [z for z in zones if (z["top"] <= price if bull else z["bottom"] >= price)
+                 and abs(price - (z["top"] if bull else z["bottom"])) <= 4 * a]
+        zone = min(zones, key=lambda z: abs(price - (z["top"] if bull else z["bottom"])), default=None)
+        if zone:
+            entry = zone["top"] if bull else zone["bottom"]
+            stop = (zone["bottom"] - 0.3 * a) if bull else (zone["top"] + 0.3 * a)
+            etype, poi = "LIMIT", {"kind": zone["kind"], "top": zone["top"], "bottom": zone["bottom"],
+                                   "time": zone.get("time", "")}
+            why = f"M15 {want} {zone['kind'].lower()} {zone['bottom']:.2f}-{zone['top']:.2f}, limit entry"
+        else:
+            entry, stop, etype = price, price - sign * 1.5 * a, "MARKET"
+            poi, why = {"kind": "none", "top": price, "bottom": price, "time": ""}, "no zone nearby, market entry"
+        risk = abs(entry - stop) or a
         return {"style": "intraday", "style_label": STYLES["intraday"]["label"], "direction": "BUY" if bull else "SELL",
-                "entry_type": "MARKET", "entry": round(price, 2), "stop_loss": round(price - sign * risk, 2),
-                "tps": [{"price": round(price + sign * r * risk, 2), "rr": r, "source": "R-multiple"} for r in (1.5, 2.5, 4)],
-                "price": round(price, 2), "atr": round(a, 2), "score": 0,
-                "confluences": [f"Practice probe: H4 {trend} bias, market entry at the current price"],
-                "poi": {"kind": "none", "top": price, "bottom": price, "time": ""}, "key": "practice",
+                "entry_type": etype, "entry": round(entry, 2), "stop_loss": round(stop, 2),
+                "tps": [{"price": round(entry + sign * r * risk, 2), "rr": r, "source": "R-multiple"} for r in (1.5, 2.5, 4)],
+                "price": round(price, 2), "atr": round(a, 2), "score": 0, "probe": True,
+                "confluences": [f"Practice probe (no real engine setup right now): H4 {trend} bias, {why}"],
+                "poi": poi, "key": "practice",
                 "expiry_min": 240, "timeframes": {"entry": "15min", "confirm": "1h", "bias": "4h"}, **extra}
 
     def intermarket(self, key: str) -> dict | None:

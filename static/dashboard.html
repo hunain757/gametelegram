@@ -37,7 +37,7 @@ section h2{margin:0 0 10px;font-size:12px;text-transform:uppercase;letter-spacin
 .node text{fill:var(--text);font-size:12px}.node .sub{fill:var(--mut);font-size:10px}
 .node.thinking rect{stroke:var(--amber);fill:#2a2110;animation:glow 1s infinite}
 .node.waiting rect{stroke:var(--blue);fill:#101e33}
-.node.TAKE rect{stroke:var(--green);fill:#0f2a1f}.node.SKIP rect{stroke:var(--red);fill:#2b1217}.node.error rect{stroke:var(--red);fill:#3a0f14}
+.node.TAKE rect{stroke:var(--green);fill:#0f2a1f}.node.NEUTRAL rect{stroke:#6b7894;fill:#161d2b}.node.skipped rect{stroke:#2a3447;fill:#10151f;opacity:.7}.node.SKIP rect{stroke:var(--red);fill:#2b1217}.node.error rect{stroke:var(--red);fill:#3a0f14}
 .node.sel rect{stroke:var(--gold);stroke-width:2.4}
 .node{cursor:pointer}
 @keyframes glow{50%{fill:#3a2c10}}
@@ -47,7 +47,7 @@ section h2{margin:0 0 10px;font-size:12px;text-transform:uppercase;letter-spacin
 .desklabel{fill:#aab4c8;font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase}.kbadge{font-size:9px;font-weight:800}
 #detail .nm{font-size:16px;font-weight:800}#detail .role{color:var(--mut);font-size:12px;margin:2px 0 8px}
 .badge{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;background:#263045;color:var(--mut);font-weight:800;text-transform:uppercase}
-.b-TAKE{background:var(--green);color:#03170d}.b-SKIP{background:#5a1f29;color:#ffc0c8}.b-thinking{background:var(--amber);color:#1a1000}.b-waiting{background:var(--blue);color:#fff}.b-error{background:var(--red);color:#fff}
+.b-TAKE{background:var(--green);color:#03170d}.b-NEUTRAL{background:#39445c;color:#dde3ee}.b-skipped{background:#1e2533;color:var(--mut)}.b-SKIP{background:#5a1f29;color:#ffc0c8}.b-thinking{background:var(--amber);color:#1a1000}.b-waiting{background:var(--blue);color:#fff}.b-error{background:var(--red);color:#fff}
 .bar{height:6px;background:#222b3c;border-radius:4px;overflow:hidden;margin:8px 0}.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--gold),var(--gold2))}
 ul.pts{margin:6px 0 0;padding-left:18px;color:var(--mut)}
 .mini{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;margin-top:12px}
@@ -274,7 +274,7 @@ function paintNodes(agents){
       else if (a.status === "done") { cls += " TAKE"; sub = "online" + (a.seconds != null ? " · " + a.seconds + "s" : ""); }
       else if (a.status === "error") { cls += " error"; sub = ({quota_day: "daily quota used", quota_min: "rate limit, retrying", exhausted: "no model left (quota)",
         busy: "Google busy", key: "key problem", missing: "model missing"}[a.err] || ("failed: " + (a.summary || "").slice(0, 26))); }
-      else { cls += " " + a.status; sub = a.status === "idle" ? "idle" : a.status + "…"; }
+      else { cls += " " + a.status; sub = a.status === "idle" ? "idle" : a.status === "skipped" ? "not needed" : a.status + "…"; }
     }
     if (k === "engine") sub = state.phase === "scanning" ? "scanning…" : "finds setups";
     n.setAttribute("class", cls); $("s-" + k).textContent = sub;
@@ -546,16 +546,17 @@ function renderLive(s){
   const cur = s.current;
   const stages = (s.stages || []).map((n, i) => [n.replace(/^Stage \d+ · /, ""), s.agents.filter(a => a.stage === i + 1)]);
   const all = s.agents, take = all.filter(a => a.status === "done" && a.vote === "TAKE").length,
-        skip = all.filter(a => a.status === "done" && a.vote === "SKIP").length, err = all.filter(a => a.status === "error").length;
+        skip = all.filter(a => a.status === "done" && a.vote === "SKIP").length, err = all.filter(a => a.status === "error").length,
+        neu = all.filter(a => a.status === "done" && a.vote === "NEUTRAL").length;
   const html = (cur ? `<div><b>${esc(cur.label)}</b> ${cur.practice ? '<span class="tag">practice</span>' : ""}</div>` : '<div class="empty">No review yet – press Practice AI review or wait for a real setup.</div>') +
     `<div class="stages">` + stages.map(([n, list]) => {
-      const done = list.filter(a => a.status === "done").length, bad = list.filter(a => a.status === "error").length,
+      const done = list.filter(a => a.status === "done" || a.status === "skipped").length, bad = list.filter(a => a.status === "error").length,
             run = list.some(a => a.status === "thinking");
       return `<div class="stg ${run ? "run" : bad ? "err" : done === list.length && done ? "ok" : ""}"><div class="n">${n}</div><div class="c">${done}/${list.length}</div>
         <div class="bar"><i style="width:${list.length ? 100 * done / list.length : 0}%"></i></div></div>`; }).join("") + `</div>` +
     `<div class="tally">${Object.entries(s.desks || {}).map(([d, v]) => { const m = s.agents.filter(a => a.stage === 1 && a.desk === d);
         return `<span>${esc(v.name.split(" ")[0])} <b>${m.filter(a => a.status === "done" && a.vote === "TAKE").length}/${m.length}</b></span>`; }).join("")}</div>
-    <div class="tally" style="margin-top:6px"><span class="ok">TAKE <b>${take}</b></span><span class="bad">SKIP <b>${skip}</b></span><span class="warn">errors <b>${err}</b></span></div>` +
+    <div class="tally" style="margin-top:6px"><span class="ok">TAKE <b>${take}</b></span><span class="bad">SKIP <b>${skip}</b></span><span>NEUTRAL <b>${neu}</b></span><span class="warn">errors <b>${err}</b></span></div>` +
     (cur ? (cur.end == null ? `<div class="verdict run">Desk is working…</div>`
       : `<div class="verdict ${cur.approved ? "take" : "skip"}">${cur.approved ? "APPROVED – signal " + (cur.practice ? "(practice, not sent)" : "sent") : "REJECTED – no signal"}</div>`) : "");
   H.live_review = html;

@@ -1298,3 +1298,42 @@ class NoGeminiTests(unittest.TestCase):
                     os.environ[k] = v
         self.assertEqual(cfg.gemini_api_keys, [])
         self.assertEqual(cfg.ai_providers[0]["name"], "Mistral")
+
+
+class NeutralVoteTests(unittest.TestCase):
+    def test_neutral_analysts_do_not_block_but_skips_do(self):
+        setup, market, _ = first_setup()
+
+        def run(neutral_every, skip_every=0):
+            desk = fake_desk()
+            desk.min_votes = 5  # the real default: 5/8 = 62.5 % of the analysts that take a side
+            n = {"i": 0}
+
+            class Models:
+                async def generate_content(self, model, contents, config):
+                    if "Signal Auditor" in contents:
+                        return types.SimpleNamespace(text='{"approve": true, "issues": [], "note": "ok"}')
+                    if "Head Trader" in contents:
+                        return types.SimpleNamespace(text='{"decision": "TAKE", "confidence": 80, "reason": "ok"}')
+                    if "desk lead challenges you" in contents:  # a challenged analyst keeps its vote
+                        keep = "SKIP" if contents.split("Your first report was:")[1].strip().startswith("SKIP") else "NEUTRAL"
+                        return types.SimpleNamespace(text=f'{{"vote": "{keep}", "score": 35, "changed": false, '
+                                                          '"reply": "my data says so"}')
+                    if "YOUR ONLY JOB" in contents:
+                        n["i"] += 1
+                        if skip_every and n["i"] % skip_every == 0:
+                            return types.SimpleNamespace(text='{"vote": "SKIP", "score": 30, "summary": "against"}')
+                        if neutral_every and n["i"] % neutral_every == 0:
+                            return types.SimpleNamespace(text='{"vote": "NEUTRAL", "score": 50, "summary": "quiet"}')
+                    return types.SimpleNamespace(text='{"vote": "TAKE", "score": 75, "summary": "fine"}')
+            desk.client = types.SimpleNamespace(aio=types.SimpleNamespace(models=Models()))
+            return asyncio.run(desk.review(setup, market, SESSION)), desk
+        v, desk = run(neutral_every=2)            # 9 TAKE, 9 NEUTRAL, 0 SKIP
+        self.assertEqual(v["neutral"], 9)
+        self.assertTrue(v["approved"], v.get("reject_reason"))
+        v, desk = run(neutral_every=0, skip_every=2)   # 9 TAKE, 9 SKIP -> half against
+        self.assertFalse(v["approved"])
+        self.assertIn("analysts say TAKE", v["reject_reason"])
+        self.assertEqual(desk.monitor.agents["auditor"]["status"], "skipped")
+        v, _ = run(neutral_every=1)               # everyone neutral -> no edge, no trade
+        self.assertFalse(v["approved"])
