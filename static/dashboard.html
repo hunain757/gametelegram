@@ -41,7 +41,7 @@ section h2{margin:0 0 10px;font-size:12px;text-transform:uppercase;letter-spacin
 .node{cursor:pointer}
 @keyframes glow{50%{fill:#3a2c10}}
 .edge{stroke:#1d2636;stroke-width:1.1;fill:none}.edge.hot{stroke:var(--gold);stroke-width:2;opacity:.9;transition:stroke .6s}
-.pulse{fill:var(--gold2);filter:drop-shadow(0 0 6px var(--gold))}
+.pulse{fill:var(--gold2);filter:drop-shadow(0 0 6px var(--gold))}.pulse.back{fill:#ff8a96;filter:drop-shadow(0 0 6px #f04f5a)}
 .stage{fill:var(--mut);font-size:11px;letter-spacing:1px;text-transform:uppercase}
 #detail .nm{font-size:16px;font-weight:800}#detail .role{color:var(--mut);font-size:12px;margin:2px 0 8px}
 .badge{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;background:#263045;color:var(--mut);font-weight:800;text-transform:uppercase}
@@ -63,6 +63,14 @@ ul.pts{margin:6px 0 0;padding-left:18px;color:var(--mut)}
 table{width:100%;border-collapse:collapse;font-size:12.5px}td,th{padding:6px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{color:var(--mut);font-weight:600}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:5px 12px;font-size:13px}.kv span:nth-child(odd){color:var(--mut)}
 .empty{color:var(--mut);font-style:italic}
+.chat{max-height:340px;overflow:auto;display:flex;flex-direction:column;gap:6px}
+.msg{display:grid;grid-template-columns:78px 250px 1fr;gap:10px;align-items:start;padding:7px 10px;border-radius:10px;
+background:var(--panel2);border:1px solid var(--line);font-size:13px;animation:fade .6s}
+.msg .who{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.msg .t{color:#5d6882;font:12px ui-monospace,Consolas,monospace}
+.msg.challenge{border-color:#7a3340;background:#1f1116}.msg.reply{border-color:#2d5a7a;background:#0f1a24}.msg.decision{border-color:#6b5a1a;background:#1d190d}
+.kind{font-size:10px;padding:1px 6px;border-radius:99px;margin-left:6px;background:#263045;color:var(--mut);text-transform:uppercase}
+.flabel{font-size:11px;fill:#fff3c4;paint-order:stroke;stroke:#070a10;stroke-width:4px;pointer-events:none}
+@media(max-width:800px){.msg{grid-template-columns:1fr}}
 .banner{padding:12px 16px;border-radius:12px;border:1px solid #6b2a2f;background:#2a1216;color:#ffd0d4;font-size:14px}
 .banner b{color:#fff}.news div{padding:5px 0;border-bottom:1px dashed #19212f;font-size:13px}
 </style>
@@ -74,7 +82,8 @@ table{width:100%;border-collapse:collapse;font-size:12.5px}td,th{padding:6px;bor
   <div class="pills" id="pills"></div>
   <div style="display:flex;gap:8px">
     <button id="scanBtn" onclick="act('scan')">⚡ Scan now</button>
-    <button class="alt" id="pingBtn" onclick="act('ping')">🩺 Test all agents</button>
+    <button id="practiceBtn" onclick="act('practice')" title="Run the whole 13-agent desk on live data now – no signal is sent">🎓 Practice AI review</button>
+    <button class="alt" id="pingBtn" onclick="act('ping')">🩺 Test agents</button>
   </div>
 </header>
 <main>
@@ -86,6 +95,9 @@ table{width:100%;border-collapse:collapse;font-size:12.5px}td,th{padding:6px;bor
     <section id="detail"><h2>🔍 Agent details</h2><div id="detailBody" class="empty">Click any agent in the network.</div>
       <div class="mini" id="mini"></div></section>
   </div>
+  <section><h2><span>💬 Agent conversation – what each agent sends to the next</span>
+      <span class="toggles"><label><input type="checkbox" id="onlySel"> only the selected agent</label></span></h2>
+    <div id="chat" class="chat"></div></section>
   <div class="row">
     <section><h2><span>📈 Live chart · XAU/USD</span>
         <span class="tabs" id="tabs"></span></h2>
@@ -118,8 +130,8 @@ let tf = "15min", tfSec = 900, chartVersion = "", state = null, selected = "head
 const show = {zones:true, levels:true, liq:true, bubbles:true, profile:true, trades:true};
 
 async function act(what){
-  const b = $(what === "scan" ? "scanBtn" : "pingBtn"); b.disabled = true;
-  try { await fetch("/api/" + what, {method: "POST"}); } finally { setTimeout(() => b.disabled = false, 5000); }
+  const b = $({scan: "scanBtn", ping: "pingBtn", practice: "practiceBtn"}[what]); b.disabled = true;
+  try { await fetch("/api/" + what, {method: "POST"}); } finally { setTimeout(() => b.disabled = false, what === "practice" ? 20000 : 5000); }
 }
 
 /* ---------------- agent network ---------------- */
@@ -163,7 +175,7 @@ function buildNet(agents){
     el("rect", {width: p.w, height: p.h, rx: 10}, n);
     el("text", {x: 12, y: 21}, n).textContent = p.icon + "  " + p.name;
     el("text", {x: 12, y: 38, class: "sub", id: "s-" + k}, n).textContent = p.sub;
-    n.onclick = () => { selected = k; render(); };
+    n.onclick = () => { selected = k; render(); renderChat(state.flows || []); };
   }
 }
 function paintNodes(agents){
@@ -183,17 +195,36 @@ function paintNodes(agents){
     n.setAttribute("class", cls); $("s-" + k).textContent = sub;
   }
 }
+let activeLabels = 0;
 function animateFlows(flows){
   const now = Date.now() / 1000;
   const fresh = flows.filter(f => f.id > lastFlowId && now - f.ts < 30);
   if (flows.length) lastFlowId = Math.max(lastFlowId, ...flows.map(f => f.id));
   fresh.forEach((f, i) => setTimeout(() => {
-    const e = EDGES.find(x => x.a === f.from && x.b === f.to); if (!e) return;
+    let e = EDGES.find(x => x.a === f.from && x.b === f.to), back = false;
+    if (!e) { e = EDGES.find(x => x.a === f.to && x.b === f.from); back = true; }  // replies/challenges run backwards
+    if (!e) return;
     e.path.classList.add("hot"); setTimeout(() => e.path.classList.remove("hot"), 1400);
-    const len = e.path.getTotalLength(), dot = el("circle", {r: 5, class: "pulse"}); const t0 = performance.now();
-    (function step(t){ const k = Math.min((t - t0) / 900, 1), pt = e.path.getPointAtLength(len * k);
-      dot.setAttribute("cx", pt.x); dot.setAttribute("cy", pt.y); if (k < 1) requestAnimationFrame(step); else dot.remove(); })(t0);
-  }, i * 70));
+    const len = e.path.getTotalLength(), dot = el("circle", {r: 5, class: "pulse" + (back ? " back" : "")}); const t0 = performance.now();
+    const label = f.text && activeLabels < 3 ? el("text", {class: "flabel"}) : null;
+    if (label) activeLabels++;
+    if (label) label.textContent = (f.text.length > 46 ? f.text.slice(0, 45) + "…" : f.text);
+    const dur = f.text ? 1600 : 900;
+    (function step(t){ const k = Math.min((t - t0) / dur, 1), pt = e.path.getPointAtLength(len * (back ? 1 - k : k));
+      dot.setAttribute("cx", pt.x); dot.setAttribute("cy", pt.y);
+      if (label) { label.setAttribute("x", pt.x + 8); label.setAttribute("y", pt.y - 8); }
+      if (k < 1) requestAnimationFrame(step); else { dot.remove(); if (label) setTimeout(() => { label.remove(); activeLabels--; }, 400); } })(t0);
+  }, i * 120));
+}
+const NAMES = {engine: "⚙️ SMC Engine", telegram: "📨 Telegram"};
+function who(k){ const a = state && state.agents.find(x => x.key === k); return a ? a.icon + " " + a.name : (NAMES[k] || k); }
+function renderChat(flows){
+  const only = $("onlySel").checked;
+  const list = flows.filter(f => f.text && (!only || f.from === selected || f.to === selected)).slice(-80).reverse();
+  $("chat").innerHTML = list.length ? list.map(f => `<div class="msg ${esc(f.kind)}"><span class="t">${esc(f.t)}</span>
+      <span class="who">${esc(who(f.from))} → ${esc(who(f.to))}<span class="kind">${esc(f.kind)}</span></span>
+      <span>${esc(f.text)}</span></div>`).join("")
+    : '<div class="empty">No messages yet. Press 🎓 Practice AI review to watch the 13 agents work on live data – or wait for the engine to find a real setup.</div>';
 }
 function renderDetail(agents){
   const a = agents.find(x => x.key === selected);
@@ -222,24 +253,27 @@ const series = chart.addCandlestickSeries({upColor: "#22c77a", downColor: "#f04f
   wickDownColor: "#f04f5a", borderVisible: false});
 let chartData = null, priceLines = [], liveBar = null;
 function clearLines(){ priceLines.forEach(l => series.removePriceLine(l)); priceLines = []; }
-function line(price, color, title, style){ priceLines.push(series.createPriceLine({price, color, lineWidth: 1,
-  lineStyle: style ?? LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title})); }
+function line(price, color, title, style, axis){ priceLines.push(series.createPriceLine({price, color, lineWidth: 1,
+  lineStyle: style ?? LightweightCharts.LineStyle.Dashed, axisLabelVisible: axis ?? false, title})); }
 async function loadChart(){
   const r = await fetch("/api/candles?tf=" + tf); chartData = await r.json();
   if (!chartData) { $("legend").textContent = "No market data yet – press ⚡ Scan now"; series.setData([]); return; }
   series.setData(chartData.candles); series.setMarkers(chartData.markers);
   liveBar = Object.assign({}, chartData.candles[chartData.candles.length - 1]);
-  drawLines(); chart.timeScale().scrollToRealTime();
-  $("legend").textContent = `${TFS.find(t => t[0] === tf)[1]} · ${chartData.candles.length} candles · BOS/CHoCH arrows · ● sweeps`;
+  drawLines();
+  const n = chartData.candles.length;
+  chart.timeScale().setVisibleLogicalRange({from: Math.max(n - 140, 0), to: n + 8});
+  $("legend").textContent = `${TFS.find(t => t[0] === tf)[1]} · ${chartData.candles.length} real candles` +
+    (chartData.market_open ? " · live" : " · market closed (no live updates)") + " · arrows = BOS/CHoCH · ● = sweep";
   drawOverlay();
 }
 function drawLines(){
   clearLines(); if (!chartData) return;
   if (show.levels) for (const [k, v] of Object.entries(chartData.levels)) if (/PDH|PDL|PWH|PWL|Asia/.test(k)) line(v, "#6b7894", k, LightweightCharts.LineStyle.Dotted);
   if (show.liq) { chartData.liquidity.buy.forEach(v => line(v, "#f5c54288", "BSL")); chartData.liquidity.sell.forEach(v => line(v, "#f5c54288", "SSL")); }
-  if (show.trades) chartData.trades.forEach(t => { line(t.entry, "#3d9bff", t.direction + " entry", 0); line(t.stop_loss, "#f04f5a", "SL", 0);
-    t.tps.forEach((p, i) => line(p, "#22c77a", "TP" + (i + 1), i ? 2 : 0)); });
-  if (chartData.poc && show.profile) line(chartData.poc, "#b36bff", "POC", 2);
+  if (show.trades) chartData.trades.forEach(t => { line(t.entry, "#3d9bff", t.direction + " entry", 0, true); line(t.stop_loss, "#f04f5a", "SL", 0, true);
+    t.tps.forEach((p, i) => line(p, "#22c77a", "TP" + (i + 1), i ? 2 : 0, true)); });
+  if (chartData.poc && show.profile) line(chartData.poc, "#b36bff", "POC", 2, true);
 }
 function drawOverlay(){
   const w = wrap.clientWidth, h = wrap.clientHeight, dpr = devicePixelRatio || 1;
@@ -262,7 +296,7 @@ function drawOverlay(){
     octx.beginPath(); octx.arc(x, y, r, 0, Math.PI * 2);
     octx.fillStyle = b.dir === "up" ? "rgba(34,199,122,.28)" : "rgba(240,79,90,.28)"; octx.fill();
     octx.strokeStyle = b.dir === "up" ? "#22c77a" : "#f04f5a"; octx.stroke();
-    octx.fillStyle = "#dde3ee"; octx.font = "9px sans-serif"; octx.fillText(b.x + "x", x - 7, y + 3);
+    if (b.x >= 3) { octx.fillStyle = "#dde3ee"; octx.font = "9px sans-serif"; octx.fillText(b.x + "x", x - 7, y + 3); }
   });
   if (show.profile && chartData.profile.length) {
     const max = Math.max(...chartData.profile.map(p => p.volume)) || 1, step = Math.abs(Y(chartData.profile[0].price) - Y(chartData.profile[1] ? chartData.profile[1].price : chartData.profile[0].price + 1)) || 4;
@@ -270,9 +304,20 @@ function drawOverlay(){
       octx.fillStyle = "rgba(179,107,255,.22)"; octx.fillRect(right - len, y - step / 2, len, Math.max(step - 1, 1)); });
   }
 }
-chart.timeScale().subscribeVisibleLogicalRangeChange(() => requestAnimationFrame(drawOverlay));
-new ResizeObserver(() => requestAnimationFrame(drawOverlay)).observe(wrap);
-document.querySelectorAll(".toggles input").forEach(c => c.onchange = () => { show[c.dataset.o] = c.checked; drawLines(); drawOverlay(); });
+// Redraw the overlay every frame while the chart is on screen, so zones never drift when the price scale
+// is dragged, zoomed or auto-scaled.
+let lastSig = "";
+(function loop(){
+  const r = wrap.getBoundingClientRect();
+  if (chartData && r.bottom > 0 && r.top < innerHeight) {
+    const lr = chart.timeScale().getVisibleLogicalRange(), p0 = series.priceToCoordinate(chartData.candles[chartData.candles.length - 1].close);
+    const sig = [r.width, r.height, lr && lr.from, lr && lr.to, p0, JSON.stringify(show)].join("|");
+    if (sig !== lastSig) { lastSig = sig; drawOverlay(); }
+  }
+  requestAnimationFrame(loop);
+})();
+$("onlySel").onchange = () => renderChat(state ? state.flows || [] : []);
+document.querySelectorAll(".toggles input[data-o]").forEach(c => c.onchange = () => { show[c.dataset.o] = c.checked; drawLines(); drawOverlay(); });
 $("tabs").innerHTML = TFS.map(([k, l]) => `<button class="alt" data-tf="${k}">${l}</button>`).join("");
 $("tabs").onclick = e => { const b = e.target.closest("button"); if (!b) return; tf = b.dataset.tf; tfSec = TFS.find(t => t[0] === tf)[2]; paintTabs(); loadChart(); };
 function paintTabs(){ document.querySelectorAll("#tabs button").forEach(b => b.className = b.dataset.tf === tf ? "" : "alt"); }
@@ -284,8 +329,9 @@ async function live(){
   el_.textContent = px.toFixed(2); el_.classList.remove("up", "down");
   if (lastPx !== null && px !== lastPx) el_.classList.add(px > lastPx ? "up" : "down");
   lastPx = px; $("pxsrc").textContent = v.source + (v.offset != null ? ` (offset ${v.offset})` : "");
-  if (liveBar && chartData) {
+  if (liveBar && chartData && chartData.market_open) {
     const now = Math.floor(Date.now() / 1000), start = Math.floor(now / tfSec) * tfSec;
+    if (start - liveBar.time > 3 * tfSec) return;  // data gap (e.g. just reopened): wait for the next real candle
     if (start > liveBar.time) liveBar = {time: start, open: liveBar.close, high: px, low: px, close: px};
     else { liveBar.close = px; liveBar.high = Math.max(liveBar.high, px); liveBar.low = Math.min(liveBar.low, px); }
     try { series.update(liveBar); } catch (e) {}
@@ -346,7 +392,7 @@ async function refresh(){
   try { state = await (await fetch("/api/state")).json(); }
   catch (e) { $("pills").innerHTML = pill("❌ Bot not running – start it with start.bat", "bad"); return; }
   if (!Object.keys(pos).length || net.childElementCount === 0) buildNet(state.agents);
-  render(); animateFlows(state.flows || []);
+  render(); animateFlows(state.flows || []); renderChat(state.flows || []);
   if (state.chart_version && state.chart_version + tf !== chartVersion) { chartVersion = state.chart_version + tf; loadChart(); }
 }
 paintTabs(); refresh(); live();

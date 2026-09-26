@@ -16,6 +16,7 @@ def _list(raw: str) -> list[str]:
 class Config:
     telegram_token: str
     gemini_api_key: str
+    gemini_api_keys: list[str]
     twelvedata_api_key: str
     gemini_model: str
     gemini_fallback_models: list[str]
@@ -65,6 +66,8 @@ def load_config() -> Config:
     return Config(
         telegram_token=os.environ["TELEGRAM_BOT_TOKEN"],
         gemini_api_key=os.environ["GEMINI_API_KEY"],
+        # Extra keys (comma separated) multiply the free quota; the bot rotates between all of them.
+        gemini_api_keys=list(dict.fromkeys([os.environ["GEMINI_API_KEY"]] + _list(os.getenv("GEMINI_API_KEYS", "")))),
         twelvedata_api_key=os.environ["TWELVEDATA_API_KEY"],
         gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
         gemini_fallback_models=_list(os.getenv("GEMINI_FALLBACK_MODELS", "gemini-3.6-flash,gemini-3.5-flash,gemini-flash-latest,gemini-3-flash-preview,gemini-3.7-flash,"

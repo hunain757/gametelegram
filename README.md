@@ -36,7 +36,9 @@ every 5 min ─► Twelve Data: XAU/USD M5 · M15 · H1 · H4 · D1   (+ Binance
         Stage 1  8 analysts: 🏗 Structure · 💧 Liquidity · 🧱 Order/Breaker blocks · ⚡ FVG · 📊 Volume profile
                  · 🕯 Price action · ⚙️ Indicators (EMA/RSI/MACD/ADX/Supertrend/StochRSI/BB/VWAP) · 📰 News & macro
         Stage 2  3 verifiers read ALL analyst reports: 🔗 Confluence · 🛡 Risk · 😈 Devil's Advocate
-        Stage 3  👑 Head Trader reads all 11 reports → TAKE/SKIP, confidence, final levels
+                 Debate: when the verifiers disagree, their challenge goes back to the analysts, who re-check
+                 their data and answer (they may change their vote)
+        Stage 3  👑 Head Trader reads all 11 reports + the desk's recent track record → TAKE/SKIP, levels
         Stage 4  ✅ Signal Auditor checks the final signal and can veto it
                 │
                 ▼ (Head TAKE + confidence ≥ 70 + ≥ 5/8 analysts + ≥ 2/3 verifiers + auditor OK)
@@ -92,8 +94,14 @@ When the bot starts it opens **http://localhost:8080** (it listens on this compu
   bubbles, volume profile + POC and your open trades. Toggle each layer.
 - **Live price** every 5 s (PAXG/USDT calibrated to the last XAU/USD candle between scans) and the time of the
   last real candle, so you can see how fresh the data is.
+- **Agent conversation**: every message the agents send each other, with its text – the engine's setup to
+  the analysts, each analyst's report to the verifiers, the verifiers' **challenges** back to the analysts and
+  their **replies** (debate round), all reports to the Head Trader, the decision to the Signal Auditor and the
+  final verdict. Replies/challenges run backwards along the lines in red.
 - Live activity feed, last AI decisions, open trades, news calendar + headlines, market structure, system
-  health and performance. Buttons: **⚡ Scan now** and **🩺 Test all agents**.
+  health (incl. each Gemini model/key and why it is resting) and performance.
+- Buttons: **⚡ Scan now**, **🎓 Practice AI review** (runs the whole 13-agent desk on the live market right
+  now so you can watch it – nothing is sent to Telegram) and **🩺 Test agents** (one tiny request per model).
 
 Set `DASHBOARD_PORT=0` to turn it off, or `DASHBOARD_OPEN=off` to stop it opening the browser.
 `static/lightweight-charts.js` is TradingView Lightweight Charts™ (Apache 2.0, see `static/LICENSE-lightweight-charts`).
@@ -104,6 +112,7 @@ Set `DASHBOARD_PORT=0` to turn it off, or `DASHBOARD_OPEN=off` to stop it openin
 |---|---|
 | `TELEGRAM_BOT_TOKEN` | Telegram → @BotFather → `/newbot` |
 | `GEMINI_API_KEY` | https://aistudio.google.com/apikey |
+| `GEMINI_API_KEYS` (optional) | more Gemini keys, comma separated – each has its own free quota and the bot rotates across all of them |
 | `TWELVEDATA_API_KEY` | https://twelvedata.com (the free plan is enough) |
 
 Volume comes from Binance's public PAXG/USDT market data, which needs no key.

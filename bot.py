@@ -58,7 +58,7 @@ class GoldBot:
         self.cfg = cfg
         self.storage = Storage(cfg.data_file)
         self.data = MarketData(cfg.twelvedata_api_key, cfg.symbol, cfg.volume_symbol)
-        self.desk = TradingDesk(cfg.gemini_api_key, cfg.gemini_model, cfg.min_risk_reward,
+        self.desk = TradingDesk(cfg.gemini_api_keys, cfg.gemini_model, cfg.min_risk_reward,
                                 cfg.min_confidence, cfg.min_agent_votes, cfg.gemini_fallback_models,
                                 cfg.gemini_rpm_per_model)
         self.news = NewsCalendar(cfg.news_currencies)
@@ -229,7 +229,7 @@ class GoldBot:
                 log.info("Reviewing %s %s setup (score %s)", style, setup["direction"], setup["score"])
                 mon.event(f"🎯 {label}: engine found {setup['direction']} setup, score {setup['score']} – "
                           + "; ".join(setup["confluences"][:3]))
-                verdict = await self.desk.review(setup, self.market, session)
+                verdict = await self.desk.review(setup, self.market, session, self.track_record(style))
                 if verdict.get("ai_down"):
                     await self._alert_ai_down(bot)
                 if not verdict["approved"]:
@@ -614,6 +614,21 @@ class GoldBot:
             await q.answer("Scanning…")
             await q.message.reply_text(await self._manual_scan_text(context.bot), parse_mode=HTML)
             return
+        elif data == "practice":
+            if not self.is_admin(user_id):
+                await q.answer("Only the owner can run a practice review", show_alert=True)
+                return
+            await q.answer("Practice review started – watch it on the dashboard")
+            verdict = await self.practice_review()
+            if verdict:
+                votes = " ".join(r["icon"] + ("✅" if r["vote"] == "TAKE" else "❌" if r["vote"] == "SKIP" else "⚠️")
+                                 for r in verdict["reports"])
+                await q.message.reply_text(
+                    f"🧪 <b>Practice review</b> (no signal sent)\n{votes}\n"
+                    f"Result: {'✅ would be SENT' if verdict['approved'] else '❌ would be SKIPPED'} · "
+                    f"confidence {verdict['confidence']}%\n<i>{escape(verdict.get('reject_reason') or verdict.get('reason') or '')}</i>",
+                    parse_mode=HTML)
+            return
         elif data == "aiview":
             await q.answer("AI analyst is reading the chart…")
             await q.message.reply_text(await self._ai_market_view(), parse_mode=HTML)
@@ -660,8 +675,7 @@ class GoldBot:
                    "stage": stage_no, **dict(mon.agents.get(a["key"], {}))}
                   for stage_no, (_, members) in enumerate(PIPELINE, 1) for a in members]
         stages = [name for name, _ in PIPELINE]
-        now_ts = time.time()
-        flows = [f for f in list(mon.flows) if now_ts - f["ts"] < 120]
+        flows = list(mon.flows)[-250:]
         market = None
         if self.market:
             tfs = []
@@ -674,7 +688,8 @@ class GoldBot:
                             "event": f"{ev['type']} {ev['direction']} @ {ev['level']:.2f}" if ev else None,
                             "rsi": round(m["ind"]["rsi"]) if m["ind"]["rsi"] is not None else None,
                             "atr": round(m["smc"]["atr"], 2),
-                            "patterns": ", ".join(x["name"] for x in m["smc"].get("patterns", []) if x.get("age", 0) <= 2)})
+                            "patterns": ", ".join(x["name"].split(" (")[0] for x in m["smc"].get("patterns", [])
+                                                  if x.get("age", 0) <= 1)[:60]})
             market = {"price": self.market["5min"]["price"], "levels": self.market.get("levels", {}),
                       "adr": self.market.get("adr", {}), "tfs": tfs}
         next_in = None
@@ -720,6 +735,10 @@ class GoldBot:
             return None
         xau = self.candles["5min"][-1]
         value = {"price": round(xau["close"], 2), "source": "Twelve Data (last scan)", "time": xau["time"]}
+        if not sessions.is_market_open():
+            value["source"] = "market closed – last real price"
+            self._live = (time.time(), value)
+            return value
         paxg = (self.volumes or {}).get("5min")
         if self.cfg.volume_symbol and paxg:
             try:
@@ -754,8 +773,14 @@ class GoldBot:
             return {"kind": kind, "dir": z["direction"], "top": z["top"], "bottom": z["bottom"],
                     "from": ts(candles[min(i, len(candles) - 1)]["time"])}
 
-        zones = [zone(z, "OB") for z in smc_read["order_blocks"]] + [zone(z, "FVG") for z in smc_read["fvgs"]]
-        zones += [zone(z, "Breaker") for z in smc_read.get("breakers", [])]
+        price, a = candles[-1]["close"], smc_read["atr"] or 1.0
+
+        def near(zs, n):
+            zs = [z for z in zs if abs((z["top"] + z["bottom"]) / 2 - price) <= 6 * a]
+            return sorted(zs, key=lambda z: abs((z["top"] + z["bottom"]) / 2 - price))[:n]
+        zones = [zone(z, "OB") for z in near(smc_read["order_blocks"], 3)]
+        zones += [zone(z, "FVG") for z in near(smc_read["fvgs"], 3)]
+        zones += [zone(z, "Breaker") for z in near(smc_read.get("breakers", []), 2)]
         markers = [{"time": ts(e["time"]), "position": "belowBar" if e["direction"] == "bullish" else "aboveBar",
                     "color": "#26c281" if e["direction"] == "bullish" else "#ef5350",
                     "shape": "arrowUp" if e["direction"] == "bullish" else "arrowDown", "text": e["type"]}
@@ -772,8 +797,9 @@ class GoldBot:
                          "close": c["close"]} for c in candles],
             "markers": sorted(markers, key=lambda m: m["time"]),
             "zones": zones,
-            "levels": self.market.get("levels", {}),
-            "liquidity": {"buy": smc_read["liquidity"]["buy_side"][:3], "sell": smc_read["liquidity"]["sell_side"][:3]},
+            "levels": {k: v for k, v in self.market.get("levels", {}).items() if abs(v - price) <= 10 * a},
+            "liquidity": {"buy": smc_read["liquidity"]["buy_side"][:2], "sell": smc_read["liquidity"]["sell_side"][:2]},
+            "market_open": sessions.is_market_open(),
             "bubbles": bubbles,
             "profile": vol.get("profile", []) if vol.get("available") else [],
             "poc": vol.get("poc"),
@@ -795,6 +821,62 @@ class GoldBot:
             await self.scan(self.app_bot, manual=True)
         except Exception:
             log.exception("Dashboard scan failed")
+
+    def track_record(self, style: str) -> str:
+        """Short summary of how this style's recent signals ended, given to the Head Trader."""
+        closed = [t for t in self.storage.closed_trades() if t["style"] == style][-10:]
+        if not closed:
+            return "no closed trades yet"
+        s = stats(closed)
+        last = ", ".join(f"{t['direction']} {t['outcome']} {t.get('result_r') or 0:+g}R" for t in closed[-5:])
+        return (f"last {s['trades']} finished {STYLES[style]['label'][2:]} trades: win rate {s['win_rate']}%, "
+                f"total {s['total_r']:+g}R; most recent: {last}")
+
+    def practice_setup(self) -> dict | None:
+        """Best setup the engine can see right now (normal mode), or a probe trade in the higher-timeframe
+        direction – only for practice reviews, never sent as a signal."""
+        session = sessions.current()
+        for style in self.cfg.styles:
+            setup = find_setup(style, self.market, session, self.cfg.min_risk_reward)
+            if setup:
+                return setup
+        m = self.market["15min"]
+        trend = self.market["4h"]["smc"]["trend"] or self.market["1h"]["smc"]["trend"] or "bullish"
+        bull = trend == "bullish"
+        price, a = m["price"], m["smc"]["atr"] or 1.0
+        risk = 1.5 * a
+        sign = 1 if bull else -1
+        return {"style": "intraday", "style_label": STYLES["intraday"]["label"], "direction": "BUY" if bull else "SELL",
+                "entry_type": "MARKET", "entry": round(price, 2), "stop_loss": round(price - sign * risk, 2),
+                "tps": [{"price": round(price + sign * r * risk, 2), "rr": r, "source": "R-multiple"} for r in (1.5, 2.5, 4)],
+                "price": round(price, 2), "atr": round(a, 2), "score": 0,
+                "confluences": [f"Practice probe: H4 {trend} bias, market entry at the current price"],
+                "poi": {"kind": "none", "top": price, "bottom": price, "time": ""}, "key": "practice",
+                "expiry_min": 240, "timeframes": {"entry": "15min", "confirm": "1h", "bias": "4h"}}
+
+    async def practice_review(self) -> dict | None:
+        """Run the whole AI desk on live data right now so the owner can watch it work (no signal is sent)."""
+        mon = self.desk.monitor
+        if self.scan_lock.locked():
+            mon.event("🧪 Practice review skipped – a scan is running", "skip")
+            return None
+        if not self.market:
+            await self.refresh_market()
+        async with self.scan_lock:
+            setup = self.practice_setup()
+            session = {**sessions.current(), "news": self.news.brief(), "headlines": self.headlines.brief()}
+            try:
+                return await self.desk.review(setup, self.market, session, self.track_record(setup["style"]),
+                                              practice=True)
+            finally:
+                mon.set_phase("idle")
+
+    async def dashboard_practice(self):
+        try:
+            await self.practice_review()
+        except Exception as e:
+            log.exception("Practice review failed")
+            self.desk.monitor.event(f"❌ Practice review failed: {str(e)[:150]}", "error")
 
     async def dashboard_ping(self):
         try:

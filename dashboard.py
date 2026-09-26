@@ -73,7 +73,8 @@ class Dashboard:
 
             def do_POST(self):
                 u = urlparse(self.path)
-                actions = {"/api/scan": dash.gb.dashboard_scan, "/api/ping": dash.gb.dashboard_ping}
+                actions = {"/api/scan": dash.gb.dashboard_scan, "/api/ping": dash.gb.dashboard_ping,
+                           "/api/practice": dash.gb.dashboard_practice}
                 if u.path not in actions:
                     self._send(404, b"not found", "text/plain")
                     return

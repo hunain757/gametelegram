@@ -120,8 +120,10 @@ Market read (per timeframe):
 
 Session and upcoming news: {session}
 
-Your 8 analysts and 3 verifiers reported:
+Your 8 analysts and 3 verifiers reported (after their debate):
 {reports}
+
+Desk track record for this trading style (learn from it): {history}
 
 Make the final call. Only TAKE high-quality trades where structure, liquidity and risk line up; SKIP otherwise.
 You may fine-tune entry / stop loss / targets (keep the same direction; TP1 must be at least 1:{min_rr}),
@@ -131,6 +133,26 @@ Reply with JSON only:
   "tp1": number, "tp2": number, "tp3": number,
   "headline": "max 8 words, e.g. 'Sweep + H1 OB retest in discount'",
   "reason": "1-2 short sentences in simple English"}}
+"""
+
+DEBATE_PROMPT = """You are the {name} on a professional XAU/USD (gold) trading desk that trades Smart Money Concepts.
+Your job: {focus}
+
+Setup:
+{setup}
+
+Market read (per timeframe):
+{market}
+
+Your first report was: {own}
+
+The verifiers challenge the desk:
+{challenges}
+
+Re-check the data for YOUR specialty only. Change your vote if the challenge is right, keep it if the data
+supports you. Reply with JSON only:
+{{"vote": "TAKE" or "SKIP", "score": 0-100, "changed": true or false,
+  "reply": "one sentence answering the challenge", "summary": "your updated one-sentence view"}}
 """
 
 VERIFIER_PROMPT = """You are the {name} on a professional XAU/USD (gold) trading desk that trades Smart Money Concepts.
@@ -320,7 +342,7 @@ class ModelPool:
         for m in self.models:
             err = self.last_error.get(m)
             cooling = self.cool_until[m] > now_m
-            out.append({"model": m, "ready": not cooling,
+            out.append({"model": slot_label(m), "ready": not cooling,
                         "kind": err["kind"] if err and cooling else None,
                         "reason": err["text"] if err and cooling else "",
                         "back_in_min": int(max(err["until"] - now, 0) // 60) if err and cooling else 0,
@@ -328,11 +350,28 @@ class ModelPool:
         return out
 
 
+def split_slot(slot: str) -> tuple[str, int]:
+    """'gemini-3.6-flash#2' -> ('gemini-3.6-flash', 1): model name and API-key index."""
+    model, _, k = slot.partition("#")
+    return model, (int(k) - 1 if k else 0)
+
+
+def slot_label(slot: str) -> str:
+    model, k = split_slot(slot)
+    return f"{model} · key {k + 1}" if "#" in slot else model
+
+
 class TradingDesk:
-    def __init__(self, api_key: str, model: str, min_rr: float, min_confidence: int, min_votes: int,
+    def __init__(self, api_key: str | list[str], model: str, min_rr: float, min_confidence: int, min_votes: int,
                  fallback_models: list[str] | None = None, rpm_per_model: int = 4):
-        self.client = genai.Client(api_key=api_key)
-        self.pool = ModelPool([model] + [m for m in (fallback_models or []) if m != model], rpm_per_model)
+        keys = [api_key] if isinstance(api_key, str) else [k for k in api_key if k]
+        self.clients = [genai.Client(api_key=k) for k in keys]
+        self.client = self.clients[0]
+        models = [model] + [m for m in (fallback_models or []) if m != model]
+        # Every model on every key is its own "slot" with its own free quota. Neighbouring agents get
+        # different keys, so one key's limits never stop the whole desk.
+        slots = [f"{m}#{k + 1}" for m in models for k in range(len(keys))] if len(keys) > 1 else models
+        self.pool = ModelPool(slots, rpm_per_model)
         self.min_rr = min_rr
         self.min_confidence = min_confidence
         self.min_votes = min_votes
@@ -361,9 +400,11 @@ class TradingDesk:
             if model is None:
                 raise last_error or RuntimeError("no Gemini model available")
             try:
-                resp = await self.client.aio.models.generate_content(model=model, contents=prompt, config=config)
+                name, k = split_slot(model)
+                client = self.clients[k] if hasattr(self, "clients") else self.client
+                resp = await client.aio.models.generate_content(model=name, contents=prompt, config=config)
                 self._count(False)
-                return resp.text or "", model
+                return resp.text or "", slot_label(model)
             except Exception as e:
                 self._count(True)
                 last_error = e
@@ -378,7 +419,10 @@ class TradingDesk:
         started = time.monotonic()
         try:
             for src in sources:
-                mon.message(src, agent["key"])
+                if isinstance(src, tuple):
+                    mon.message(src[0], agent["key"], src[1])
+                else:
+                    mon.message(src, agent["key"])
             text, model = await self._ask(template.format(name=agent["name"], focus=agent["focus"], **ctx),
                                           preferred=self.model_for(i + 1))
             data = parse_json(text)
@@ -416,7 +460,7 @@ class TradingDesk:
             return []
         self._last_ping = now
         mapping = self.agent_models()
-        mon.event(f"🩺 Testing {len(self.pool.models)} Gemini models used by the {len(mapping)} agents…")
+        mon.event(f"🩺 Testing the Gemini models/keys used by the {len(mapping)} agents…")
         for key in mapping:
             mon.agent(key, "thinking", summary="Health check…", vote=None, score=None, points=[], err=None)
 
@@ -426,8 +470,10 @@ class TradingDesk:
                 err = self.pool.last_error.get(model, {})
                 return {"model": model, "ok": False, "kind": err.get("kind"), "error": err.get("text", "resting")}
             try:
-                resp = await self.client.aio.models.generate_content(
-                    model=model, contents='Reply with exactly {"ok": true}',
+                name, k = split_slot(model)
+                client = self.clients[k] if hasattr(self, "clients") else self.client
+                resp = await client.aio.models.generate_content(
+                    model=name, contents='Reply with exactly {"ok": true}',
                     config=types.GenerateContentConfig(temperature=0, response_mime_type="application/json"))
                 self._count(False)
                 ok = bool(parse_json(resp.text or "").get("ok"))
@@ -438,16 +484,17 @@ class TradingDesk:
                 kind, friendly, _ = classify_error(e)
                 return {"model": model, "ok": False, "kind": kind, "error": friendly}
 
-        results = {r["model"]: r for r in await asyncio.gather(*(one(m) for m in self.pool.models))}
+        slots = list(dict.fromkeys(mapping.values())) + [m for m in self.pool.models if m not in mapping.values()][:3]
+        results = {r["model"]: r for r in await asyncio.gather(*(one(m) for m in slots))}
         online = [m for m, r in results.items() if r["ok"]]
         for key, model in mapping.items():
             r = results.get(model, {})
             if r.get("ok"):
-                mon.agent(key, "done", vote=None, model=model, seconds=r.get("seconds"), err=None,
-                          summary=f"Online ✔ ({model} answered in {r.get('seconds')}s)")
+                mon.agent(key, "done", vote=None, model=slot_label(model), seconds=r.get("seconds"), err=None,
+                          summary=f"Online ✔ ({slot_label(model)} answered in {r.get('seconds')}s)")
             elif online:
-                mon.agent(key, "done", vote=None, model=online[0], err=None,
-                          summary=f"Online ✔ via backup model {online[0]} ({model}: {r.get('error')})")
+                mon.agent(key, "done", vote=None, model=slot_label(online[0]), err=None,
+                          summary=f"Online ✔ via backup {slot_label(online[0])} ({slot_label(model)}: {r.get('error')})")
             else:
                 mon.agent(key, "error", err=r.get("kind"), summary=r.get("error") or "no model available")
         ok_agents = len(mapping) if online else 0
@@ -461,15 +508,17 @@ class TradingDesk:
                           "error")
         return list(results.values())
 
-    async def review(self, setup: dict, market: dict, session: dict) -> dict:
+    async def review(self, setup: dict, market: dict, session: dict, history: str = "",
+                     practice: bool = False) -> dict:
         """Run the whole desk on one setup. Returns a verdict dict with 'approved'."""
-        ctx = {"setup": setup_brief(setup), "market": market_brief(market), "session": json.dumps(session)}
+        ctx = {"setup": setup_brief(setup), "market": market_brief(market), "session": json.dumps(session),
+               "history": history}
         mon = getattr(self, "monitor", None) or Monitor()
         mon.set_phase("ai_review")
         for a in VERIFIERS + [HEAD, AUDITOR]:
             mon.agent(a["key"], "waiting", summary="Waiting for reports…", vote=None, score=None, points=[])
-        mon.event(f"🧠 AI desk reviewing {setup['style_label']} {setup['direction']} @ {setup['entry']} "
-                  f"(engine score {setup['score']})")
+        mon.event(("🧪 PRACTICE review (no signal will be sent): " if practice else "🧠 AI desk reviewing ")
+                  + f"{setup['style_label']} {setup['direction']} @ {setup['entry']} (engine score {setup['score']})")
         verdict = await self._review(setup, ctx, mon)
         mon.agent("head", "done" if not verdict.get("ai_down") else "error",
                   vote="TAKE" if verdict["approved"] else "SKIP", score=verdict["confidence"],
@@ -477,18 +526,71 @@ class TradingDesk:
         mon.event(f"👑 Head Trader: {'✅ APPROVED' if verdict['approved'] else '❌ REJECTED'} – "
                   f"{verdict.get('reject_reason') or verdict.get('headline') or verdict.get('reason')}",
                   "take" if verdict["approved"] else "skip")
-        mon.review({"style": setup["style_label"], "direction": setup["direction"], "entry": setup["entry"],
+        mon.review({"practice": practice, "style": setup["style_label"], "direction": setup["direction"], "entry": setup["entry"],
                     "score": setup["score"], "votes": verdict["votes"], "approved": verdict["approved"],
                     "confidence": verdict["confidence"], "reason": verdict.get("reject_reason") or verdict.get("reason"),
-                    "reports": [{k: r.get(k) for k in ("icon", "name", "vote", "score")} for r in verdict["reports"]]})
+                    "reports": [{k: r.get(k) for k in ("icon", "name", "vote", "score", "changed")}
+                                for r in verdict["reports"]]})
         mon.set_phase("idle")
         return verdict
+
+    async def _debate(self, analysts: list[dict], verifiers: list[dict], ctx: dict, mon: Monitor):
+        """Round 2: when the verifiers mostly disagree with an analyst, they send their challenge back and
+        the analyst re-checks its own specialty and answers (it may change its vote)."""
+        skip = [v for v in verifiers if v["vote"] == "SKIP"]
+        take = [v for v in verifiers if v["vote"] == "TAKE"]
+        if len(skip) >= 2:
+            targets, against = [r for r in analysts if r["vote"] == "TAKE"], skip
+        elif len(take) >= 2:
+            targets, against = [r for r in analysts if r["vote"] == "SKIP"], take
+        else:
+            return
+        if not targets:
+            return
+        mon.event(f"🗣 Debate: {len(against)} verifiers challenge {len(targets)} analysts")
+        challenges = "\n".join(f"- {v['name']} ({v['vote']}): {v['summary']} {v['points']}" for v in against)
+        by_key = {a["key"]: a for a in ANALYSTS}
+
+        async def answer(r: dict):
+            agent = by_key[r["key"]]
+            for v in against:
+                mon.message(v["key"], r["key"], f"Challenge: {v['summary']}", "challenge")
+            mon.agent(r["key"], "thinking", summary="Answering the verifiers' challenge…")
+            try:
+                text, model = await self._ask(DEBATE_PROMPT.format(
+                    name=agent["name"], focus=agent["focus"], own=f"{r['vote']} {r['score']} – {r['summary']}",
+                    challenges=challenges, setup=ctx["setup"], market=ctx["market"]),
+                    preferred=self.model_for(ANALYSTS.index(agent) + 1))
+                d = parse_json(text)
+            except Exception as e:
+                kind, friendly, _ = classify_error(e)
+                mon.agent(r["key"], "done", vote=r["vote"], score=r["score"], summary=r["summary"])
+                mon.event(f"{agent['icon']} {agent['name']} could not answer ({friendly}); keeps {r['vote']}", "error")
+                return
+            old_vote = r["vote"]
+            vote = "TAKE" if str(d.get("vote", old_vote)).upper() == "TAKE" else "SKIP"
+            r.update(vote=vote, score=int(d.get("score") or r["score"]), debate=str(d.get("reply", ""))[:200],
+                     summary=str(d.get("summary") or r["summary"])[:200], changed=vote != old_vote)
+            mon.agent(r["key"], "done", vote=vote, score=r["score"], summary=r["summary"], model=model,
+                      points=[f"Debate: {r['debate']}"] + r.get("points", [])[:2])
+            for v in against:
+                mon.message(r["key"], v["key"], f"{'Changed to ' + vote if r['changed'] else 'Keeps ' + vote}: "
+                                                f"{r['debate']}", "reply")
+            mon.event(f"🗣 {agent['icon']} {agent['name']}: "
+                      + (f"changed {old_vote} → {vote}" if r["changed"] else f"keeps {vote}") + f" – {r['debate']}",
+                      "take" if vote == "TAKE" else "skip")
+
+        await asyncio.gather(*(answer(r) for r in targets))
 
     async def _review(self, setup: dict, ctx: dict, mon: Monitor) -> dict:
         # Stage 1: analysts in parallel (the engine hands each of them the setup and market read).
         mon.event("📤 Stage 1: engine → 8 analysts")
-        analysts = await asyncio.gather(*(self._specialist(i, a, ctx, sources=("engine",))
+        brief = (f"{setup['style_label']} {setup['direction']} {setup['entry_type']} @ {setup['entry']} · SL "
+                 f"{setup['stop_loss']} · TP1 {setup['tps'][0]['price']} · engine score {setup['score']} · "
+                 + "; ".join(setup["confluences"][:3]))
+        analysts = await asyncio.gather(*(self._specialist(i, a, ctx, sources=(("engine", brief),))
                                           for i, a in enumerate(ANALYSTS)))
+        analysts = list(analysts)
         verdict = {"reports": list(analysts), "votes": 0, "errors": 0, "approved": False,
                    "confidence": 0, "headline": "", "reason": "", "levels": None}
         if all(r["vote"] == "ERROR" for r in analysts):
@@ -499,9 +601,11 @@ class TradingDesk:
         # Stage 2: verifiers receive every analyst report.
         mon.event("📤 Stage 2: analyst reports → Confluence Verifier, Risk Manager, Devil's Advocate")
         vctx = dict(ctx, reports=_reports_text(analysts))
-        keys = tuple(a["key"] for a in ANALYSTS)
-        verifiers = await asyncio.gather(*(self._specialist(len(ANALYSTS) + i, v, vctx, VERIFIER_PROMPT, keys)
+        shared = tuple((r["key"], f"{r['vote']} {r['score']} – {r['summary']}") for r in analysts)
+        verifiers = await asyncio.gather(*(self._specialist(len(ANALYSTS) + i, v, vctx, VERIFIER_PROMPT, shared)
                                            for i, v in enumerate(VERIFIERS)))
+        if getattr(self, "debate", True):
+            await self._debate(analysts, list(verifiers), ctx, mon)
         reports = list(analysts) + list(verifiers)
         a_votes = sum(r["vote"] == "TAKE" for r in analysts)
         v_votes = sum(r["vote"] == "TAKE" for r in verifiers)
@@ -510,11 +614,13 @@ class TradingDesk:
 
         # Stage 3: the Head Trader reads everything.
         for r in reports:
-            mon.message(r["key"], "head")
+            mon.message(r["key"], "head", f"{r['vote']} {r['score']} – {r['summary']}")
         mon.event("📤 Stage 3: all 11 reports → 👑 Head Trader")
         mon.agent("head", "thinking", summary="Reading all 11 reports and making the final call…")
         try:
-            text, _ = await self._ask(HEAD_PROMPT.format(reports=_reports_text(reports), min_rr=self.min_rr, **ctx),
+            text, _ = await self._ask(HEAD_PROMPT.format(reports=_reports_text(reports), min_rr=self.min_rr,
+                                                         history=ctx.get("history") or "no closed trades yet",
+                                                         **{k: v for k, v in ctx.items() if k != "history"}),
                                       preferred=self.model_for(0))
             head = parse_json(text)
         except Exception as e:
@@ -561,7 +667,8 @@ class TradingDesk:
             return verdict
 
         # Stage 4: the Signal Auditor checks the final signal and can veto it.
-        mon.message("head", "auditor")
+        mon.message("head", "auditor", f"TAKE {setup['direction']} · confidence {verdict['confidence']}% – "
+                                       f"{verdict['headline'] or verdict['reason'][:120]}", "decision")
         mon.event("📤 Stage 4: Head Trader's signal → ✅ Signal Auditor")
         mon.agent("auditor", "thinking", summary="Checking the final signal…")
         final = verdict["levels"] or {"entry": setup["entry"], "stop_loss": setup["stop_loss"],
@@ -584,6 +691,8 @@ class TradingDesk:
             approve, note, issues = True, "auditor offline – desk decision stands", []
             mon.agent("auditor", "error", summary=note)
         verdict["audit"] = {"approve": approve, "note": note, "issues": issues}
+        mon.message("auditor", "telegram", ("✅ Signal approved – " if approve else "⛔ Vetoed – ")
+                    + (note or "; ".join(issues)), "decision")
         verdict["approved"] = approve
         if not approve:
             verdict["reject_reason"] = "vetoed by Signal Auditor: " + ("; ".join(issues) or note)

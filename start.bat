@@ -18,9 +18,11 @@ echo.
 set /p TG=Telegram bot token (BotFather se): 
 set /p GM=Gemini API key (aistudio.google.com se): 
 set /p TD=Twelve Data API key (twelvedata.com se): 
+set /p GX=Aur Gemini keys (optional, comma se alag, warna Enter): 
 > .env echo TELEGRAM_BOT_TOKEN=%TG%
 >> .env echo GEMINI_API_KEY=%GM%
 >> .env echo TWELVEDATA_API_KEY=%TD%
+>> .env echo GEMINI_API_KEYS=%GX%
 echo Keys save ho gayin.
 
 :run

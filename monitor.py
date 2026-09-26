@@ -16,7 +16,7 @@ class Monitor:
     def __init__(self):
         self.log: deque = deque(maxlen=400)
         self.reviews: deque = deque(maxlen=25)
-        self.flows: deque = deque(maxlen=200)
+        self.flows: deque = deque(maxlen=400)
         self._seq = 0
         self.phase = "starting"
         self.agents = {k: {"status": "idle", "vote": None, "score": None, "summary": "", "points": [],
@@ -35,7 +35,9 @@ class Monitor:
     def review(self, entry: dict):
         self.reviews.appendleft({"t": _now(), **entry})
 
-    def message(self, src: str, dst: str):
-        """Information passed from one agent (or the engine) to another; drawn as a moving line."""
+    def message(self, src: str, dst: str, text: str = "", kind: str = "report"):
+        """Information passed from one agent (or the engine) to another: drawn as a moving line on the
+        dashboard and listed in the agent conversation."""
         self._seq += 1
-        self.flows.append({"id": self._seq, "from": src, "to": dst, "t": _now(), "ts": time.time()})
+        self.flows.append({"id": self._seq, "from": src, "to": dst, "t": _now(), "ts": time.time(),
+                           "text": text[:300], "kind": kind})

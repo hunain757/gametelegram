@@ -188,6 +188,8 @@ def ai_report(t: dict) -> str:
         lines.append(f"{r['icon']} <b>{escape(r['name'])}</b> — {vote} ({r['score']}){model}")
         lines.append(f"<i>{escape(r['summary'])}</i>")
         lines += [f"  • {escape(pt)}" for pt in r["points"]]
+        if r.get("debate"):
+            lines.append(f"  🗣 <i>Debate: {escape(r['debate'])}</i>" + (" (changed vote)" if r.get("changed") else ""))
         lines.append("")
     lines.append(f"👑 <b>Head Trader</b> — confidence {t['confidence']}%")
     lines.append(f"<i>{escape(t.get('reason', ''))}</i>")
@@ -225,6 +227,7 @@ def main_menu(user: dict, is_admin: bool) -> tuple[str, InlineKeyboardMarkup]:
     if is_admin:
         rows.append([Btn("⚡ Scan Now", callback_data="scan"), Btn("🩺 Status", callback_data="status"),
                      Btn("🧪 Backtest", callback_data="bt")])
+        rows.append([Btn("🎓 Practice AI review (live data)", callback_data="practice")])
     return text, InlineKeyboardMarkup(rows)
 
 

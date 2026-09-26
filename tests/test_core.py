@@ -306,6 +306,42 @@ class AgentTests(unittest.TestCase):
         self.assertTrue(v.get("ai_down"))
 
 
+class DebateTests(unittest.TestCase):
+    def test_verifiers_challenge_and_analysts_answer(self):
+        setup, market, _ = first_setup()
+        desk = fake_desk()
+
+        class Models:
+            async def generate_content(self, model, contents, config):
+                if "The verifiers challenge" in contents:        # debate answer: analyst changes its mind
+                    return types.SimpleNamespace(text='{"vote": "SKIP", "score": 40, "changed": true, '
+                                                      '"reply": "Agreed, ADR is exhausted", "summary": "now SKIP"}')
+                if "The 8 analysts sent you" in contents:        # verifiers say SKIP
+                    return types.SimpleNamespace(text='{"vote": "SKIP", "score": 30, "summary": "ADR exhausted", "points": []}')
+                if "Head Trader" in contents:
+                    return types.SimpleNamespace(text='{"decision": "SKIP", "confidence": 20, "reason": "no"}')
+                return types.SimpleNamespace(text='{"vote": "TAKE", "score": 80, "summary": "fine", "points": []}')
+        desk.client = types.SimpleNamespace(aio=types.SimpleNamespace(models=Models()))
+        v = asyncio.run(desk.review(setup, market, SESSION, history="last 3 trades: 2 losses"))
+        analysts = [r for r in v["reports"] if r["stage"] == 1]
+        self.assertTrue(all(r["vote"] == "SKIP" and r["changed"] for r in analysts))
+        self.assertFalse(v["approved"])
+        flows = list(desk.monitor.flows)
+        self.assertTrue(any(f["kind"] == "challenge" and f["from"] == "devil" and f["to"] == "structure" for f in flows))
+        self.assertTrue(any(f["kind"] == "reply" and f["from"] == "structure" for f in flows))
+        self.assertTrue(any(f["from"] == "engine" and ("SELL" in f["text"] or "BUY" in f["text"]) for f in flows))
+        self.assertIn("Debate", ui.ai_report({**v, "direction": "BUY", "style_label": "x", "confidence": 20,
+                                              "reason": "", "engine_only": False}))
+
+    def test_multiple_keys_become_slots(self):
+        from agents import TradingDesk, split_slot
+        desk = TradingDesk(["k1", "k2"], "m-a", 1.5, 70, 5, ["m-b"])
+        self.assertEqual(desk.pool.models, ["m-a#1", "m-a#2", "m-b#1", "m-b#2"])
+        self.assertEqual(split_slot("m-b#2"), ("m-b", 1))
+        self.assertEqual(len(desk.clients), 2)
+        self.assertEqual(desk.pool.status()[1]["model"], "m-a · key 2")
+
+
 class GeminiErrorTests(unittest.TestCase):
     def test_classify_errors(self):
         from agents import classify_error
@@ -849,6 +885,15 @@ class OptimizeAndWeekendTests(InteractionTests):
         self.press("son:scalp")
         self.assertTrue(self.gb.style_params("scalp")["enabled"])
         self.press("bt")
+
+    def test_practice_review_runs_desk_without_sending(self):
+        verdict = asyncio.run(self.gb.practice_review())
+        self.assertIsNotNone(verdict)
+        self.assertEqual(self.gb.storage.open_trades(), [])
+        self.assertTrue(self.gb.desk.monitor.reviews[0]["practice"])
+        self.gb.storage.claim_owner(111)
+        self.press("practice")
+        self.assertIn("Practice review", self.sent[-1][1])
 
     def test_market_closed_still_refreshes_data(self):
         import sessions as sess
