@@ -19,6 +19,7 @@ class Monitor:
         self.log: deque = deque(maxlen=400)
         self.reviews: deque = deque(maxlen=25)
         self.flows: deque = deque(maxlen=400)
+        self.signal_feed: deque = deque(maxlen=100)  # new signals and trade updates, shown on the website
         self._seq = 0
         self.phase = "starting"
         self.board = None  # the strategy board of the last review
@@ -52,3 +53,9 @@ class Monitor:
     def review_end(self, approved: bool):
         if self.current:
             self.current.update(end=time.time(), approved=approved)
+
+    def signal(self, kind: str, text: str, trade_id: str | None = None):
+        """A new signal or a trade update (TP, SL, fill...) for the website's signal feed and notifications."""
+        self._seq += 1
+        self.signal_feed.appendleft({"id": self._seq, "t": _now(), "ts": time.time(), "kind": kind,
+                                     "text": text, "trade": trade_id})

@@ -44,6 +44,7 @@ def _markets(raw: str) -> list[str]:
 @dataclass(frozen=True)
 class Config:
     telegram_token: str
+    use_telegram: bool
     gemini_api_key: str
     gemini_api_keys: list[str]
     twelvedata_api_key: str
@@ -82,7 +83,7 @@ class Config:
 def load_config() -> Config:
     missing = [
         name
-        for name in ("TELEGRAM_BOT_TOKEN", "TWELVEDATA_API_KEY")
+        for name in ("TWELVEDATA_API_KEY",)
         if not os.getenv(name)
     ]
     if missing:
@@ -103,7 +104,10 @@ def load_config() -> Config:
         raise SystemExit("No AI key found. Put MISTRAL_API_KEY (recommended), GROQ_API_KEY or GEMINI_API_KEY in .env")
 
     return Config(
-        telegram_token=os.environ["TELEGRAM_BOT_TOKEN"],
+        telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
+        # Signals go to the local website. Telegram only runs when TELEGRAM=on (and a token is set).
+        use_telegram=os.getenv("TELEGRAM", "off").lower() in ("1", "on", "true", "yes")
+        and bool(os.getenv("TELEGRAM_BOT_TOKEN")),
         gemini_api_key=gemini_keys[0] if gemini_keys else "",
         # Extra keys (comma separated) multiply the free quota; the bot rotates between all of them.
         gemini_api_keys=gemini_keys,

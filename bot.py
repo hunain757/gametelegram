@@ -7,7 +7,9 @@ approved trades are sent with a chart, per-user lot size and live TP/SL tracking
 
 import asyncio
 import logging
+import re
 import time
+import types
 from datetime import date, datetime, time as dtime, timedelta, timezone
 from html import escape
 
@@ -147,6 +149,8 @@ class GoldBot:
                 log.warning("Could not message admin %s: %s", admin, e)
 
     def _targets(self, style: str | None = None, flag: str | None = None) -> list:
+        if not getattr(self.cfg, "use_telegram", True):
+            return []  # website-only mode
         targets = self.storage.subscribers(style, flag)
         if self.cfg.channel_id:
             targets.append(self.cfg.channel_id)
@@ -358,6 +362,11 @@ class GoldBot:
 
     async def publish(self, bot, trade: dict):
         self.storage.add_trade(trade)
+        self.desk.monitor.signal(
+            "new", f"{trade.get('symbol_name', 'XAU/USD')} {trade['direction']} {'LIMIT' if trade['entry_type'] == 'LIMIT' else 'MARKET'} "
+                   f"@ {trade['entry']} · SL {trade['stop_loss']} · TP1 {trade['tps'][0]} · {ui.label(trade)}", trade["id"])
+        if not self._targets(trade["style"]):
+            return  # website only
         png = None
         try:
             tf = trade["timeframes"]["entry"]
@@ -389,6 +398,7 @@ class GoldBot:
 
     async def notify(self, bot, trade: dict, ev: dict):
         text = ui.event_message(trade, ev)
+        self.desk.monitor.signal(ev["kind"], ui.plain(re.sub(r"<[^>]+>", "", text)).replace("\n", " · "), trade["id"])
         for chat_id, msg_id in trade["messages"].items():
             try:
                 await bot.send_message(chat_id, text, parse_mode=HTML,
@@ -849,6 +859,8 @@ class GoldBot:
             "markets": markets,
             "trades": [{**{k: t[k] for k in ("direction", "style_label", "entry", "stop_loss", "tps", "status", "stage")},
                         "symbol": t.get("symbol_name", "XAU/USD")} for t in self.storage.open_trades()],
+            "signals": self._signals(),
+            "signal_feed": list(mon.signal_feed)[:40],
             "performance": stats(self.storage.closed_trades()),
             "settings": {"styles": self.cfg.styles, "min_confidence": self.cfg.min_confidence,
                          "min_votes": self.cfg.min_agent_votes},
@@ -958,6 +970,30 @@ class GoldBot:
             "trades": [{k: t[k] for k in ("direction", "entry", "stop_loss", "tps", "style_label")}
                        for t in self.storage.open_trades() if t.get("instrument", "XAUUSD") == inst["key"]],
         }
+
+    SIGNAL_FIELDS = ("id", "direction", "entry_type", "entry", "stop_loss", "tps", "rr", "status", "stage", "outcome",
+                     "result_r", "created_at", "expires_at", "closed_at", "confidence", "conviction", "smc_grade",
+                     "smc_checklist", "headline", "reason", "explain", "invalidation", "management", "risks",
+                     "evidence_for", "evidence_against", "confluences", "pip", "timeframes", "per_desk", "board")
+
+    def _signals(self) -> dict:
+        """Open signals (with the last price and floating pips) and the latest finished ones, for the website."""
+        def card(t):
+            c = {k: t.get(k) for k in self.SIGNAL_FIELDS}
+            c.update(symbol=t.get("symbol_name", "XAU/USD"), instrument=t.get("instrument", "XAUUSD"),
+                     style=ui.label(t), confluences=[ui.plain(x) for x in t.get("confluences") or []])
+            market = self.markets.get(c["instrument"]) or {}
+            price = (market.get("5min") or {}).get("price")
+            if price is not None and t["status"] == "active":
+                diff = (price - t["entry"]) if t["direction"] == "BUY" else (t["entry"] - price)
+                risk = abs(t["entry"] - (t.get("initial_sl") or t["stop_loss"]))
+                c.update(price=round(price, 2), floating_pips=tracker.pips(diff, t.get("pip", 0.1)),
+                         floating_r=round(diff / risk, 2) if risk else None)
+            elif price is not None:
+                c["price"] = round(price, 2)
+            return c
+        closed = self.storage.closed_trades()[-15:][::-1]
+        return {"open": [card(t) for t in self.storage.open_trades()][::-1], "closed": [card(t) for t in closed]}
 
     def data_age(self, key: str | None = None) -> dict | None:
         """How fresh the market data is: last M5 candle vs now (UTC)."""
@@ -1099,8 +1135,8 @@ class GoldBot:
         except Exception:
             log.exception("Agent test failed")
 
-    async def on_startup(self, app: Application):
-        self.app_bot = app.bot
+    async def on_startup(self, app: Application | None):
+        self.app_bot = app.bot if app else NullBot()
         if self.cfg.dashboard_port:
             try:
                 from dashboard import Dashboard
@@ -1115,12 +1151,48 @@ class GoldBot:
                 log.warning("Dashboard could not start on port %s: %s", self.cfg.dashboard_port, e)
         self.desk.monitor.set_phase("idle")
         self.desk.monitor.event("Bot online – first scan in a few seconds")
-        await self.tell_admins(app.bot, f"<b>Gold & Bitcoin AI desk is online</b> – scanning every "
-                                        f"{self.cfg.scan_interval_minutes} min.")
+        if app:
+            await self.tell_admins(app.bot, f"<b>Gold & Bitcoin AI desk is online</b> – scanning every "
+                                            f"{self.cfg.scan_interval_minutes} min.")
+
+
+class NullBot:
+    """Stands in for Telegram in website-only mode: nothing is sent anywhere, signals live on the website."""
+
+    async def send_message(self, *a, **kw):
+        return types.SimpleNamespace(message_id=0, photo=None)
+
+    async def send_photo(self, *a, **kw):
+        return types.SimpleNamespace(message_id=0, photo=None)
+
+
+async def run_web(cfg: Config, cycles: int | None = None):
+    """Website-only mode: dashboard + a scan every SCAN_INTERVAL_MINUTES, no Telegram at all."""
+    bot = GoldBot(cfg)
+    await bot.on_startup(None)
+    ctx = types.SimpleNamespace(bot=bot.app_bot)
+    log.info("Gold & Bitcoin AI desk started (website only): styles=%s, scan every %s min",
+             ",".join(cfg.styles), cfg.scan_interval_minutes)
+    await asyncio.sleep(10 if cycles is None else 0)
+    n = 0
+    while cycles is None or n < cycles:
+        await bot.scheduled_scan(ctx)
+        n += 1
+        if cycles is None or n < cycles:
+            await asyncio.sleep(cfg.scan_interval_minutes * 60)
+    return bot
 
 
 def main():
     cfg = load_config()
+    if not cfg.use_telegram:
+        if not cfg.dashboard_port:
+            raise SystemExit("Website-only mode needs the dashboard: remove DASHBOARD_PORT=0 from .env")
+        try:
+            asyncio.run(run_web(cfg))
+        except KeyboardInterrupt:
+            pass
+        return
     bot = GoldBot(cfg)
     builder = Application.builder().token(cfg.telegram_token).connect_timeout(20).read_timeout(30)
     if cfg.proxy_url:

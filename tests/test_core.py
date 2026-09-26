@@ -664,7 +664,7 @@ class BacktestTests(unittest.TestCase):
 
 class EndToEndTests(unittest.TestCase):
     def test_scan_publishes_and_tracks(self):
-        os.environ.update(TELEGRAM_BOT_TOKEN="1:x", GEMINI_API_KEY="x", TWELVEDATA_API_KEY="x")
+        os.environ.update(TELEGRAM_BOT_TOKEN="1:x", GEMINI_API_KEY="x", TWELVEDATA_API_KEY="x", TELEGRAM="on")
         import bot as botmod
         from config import load_config
 
@@ -754,7 +754,7 @@ class InteractionTests(unittest.TestCase):
     """Buttons, commands, health alerts and briefings against a fake Telegram."""
 
     def setUp(self):
-        os.environ.update(TELEGRAM_BOT_TOKEN="1:x", GEMINI_API_KEY="x", TWELVEDATA_API_KEY="x")
+        os.environ.update(TELEGRAM_BOT_TOKEN="1:x", GEMINI_API_KEY="x", TWELVEDATA_API_KEY="x", TELEGRAM="on")
         import bot as botmod
         from config import load_config
         self.tmp = tempfile.TemporaryDirectory()
@@ -884,7 +884,7 @@ class InteractionTests(unittest.TestCase):
 class DashboardTests(unittest.TestCase):
     def test_serves_page_state_and_chart(self):
         import urllib.request
-        os.environ.update(TELEGRAM_BOT_TOKEN="1:x", GEMINI_API_KEY="x", TWELVEDATA_API_KEY="x")
+        os.environ.update(TELEGRAM_BOT_TOKEN="1:x", GEMINI_API_KEY="x", TWELVEDATA_API_KEY="x", TELEGRAM="on")
         import bot as botmod
         from config import load_config
         from dashboard import Dashboard
@@ -990,7 +990,7 @@ class MultiMarketTests(unittest.TestCase):
     """Gold closed (weekend) while bitcoin trades: BTC is scanned, signalled and shown separately."""
 
     def setUp(self):
-        os.environ.update(TELEGRAM_BOT_TOKEN="1:x", GEMINI_API_KEY="x", TWELVEDATA_API_KEY="x")
+        os.environ.update(TELEGRAM_BOT_TOKEN="1:x", GEMINI_API_KEY="x", TWELVEDATA_API_KEY="x", TELEGRAM="on")
         import bot as botmod
         from config import load_config
         self.tmp = tempfile.TemporaryDirectory()
@@ -1380,3 +1380,47 @@ class SmcGradeTests(unittest.TestCase):
         self.assertIn("SMC GRADE", card)
         self.assertIn("SMC CHECKLIST", card)
         self.assertIn("CONVICTION", card)
+
+
+class WebOnlyTests(unittest.TestCase):
+    def test_signals_go_to_the_website_without_telegram(self):
+        import bot as botmod
+        from config import load_config
+        setup, market, data = first_setup()
+        keep = {k: os.environ.get(k) for k in ("TELEGRAM", "TELEGRAM_BOT_TOKEN", "DATA_FILE", "STYLES", "MIN_ENGINE_SCORE")}
+        with tempfile.TemporaryDirectory() as d:
+            os.environ.update(TELEGRAM="off", TWELVEDATA_API_KEY="x", GEMINI_API_KEY="x", DATA_FILE=os.path.join(d, "d.json"),
+                              STYLES=setup["style"], MIN_ENGINE_SCORE="0")
+            os.environ.pop("TELEGRAM_BOT_TOKEN", None)
+            try:
+                cfg = load_config()
+                self.assertFalse(cfg.use_telegram)
+                gb = botmod.GoldBot(cfg)
+                gb.desk = fake_desk()
+
+                async def get():
+                    return data, {}
+                gb.data.get = get
+
+                async def no_news():
+                    return None
+                gb.news.refresh = no_news
+                gb.headlines.refresh = no_news
+                notes = asyncio.run(gb.scan(botmod.NullBot(), manual=True))
+            finally:
+                for k, v in keep.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+        self.assertIn("signal sent", " ".join(notes))
+        feed = list(gb.desk.monitor.signal_feed)
+        self.assertEqual(feed[0]["kind"], "new")
+        self.assertEqual(gb._targets(setup["style"]), [])  # nothing goes to Telegram
+        st = gb.dashboard_state()
+        card = st["signals"]["open"][0]
+        self.assertEqual(card["direction"], setup["direction"])
+        self.assertIn("explain", card)
+        self.assertEqual(st["signal_feed"][0]["kind"], "new")
+        page = open(os.path.join(os.path.dirname(__file__), "..", "static", "dashboard.html"), encoding="utf-8").read()
+        self.assertIn("Signals – live trade ideas", page)

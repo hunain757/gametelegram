@@ -4,6 +4,15 @@ A Telegram bot that scans **gold (XAU/USD)** and **bitcoin (BTC/USD)** around th
 **volume analysis**, a **regime-aware 17-strategy board** and a **26-agent Gemini AI desk that learns from its own track record**, sends **scalping / intraday / swing** signals
 with entry, SL and 3 TPs, and **tracks every trade live** (entry fill, TP1/TP2/TP3, SL, expiry).
 
+## Where do signals appear?
+
+**On the local website** (http://localhost:8080, opens by itself on Windows). Telegram is switched off by
+default: no bot token is needed. Every approved trade appears in the **Signals** section with the levels, a
+price track (stop · entry · TP1-3 · current price), floating pips and R, confidence, conviction, SMC grade, the
+AI's explanation, invalidation, management plan and risks. Entry fills, TP hits and stops show up in the
+**Updates** feed. Press **Enable alerts + sound** once to get a sound and a desktop notification for every new
+signal and trade update. (Telegram can still be switched back on with `TELEGRAM=on` and `TELEGRAM_BOT_TOKEN`.)
+
 ## Markets
 
 | Market | Candles | Volume | Hours |

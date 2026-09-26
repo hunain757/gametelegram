@@ -101,6 +101,29 @@ section h2{border-left:3px solid var(--gold);padding-left:9px}
 .brow{padding:5px 0;border-bottom:1px dashed #19212f;font-size:12.5px}.vchip{margin-right:4px}
 .ncat{font-size:10px;padding:0 6px;border-radius:99px;background:#263045;color:var(--mut);margin-right:4px;text-transform:uppercase}
 .ncat.world{background:#3a1f12;color:#ffb38a}.ncat.macro{background:#12283a;color:#8cc8ff}.ncat.gold{background:#3a2c10;color:var(--gold2)}.ncat.crypto{background:#2a1a3a;color:#d9b3ff}
+/* signals */
+.sigwrap{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:14px}@media(max-width:1100px){.sigwrap{grid-template-columns:1fr}}
+.siggrid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(340px,1fr))}
+.sig{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:#0d1320;border-left:4px solid var(--mut)}
+.sig.buy{border-left-color:var(--green)}.sig.sell{border-left-color:var(--red)}
+.sh{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.sh b{font-size:15px}
+.dir{font:800 11px ui-monospace,Consolas,monospace;padding:2px 8px;border-radius:5px}.buy .dir{background:#0f3a26;color:#6ff0ae}.sell .dir{background:#4a1a22;color:#ff9aa8}
+.grade{font:800 11px ui-monospace,Consolas,monospace;padding:2px 7px;border-radius:5px;background:#3a2c10;color:var(--gold2)}
+.stt{margin-left:auto;font:800 10.5px ui-monospace,Consolas,monospace;color:var(--gold)}
+.hl{color:#c7cfdd;margin:4px 0 6px;font-style:italic}
+.lv{font:13px ui-monospace,Consolas,monospace;margin:4px 0}.lv td{padding:2px 6px;border:0}
+.track{position:relative;height:30px;margin:6px 4px 2px;border-top:2px solid #222b3c}
+.mk{position:absolute;top:-6px;width:2px;height:10px;background:var(--mut);font-style:normal}.mk b{position:absolute;top:10px;left:-10px;font:700 9.5px ui-monospace,Consolas,monospace;color:var(--mut)}
+.mk.sl{background:var(--red)}.mk.sl b{color:var(--red)}.mk.tp{background:var(--green)}.mk.tp b{color:var(--green)}.mk.en{background:var(--blue)}.mk.en b{color:var(--blue)}
+.mk.px{background:var(--gold);height:14px;top:-8px}.mk.px b{color:var(--gold);top:-14px}
+.now{font-size:12.5px;margin:2px 0 6px}.sbar{display:grid;grid-template-columns:80px 1fr 40px;gap:8px;align-items:center;font-size:12px}.sbar .bar{margin:4px 0}
+.sig details{margin:6px 0;font-size:12.5px}.sig summary{cursor:pointer;color:var(--gold2)}
+.subh{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--mut);margin-bottom:6px}
+.sigfeed{max-height:260px;overflow:auto;font-size:12.5px}.fd{padding:4px 0;border-bottom:1px dashed #19212f}.fd .t{color:#5d6882;font:11px ui-monospace,Consolas,monospace}
+.fd.k-new b{color:var(--gold)}.fd.k-tp b{color:var(--green)}.fd.k-sl b{color:var(--red)}
+#toast{position:fixed;right:18px;bottom:18px;z-index:50;display:flex;flex-direction:column;gap:8px;max-width:420px}
+.toastmsg{background:#141b28;border:1px solid var(--gold);border-radius:10px;padding:10px 14px;font-size:13px;box-shadow:0 8px 30px rgba(0,0,0,.5);animation:fade .4s}
+.toastmsg.k-sl{border-color:var(--red)}.toastmsg.k-tp{border-color:var(--green)}
 /* workflow timeline */
 .phase{border:1px solid var(--line);border-radius:10px;overflow:hidden;flex-shrink:0}.chat>*{flex-shrink:0}
 .ph{display:flex;align-items:center;gap:10px;padding:7px 10px;background:#121a28;font-weight:700;font-size:13px}
@@ -145,6 +168,13 @@ section h2{border-left:3px solid var(--gold);padding-left:9px}
 <main>
   <div id="banner"></div>
   <div class="kpis" id="kpis"></div>
+  <section id="signalsSec"><h2><span>Signals – live trade ideas from the AI desk</span>
+      <span><span id="sigCount" class="role"></span> <button class="alt mini-btn" id="alertBtn" onclick="enableAlerts()">Enable alerts + sound</button></span></h2>
+    <div id="toast"></div>
+    <div class="sigwrap"><div id="sigOpen" class="siggrid"></div>
+      <div class="sigside"><div class="subh">Updates</div><div id="sigFeed" class="sigfeed"></div>
+        <div class="subh" style="margin-top:12px">Finished</div><div id="sigClosed"></div></div></div>
+  </section>
   <div class="row">
     <section><h2><span>Agent network – how information flows</span><span><span id="phase"></span> <button class="alt mini-btn" id="replayBtn" onclick="replay()">Replay last review</button></span></h2>
       <div class="legend2"><span class="lg u-take"></span>TAKE <span class="lg u-skip"></span>SKIP <span class="lg u-neutral"></span>NEUTRAL <span class="lg u-challenge"></span>challenge / reply <span class="role">– hover a line to read the message</span></div>
@@ -595,7 +625,7 @@ function render(){
     "Volume feed": st.volume_ok ? '<span class="ok">OK</span>' : '<span class="warn">unavailable</span>', "News calendar": st.news_ok ? '<span class="ok">OK</span>' : '<span class="warn">unavailable</span>', "Telegram users": st.users,
     "Signal types": s.settings.styles.join(", "), "Rules": `Head TAKE, conf ≥ ${s.settings.min_confidence}%, ≥ ${Math.round(100 * s.settings.min_votes / 8)}% of analysts, ≥ 2/3 desk leads, ≥ 2/3 verifiers, strategy board not against, auditor OK`,
     "Last error": st.last_error ? `<span class="bad">${esc(st.last_error.slice(0, 160))}</span>` : "none"});
-  renderKpis(s, mk, models); renderLive(s); renderKeys(models); renderDirectory(s); renderBoard(s.board);
+  renderKpis(s, mk, models); renderSignals(s); renderLive(s); renderKeys(models); renderDirectory(s); renderBoard(s.board);
   const p = s.performance;
   H.perf = p.trades ? kv({"Finished trades": p.trades, "Win rate (TP1+)": p.win_rate + "%", "Total": p.total_r + "R",
     "Wins / losses": p.wins + " / " + p.losses, "Hit TP3": p.tp3}) : '<span class="empty">No finished trades yet</span>';
@@ -628,6 +658,86 @@ function explainBox(c){
   if ((c.risks || []).length) parts.push(`<div class="kvx"><b>Risks</b> ${c.risks.map(esc).join(" · ")}</div>`);
   if (c.reject_reason) parts.push(`<div class="kvx bad"><b>Rejected because</b> ${esc(c.reject_reason)}</div>`);
   return parts.length ? `<div class="explain">${parts.join("")}</div>` : "";
+}
+/* ---------------- signals ---------------- */
+let alertsOn = false, lastFeedId = null, audioCtx = null;
+try { alertsOn = localStorage.getItem("alerts") === "1"; } catch (e) {}
+function enableAlerts(){
+  alertsOn = true; try { localStorage.setItem("alerts", "1"); } catch (e) {}
+  try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
+  if (window.Notification && Notification.permission === "default") Notification.requestPermission();
+  beep("new"); paintAlertBtn();
+}
+function paintAlertBtn(){ const b = $("alertBtn"); if (b) b.textContent = alertsOn ? "Alerts on" : "Enable alerts + sound"; }
+function beep(kind){
+  if (!alertsOn) return;
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const notes = kind === "sl" ? [330, 247] : kind === "new" ? [660, 880, 990] : [784, 988];
+    notes.forEach((f, i) => { const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.frequency.value = f; o.type = "sine"; o.connect(g); g.connect(audioCtx.destination);
+      const t = audioCtx.currentTime + i * 0.16; g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.25, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.15); o.start(t); o.stop(t + 0.16); });
+  } catch (e) {}
+}
+function toast(text, kind){
+  const t = document.createElement("div"); t.className = "toastmsg k-" + kind; t.textContent = text;
+  $("toast").appendChild(t); setTimeout(() => t.remove(), 9000);
+}
+function handleFeed(feed){
+  if (!feed.length) { if (lastFeedId === null) lastFeedId = 0; return; }
+  const top = feed[0].id;
+  if (lastFeedId === null) { lastFeedId = top; return; }   // first load: no alerts for old items
+  feed.filter(f => f.id > lastFeedId).reverse().forEach(f => {
+    const title = f.kind === "new" ? "New signal" : f.kind === "tp" ? "Target hit" : f.kind === "sl" ? "Stop loss hit" : "Trade update";
+    toast(title + ": " + f.text, f.kind); beep(f.kind);
+    if (alertsOn && window.Notification && Notification.permission === "granted") { try { new Notification(title, {body: f.text}); } catch (e) {} }
+  });
+  lastFeedId = Math.max(lastFeedId, top);
+}
+const p2 = x => x == null ? "–" : Number(x).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+function sigCard(c){
+  const bull = c.direction === "BUY", st = c.status === "pending" ? "PENDING" : c.status === "active" ? (c.stage ? `TP${c.stage} HIT` : "RUNNING") : "CLOSED";
+  const lo = Math.min(c.stop_loss, ...c.tps), hi = Math.max(c.stop_loss, ...c.tps), span = (hi - lo) || 1;
+  const pos = v => Math.max(0, Math.min(100, 100 * (v - lo) / span));
+  const marks = [["SL", c.stop_loss, "sl"], ["E", c.entry, "en"], ...c.tps.map((t, i) => ["TP" + (i + 1), t, "tp"])]
+    .map(([n, v, k]) => `<i class="mk ${k}" style="left:${pos(v)}%"><b>${n}</b></i>`).join("") +
+    (c.price != null ? `<i class="mk px" style="left:${pos(c.price)}%"><b>now</b></i>` : "");
+  const fl = c.floating_pips != null ? `<span class="${c.floating_pips >= 0 ? "ok" : "bad"}">${c.floating_pips >= 0 ? "+" : ""}${c.floating_pips} pips${c.floating_r != null ? ` (${c.floating_r >= 0 ? "+" : ""}${c.floating_r}R)` : ""}</span>` : "";
+  const bar = (label, v) => v == null ? "" : `<div class="sbar"><span>${label}</span><div class="bar"><i style="width:${Math.max(0, Math.min(100, v))}%"></i></div><b>${v}%</b></div>`;
+  const ck = c.smc_checklist ? Object.entries(c.smc_checklist).map(([k, v]) => `<li class="${v ? "pro" : "con"}">${v ? "Yes" : "No"} – ${esc(k)}</li>`).join("") : "";
+  const ev = (c.evidence_for || []).map(x => `<li class="pro">${esc(x)}</li>`).join("") + (c.evidence_against || []).map(x => `<li class="con">${esc(x)}</li>`).join("");
+  return `<div class="sig ${bull ? "buy" : "sell"}">
+    <div class="sh"><span class="dir">${c.direction}</span><b>${esc(c.symbol)}</b><span class="role">${esc(c.entry_type)} · ${esc(c.style)}</span>
+      ${c.smc_grade ? `<span class="grade">SMC ${esc(c.smc_grade)}</span>` : ""}<span class="stt">${st}</span></div>
+    ${c.headline ? `<div class="hl">${esc(c.headline)}</div>` : ""}
+    <table class="lv"><tr><td>Entry</td><td>${p2(c.entry)}</td><td></td></tr><tr><td>Stop</td><td class="bad">${p2(c.stop_loss)}</td><td></td></tr>
+      ${c.tps.map((t, i) => `<tr><td>TP${i + 1}</td><td class="ok">${p2(t)}</td><td class="role">1:${(c.rr || [])[i] ?? "–"}${c.stage > i ? " · hit" : ""}</td></tr>`).join("")}</table>
+    <div class="track">${marks}</div>
+    <div class="now">${c.price != null ? "Price " + p2(c.price) : ""} ${fl}</div>
+    ${bar("Confidence", c.confidence)}${bar("Conviction", c.conviction)}
+    ${c.explain || c.reason ? `<div class="exp">${esc(c.explain || c.reason)}</div>` : ""}
+    ${c.invalidation ? `<div class="kvx"><b>Invalidation</b> ${esc(c.invalidation)}</div>` : ""}
+    ${c.management ? `<div class="kvx"><b>Management</b> ${esc(c.management)}</div>` : ""}
+    ${(c.risks || []).length ? `<div class="kvx"><b>Risks</b> ${c.risks.map(esc).join(" · ")}</div>` : ""}
+    <details><summary>Evidence, SMC checklist, confluences</summary>
+      ${ev ? `<ul class="evid">${ev}</ul>` : ""}${ck ? `<ul class="evid">${ck}</ul>` : ""}
+      <ul class="pts">${(c.confluences || []).map(x => `<li>${esc(x)}</li>`).join("")}</ul></details>
+    <div class="role">Issued ${esc((c.created_at || "").slice(0, 16).replace("T", " "))} UTC${c.entry_type === "LIMIT" && c.status === "pending" ? " · valid until " + esc((c.expires_at || "").slice(11, 16)) + " UTC" : ""}</div>
+  </div>`;
+}
+function renderSignals(s){
+  const sg = s.signals || {open: [], closed: []};
+  H.sigCount = `${sg.open.length} open · ${sg.closed.length} recent finished`;
+  H.sigOpen = sg.open.length ? sg.open.map(sigCard).join("") :
+    '<div class="empty">No open signal right now. The engine scans every few minutes; when the desk approves a trade it appears here instantly, with a sound if alerts are on.</div>';
+  H.sigFeed = (s.signal_feed || []).slice(0, 14).map(f => `<div class="fd k-${esc(f.kind)}"><span class="t">${esc(f.t)}</span> <b>${esc(f.kind.toUpperCase())}</b> ${esc(f.text)}</div>`).join("")
+    || '<div class="empty">No updates yet.</div>';
+  H.sigClosed = sg.closed.length ? `<table>${sg.closed.map(c => `<tr><td>${esc((c.closed_at || c.created_at || "").slice(5, 16).replace("T", " "))}</td>
+      <td>${esc(c.symbol)} ${c.direction}<br><span class="role">${esc(c.style)}</span></td>
+      <td class="${(c.result_r || 0) >= 0 ? "ok" : "bad"}">${esc((c.outcome || "").toUpperCase())}<br>${c.result_r != null ? ((c.result_r >= 0 ? "+" : "") + c.result_r + "R") : ""}</td></tr>`).join("")}</table>`
+    : '<div class="empty">No finished signals yet.</div>';
+  handleFeed(s.signal_feed || []);
 }
 function renderLive(s){
   const cur = s.current;
@@ -673,7 +783,7 @@ async function refresh(){
   if (state.chart_version && state.chart_version + tf + sym !== chartVersion) { chartVersion = state.chart_version + tf + sym; loadChart(); }
 }
 function setSym(k){ if (k === sym) return; sym = k; try { localStorage.setItem("sym", k); } catch (e) {} lastPx = null; chartVersion = ""; liveBar = null; refresh(); live(); }
-paintTabs(); refresh(); live();
+paintTabs(); paintAlertBtn(); refresh(); live();
 setInterval(refresh, 2000); setInterval(live, 3000);
 </script>
 </body>

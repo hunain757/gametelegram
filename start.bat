@@ -1,12 +1,12 @@
 @echo off
-rem Double-click this file to set up and run the Gold AI Signal Bot on Windows.
+rem Double-click this file to set up and run the Gold & Bitcoin AI desk (signals on the local website).
 cd /d "%~dp0"
 
 where python >nul 2>nul
 if errorlevel 1 goto nopython
 
 if not exist venv\Scripts\python.exe python -m venv venv
-venv\Scripts\python -c "import telegram, google.genai, dotenv, socksio, matplotlib" >nul 2>nul
+venv\Scripts\python -c "import telegram, google.genai, dotenv, httpx, matplotlib" >nul 2>nul
 if errorlevel 1 venv\Scripts\python -m pip install -r requirements.txt
 if errorlevel 1 goto failed
 
@@ -15,13 +15,11 @@ echo.
 echo Pehli baar: apni keys paste karein (right-click = paste).
 echo Ye sirf aapke PC par .env file mein save hongi, GitHub par nahi jayengi.
 echo.
-set /p TG=Telegram bot token (BotFather se): 
 set GM=
 set /p GM=Gemini API key (optional - Mistral ho to Enter): 
 set /p TD=Twelve Data API key (twelvedata.com se): 
 set /p GX=Aur Gemini keys (optional, comma se alag, warna Enter): 
-> .env echo TELEGRAM_BOT_TOKEN=%TG%
->> .env echo GEMINI_API_KEY=%GM%
+> .env echo GEMINI_API_KEY=%GM%
 >> .env echo TWELVEDATA_API_KEY=%TD%
 >> .env echo GEMINI_API_KEYS=%GX%
 echo Keys save ho gayin.
@@ -50,7 +48,8 @@ echo Mistral key save ho gayi.
 
 :run
 echo.
-echo Bot chal raha hai... band karne ke liye ye window band kar dein.
+echo Bot chal raha hai - signals website par aayenge: http://localhost:8080
+echo Band karne ke liye ye window band kar dein.
 venv\Scripts\python bot.py
 pause
 exit /b
