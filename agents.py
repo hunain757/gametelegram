@@ -11,6 +11,7 @@ from collections import deque
 from google import genai
 from google.genai import types
 
+from monitor import Monitor
 from setups import TF_LABEL, validate_levels
 
 log = logging.getLogger("goldbot.agents")
@@ -213,6 +214,7 @@ class TradingDesk:
         self.min_confidence = min_confidence
         self.min_votes = min_votes
         self.usage = {"day": None, "calls": 0, "failures": 0}
+        self.monitor = Monitor()
 
     def _count(self, failed: bool):
         from datetime import date
@@ -247,23 +249,78 @@ class TradingDesk:
                 log.warning("Gemini %s failed: %s", model, str(e)[:120])
 
     async def _specialist(self, i: int, agent: dict, ctx: dict) -> dict:
+        mon = getattr(self, "monitor", None) or Monitor()
+        mon.agent(agent["key"], "thinking", vote=None, score=None, summary="Analysing the setup…", points=[])
+        started = time.monotonic()
         try:
             text, model = await self._ask(SPECIALIST_PROMPT.format(name=agent["name"], focus=agent["focus"], **ctx),
                                           preferred=self.model_for(i + 1))
             data = parse_json(text)
             vote = str(data.get("vote", "SKIP")).upper()
-            return {"key": agent["key"], "name": agent["name"], "icon": agent["icon"], "model": model,
-                    "vote": "TAKE" if vote == "TAKE" else "SKIP", "score": int(data.get("score") or 0),
-                    "summary": str(data.get("summary", ""))[:200],
-                    "points": [str(p)[:150] for p in (data.get("points") or [])][:3]}
+            report = {"key": agent["key"], "name": agent["name"], "icon": agent["icon"], "model": model,
+                      "vote": "TAKE" if vote == "TAKE" else "SKIP", "score": int(data.get("score") or 0),
+                      "summary": str(data.get("summary", ""))[:200],
+                      "points": [str(p)[:150] for p in (data.get("points") or [])][:3]}
+            mon.agent(agent["key"], "done", vote=report["vote"], score=report["score"], summary=report["summary"],
+                      points=report["points"], model=model, seconds=round(time.monotonic() - started, 1))
+            mon.event(f"{agent['icon']} {agent['name']}: {report['vote']} ({report['score']}) – {report['summary']}",
+                      "take" if report["vote"] == "TAKE" else "skip")
+            return report
         except Exception as e:
             log.warning("%s failed: %s", agent["name"], e)
+            mon.agent(agent["key"], "error", summary=str(e)[:160], seconds=round(time.monotonic() - started, 1))
+            mon.event(f"{agent['icon']} {agent['name']} failed: {str(e)[:120]}", "error")
             return {"key": agent["key"], "name": agent["name"], "icon": agent["icon"], "vote": "ERROR",
                     "score": 0, "summary": "unavailable", "points": []}
+
+    async def ping(self) -> list[dict]:
+        """Health check: every agent sends a tiny request on its own model."""
+        mon = self.monitor
+        mon.event("🩺 Testing all 9 agents…")
+
+        async def one(i: int, key: str, name: str):
+            mon.agent(key, "thinking", summary="Health check…", vote=None, score=None, points=[])
+            started = time.monotonic()
+            try:
+                text, model = await self._ask('Reply with exactly {"ok": true}', preferred=self.model_for(i))
+                ok = bool(parse_json(text).get("ok"))
+                secs = round(time.monotonic() - started, 1)
+                mon.agent(key, "done" if ok else "error", model=model, seconds=secs,
+                          summary=f"Online ✔ answered in {secs}s" if ok else "Unexpected answer")
+                return {"agent": name, "ok": ok, "model": model, "seconds": secs}
+            except Exception as e:
+                mon.agent(key, "error", summary=str(e)[:160])
+                return {"agent": name, "ok": False, "error": str(e)[:160]}
+
+        jobs = [one(0, "head", "Head Trader")] + [one(i + 1, a["key"], a["name"]) for i, a in enumerate(SPECIALISTS)]
+        results = await asyncio.gather(*jobs)
+        ok = sum(r["ok"] for r in results)
+        mon.event(f"🩺 Agent test finished: {ok}/9 online", "take" if ok == 9 else "error")
+        return results
 
     async def review(self, setup: dict, market: dict, session: dict) -> dict:
         """Run the whole desk on one setup. Returns a verdict dict with 'approved'."""
         ctx = {"setup": setup_brief(setup), "market": market_brief(market), "session": json.dumps(session)}
+        mon = getattr(self, "monitor", None) or Monitor()
+        mon.set_phase("ai_review")
+        mon.agent("head", "waiting", summary="Waiting for the 8 specialist reports…", vote=None, score=None, points=[])
+        mon.event(f"🧠 AI desk reviewing {setup['style_label']} {setup['direction']} @ {setup['entry']} "
+                  f"(engine score {setup['score']})")
+        verdict = await self._review(setup, ctx, mon)
+        mon.agent("head", "done" if not verdict.get("ai_down") else "error",
+                  vote="TAKE" if verdict["approved"] else "SKIP", score=verdict["confidence"],
+                  summary=verdict.get("reason") or verdict.get("reject_reason") or "")
+        mon.event(f"👑 Head Trader: {'✅ APPROVED' if verdict['approved'] else '❌ REJECTED'} – "
+                  f"{verdict.get('reject_reason') or verdict.get('headline') or verdict.get('reason')}",
+                  "take" if verdict["approved"] else "skip")
+        mon.review({"style": setup["style_label"], "direction": setup["direction"], "entry": setup["entry"],
+                    "score": setup["score"], "votes": verdict["votes"], "approved": verdict["approved"],
+                    "confidence": verdict["confidence"], "reason": verdict.get("reject_reason") or verdict.get("reason"),
+                    "reports": [{k: r.get(k) for k in ("icon", "name", "vote", "score")} for r in verdict["reports"]]})
+        mon.set_phase("idle")
+        return verdict
+
+    async def _review(self, setup: dict, ctx: dict, mon: Monitor) -> dict:
         reports = await asyncio.gather(*(self._specialist(i, a, ctx) for i, a in enumerate(SPECIALISTS)))
         votes = sum(r["vote"] == "TAKE" for r in reports)
         errors = sum(r["vote"] == "ERROR" for r in reports)
@@ -276,6 +333,7 @@ class TradingDesk:
 
         reports_text = "\n".join(f"- {r['name']}: {r['vote']} ({r['score']}) - {r['summary']} {r['points']}"
                                  for r in reports)
+        mon.agent("head", "thinking", summary="Reading all reports and making the final call…")
         try:
             text, _ = await self._ask(HEAD_PROMPT.format(reports=reports_text, min_rr=self.min_rr, **ctx),
                                       preferred=self.model_for(0))

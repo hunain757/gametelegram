@@ -263,6 +263,8 @@ def fake_desk(**kw):
     desk = TradingDesk.__new__(TradingDesk)
     desk.pool, desk.min_rr, desk.min_confidence, desk.min_votes = ModelPool(["m1", "m2"], rpm=50), 1.5, 70, 3
     desk.usage = {"day": None, "calls": 0, "failures": 0}
+    from monitor import Monitor
+    desk.monitor = Monitor()
     desk.fake = FakeModels(**kw)
     desk.client = types.SimpleNamespace(aio=types.SimpleNamespace(models=desk.fake))
     return desk
@@ -677,3 +679,51 @@ class InteractionTests(unittest.TestCase):
             self.assertTrue(any(kind == "sendphoto" and "London Open Briefing" in (t or "") for kind, t in self.sent))
         finally:
             sess.is_market_open = orig_open
+
+
+class DashboardTests(unittest.TestCase):
+    def test_serves_page_state_and_chart(self):
+        import urllib.request
+        os.environ.update(TELEGRAM_BOT_TOKEN="1:x", GEMINI_API_KEY="x", TWELVEDATA_API_KEY="x")
+        import bot as botmod
+        from config import load_config
+        from dashboard import Dashboard
+
+        setup, market, data = first_setup()
+        with tempfile.TemporaryDirectory() as d:
+            os.environ["DATA_FILE"] = os.path.join(d, "data.json")
+            try:
+                gb = botmod.GoldBot(load_config())
+            finally:
+                os.environ.pop("DATA_FILE")
+            gb.desk = fake_desk()
+
+            async def get():
+                return data, {}
+            gb.data.get = get
+
+            async def no_news():
+                return None
+            gb.news.refresh = no_news
+
+            async def run():
+                dash = Dashboard(gb, asyncio.get_running_loop(), "127.0.0.1", 0)
+                dash.start()
+                port = dash.server.server_address[1]
+                base = f"http://127.0.0.1:{port}"
+                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                fetch = lambda path: opener.open(base + path).read()  # noqa: E731
+                page = await asyncio.to_thread(fetch, "/")
+                before = json.loads(await asyncio.to_thread(fetch, "/api/state"))
+                gb.candles, gb.market = data, market
+                gb.last_scan = datetime.now(timezone.utc)
+                png = await asyncio.to_thread(fetch, "/api/chart.png?tf=1h")
+                after = json.loads(await asyncio.to_thread(fetch, "/api/state"))
+                dash.server.shutdown()
+                return page, before, png, after
+            page, before, png, after = asyncio.run(run())
+            self.assertIn(b"Gold AI Control Room", page)
+            self.assertEqual(len(before["agents"]), 9)
+            self.assertIsNone(before["market"])
+            self.assertEqual(png[:4], b"\x89PNG")
+            self.assertEqual(len(after["market"]["tfs"]), 5)

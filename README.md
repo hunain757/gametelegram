@@ -72,6 +72,21 @@ Replays the last weeks of gold data candle by candle (no look-ahead) through the
 and prints win rate, total/average R, max drawdown and profit factor. The AI desk and news filter are not
 replayed. Use it to tune `MIN_ENGINE_SCORE`, `MIN_RISK_REWARD` and `STYLES` before trusting a style.
 
+## 🖥 Live dashboard (only on your PC)
+
+When the bot starts it opens **http://localhost:8080** in your browser (it listens on this computer only).
+You can watch everything live:
+
+- the **9 AI agents** as cards: *thinking* (flashing), their vote (TAKE / SKIP), score, reasoning, the Gemini model
+  used and how long it took
+- the **live activity feed**: every scan step, setups found, each agent's answer, the Head Trader's decision,
+  signals sent and TP/SL hits
+- the **chart** (M5 → D1) with order blocks, FVGs, liquidity and key levels, plus market structure per timeframe
+- the **last AI decisions**, open trades, performance and system health (data feeds, API usage, errors)
+- buttons: **⚡ Scan now** and **🩺 Test all 9 agents** (each agent answers on its own model, so you see they are online)
+
+Set `DASHBOARD_PORT=0` to turn it off, or `DASHBOARD_OPEN=off` to stop it opening the browser.
+
 ## Keys you need
 
 | Key | Where to get it |

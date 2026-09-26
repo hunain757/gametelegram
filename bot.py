@@ -74,6 +74,7 @@ class GoldBot:
         self._ai_down_alert_at = 0.0
         self._ai_view: tuple[float, str] = (0.0, "")
         self.backtest_running = False
+        self.app_bot = None
 
     # ================= helpers =================
 
@@ -120,7 +121,20 @@ class GoldBot:
         if self.scan_lock.locked():
             return ["A scan is already running"]
 
+        mon = self.desk.monitor
         async with self.scan_lock:
+            mon.set_phase("scanning")
+            mon.event("🔎 Scan started" + (" (manual)" if manual else ""))
+            try:
+                return await self._scan(bot, mon)
+            except Exception as e:
+                mon.event(f"❌ Scan failed: {str(e)[:160]}", "error")
+                raise
+            finally:
+                mon.set_phase("idle")
+
+    async def _scan(self, bot, mon) -> list[str]:
+        if True:
             candles, volumes = await self.data.get()
             self.candles = candles
             self.market = analyze_market(candles, volumes)
@@ -133,10 +147,14 @@ class GoldBot:
             session = sessions.current(now)
             session["news"] = self.news.brief(now)
             m5 = candles["5min"]
+            mon.event(f"📥 Data loaded: M5→D1, XAU/USD {m5[-1]['close']:.2f} · "
+                      f"volume {'✓' if self.data.volume_ok else '✗'} · news {'✓' if self.news.error is None else '✗'}")
 
             # 1) live tracking of every open trade
             for trade in self.storage.open_trades():
                 for ev in tracker.update(trade, m5):
+                    mon.event(f"📍 {trade['direction']} {trade['entry']} ({trade['style_label']}): {ev['kind']}"
+                              + (f" TP{ev['n']}" if ev.get("n") else ""), "signal")
                     await self.notify(bot, trade, ev)
             self.storage.save()
 
@@ -151,6 +169,7 @@ class GoldBot:
                 if self.cfg.news_blackout_min else None
             if blackout:
                 notes.append(f"📰 News pause: {blackout['title']} at {blackout['time'].strftime('%H:%M UTC')}")
+                mon.event(notes[-1], "skip")
                 self.last_notes = notes
                 return notes
 
@@ -174,6 +193,8 @@ class GoldBot:
 
                 self.storage.mark_seen(setup["key"])
                 log.info("Reviewing %s %s setup (score %s)", style, setup["direction"], setup["score"])
+                mon.event(f"🎯 {label}: engine found {setup['direction']} setup, score {setup['score']} – "
+                          + "; ".join(setup["confluences"][:3]))
                 verdict = await self.desk.review(setup, self.market, session)
                 if verdict.get("ai_down"):
                     await self._alert_ai_down(bot)
@@ -191,6 +212,8 @@ class GoldBot:
                 open_trades.append(trade)
                 notes.append(f"{label}: 🚀 {trade['direction']} signal sent")
 
+            for n in notes:
+                mon.event(f"{n}", "signal" if "signal sent" in n else "info")
             self.last_notes = notes
             log.info("Scan done: %s", " | ".join(notes))
             return notes
@@ -533,7 +556,85 @@ class GoldBot:
                 return "🧠 AI analyst is busy right now, try again in a minute."
         return f"🧠 <b>AI Market View · XAU/USD</b>\n{ui.LINE}\n{escape(text)}\n\n<i>{ui.DISCLAIMER}</i>"
 
+    # ================= local dashboard =================
+
+    ROLES = {"structure": "Trend, BOS/CHoCH on every timeframe", "liquidity": "Sweeps, order blocks, FVGs, targets",
+             "volume": "Volume spikes, delta, POC, absorption", "price_action": "Candles, patterns, rejections",
+             "momentum": "EMA, RSI, MACD, volatility", "session_news": "Killzone, ADR used, upcoming news",
+             "risk": "Stop placement, R:R, stop-hunt risk", "devil": "Hunts for reasons the trade fails",
+             "head": "Reads all 8 reports → final TAKE/SKIP, confidence, levels"}
+
+    def dashboard_state(self) -> dict:
+        from agents import SPECIALISTS
+
+        mon = self.desk.monitor
+        meta = {a["key"]: a for a in SPECIALISTS}
+        meta["head"] = {"name": "Head Trader", "icon": "👑"}
+        agents = [{"key": k, "name": meta[k]["name"], "icon": meta[k]["icon"], "role": self.ROLES.get(k, ""),
+                   **dict(mon.agents.get(k, {}))} for k in [a["key"] for a in SPECIALISTS] + ["head"]]
+        market = None
+        if self.market:
+            tfs = []
+            for tf in ("1day", "4h", "1h", "15min", "5min"):
+                if tf not in self.market:
+                    continue
+                m = self.market[tf]
+                ev = m["smc"]["last_event"]
+                tfs.append({"label": TF_LABEL[tf], "trend": m["smc"]["trend"], "zone": m["smc"]["range"]["zone"],
+                            "event": f"{ev['type']} {ev['direction']} @ {ev['level']:.2f}" if ev else None,
+                            "rsi": round(m["ind"]["rsi"]) if m["ind"]["rsi"] is not None else None,
+                            "atr": round(m["smc"]["atr"], 2),
+                            "patterns": ", ".join(x["name"] for x in m["smc"].get("patterns", []) if x.get("age", 0) <= 2)})
+            market = {"price": self.market["5min"]["price"], "levels": self.market.get("levels", {}),
+                      "adr": self.market.get("adr", {}), "tfs": tfs}
+        next_in = None
+        if self.last_scan:
+            elapsed = (datetime.now(timezone.utc) - self.last_scan).total_seconds()
+            next_in = max(int(self.cfg.scan_interval_minutes * 60 - elapsed), 0)
+        return {
+            "status": self.status_info(),
+            "phase": mon.phase,
+            "next_scan_in": next_in if sessions.is_market_open() else None,
+            "agents": agents,
+            "log": list(mon.log)[::-1][:200],
+            "reviews": list(mon.reviews),
+            "market": market,
+            "trades": [{k: t[k] for k in ("direction", "style_label", "entry", "stop_loss", "tps", "status", "stage")}
+                       for t in self.storage.open_trades()],
+            "performance": stats(self.storage.closed_trades()),
+            "settings": {"styles": self.cfg.styles, "min_confidence": self.cfg.min_confidence,
+                         "min_votes": self.cfg.min_agent_votes},
+            "chart_version": str(self.last_scan) if self.last_scan else "",
+        }
+
+    async def dashboard_scan(self):
+        try:
+            await self.scan(self.app_bot, manual=True)
+        except Exception:
+            log.exception("Dashboard scan failed")
+
+    async def dashboard_ping(self):
+        try:
+            await self.desk.ping()
+        except Exception:
+            log.exception("Agent test failed")
+
     async def on_startup(self, app: Application):
+        self.app_bot = app.bot
+        if self.cfg.dashboard_port:
+            try:
+                from dashboard import Dashboard
+                dash = Dashboard(self, asyncio.get_running_loop(), self.cfg.dashboard_host, self.cfg.dashboard_port)
+                dash.start()
+                self.desk.monitor.event(f"🖥 Dashboard ready at {dash.url}")
+                print(f"\n  >>> Live dashboard: {dash.url}  (open it in your browser)\n", flush=True)
+                if self.cfg.dashboard_open:
+                    import webbrowser
+                    webbrowser.open(dash.url)
+            except OSError as e:
+                log.warning("Dashboard could not start on port %s: %s", self.cfg.dashboard_port, e)
+        self.desk.monitor.set_phase("idle")
+        self.desk.monitor.event("✅ Bot online – first scan in a few seconds")
         await self.tell_admins(app.bot, f"✅ <b>Gold AI bot is online</b> – scanning every "
                                         f"{self.cfg.scan_interval_minutes} min.")
 

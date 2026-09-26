@@ -38,6 +38,9 @@ class Config:
     news_blackout_min: int
     news_currencies: tuple
     briefings: bool
+    dashboard_port: int
+    dashboard_host: str
+    dashboard_open: bool
 
 
 def load_config() -> Config:
@@ -82,4 +85,9 @@ def load_config() -> Config:
         news_blackout_min=int(os.getenv("NEWS_BLACKOUT_MIN", "30")),
         news_currencies=tuple(_list(os.getenv("NEWS_CURRENCIES", "USD"))),
         briefings=os.getenv("BRIEFINGS", "on").lower() not in ("0", "off", "false", "no"),
+        dashboard_port=int(os.getenv("DASHBOARD_PORT", "8080")),
+        dashboard_host=os.getenv("DASHBOARD_HOST", "127.0.0.1"),
+        # Open the dashboard in the browser automatically on Windows desktops.
+        dashboard_open=os.getenv("DASHBOARD_OPEN", "on" if os.name == "nt" else "off").lower()
+        not in ("0", "off", "false", "no"),
     )
