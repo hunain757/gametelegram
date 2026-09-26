@@ -41,16 +41,19 @@ def zigzag(points, steps=5):
 
 def random_market(seed):
     vols = [("5min", 0.8), ("15min", 1.4), ("1h", 2.8), ("4h", 5.5), ("1day", 14)]
+    minutes = {"5min": 5, "15min": 15, "1h": 60, "4h": 240, "1day": 1440}
+    end = datetime(2026, 9, 23, 10, 0)
     data = {}
     for k, (tf, vol) in enumerate(vols):
         rnd, price, out = random.Random(seed * 7 + k), 2650.0, []
+        t0 = end - timedelta(minutes=minutes[tf] * 300)
         drift = 0.0
         for i in range(300):
             if i % 60 == 0:
                 drift = rnd.choice([-1, 1]) * vol * rnd.uniform(0.02, 0.12)
             o = price
             c = o + drift + rnd.gauss(0, vol)
-            out.append(candle(f"2026-09-21 {i:05d}", o, max(o, c) + abs(rnd.gauss(0, vol * 0.6)),
+            out.append(candle((t0 + timedelta(minutes=minutes[tf] * i)).strftime("%Y-%m-%d %H:%M:%S"), o, max(o, c) + abs(rnd.gauss(0, vol * 0.6)),
                               min(o, c) - abs(rnd.gauss(0, vol * 0.6)), c, abs(rnd.gauss(100, 40))))
             price = c
         data[tf] = out
@@ -183,7 +186,8 @@ class TrackerTests(unittest.TestCase):
         self.assertEqual(t["stop_loss"], 103.0)
         ev = tracker.update(t, [c5(20, 102.5, 104)], now)
         self.assertEqual(ev[0]["kind"], "protected_stop")
-        self.assertEqual((t["status"], t["outcome"], t["result_r"]), ("closed", "win", 2.5))
+        # 1/3 at TP1 (1.5R) + 1/3 at TP2 (2.5R) + last 1/3 stopped at TP1 (1.5R)
+        self.assertEqual((t["status"], t["outcome"], t["result_r"]), ("closed", "win", 1.83))
 
     def test_sell_market_stop_loss(self):
         t, now = make_trade("SELL", "MARKET", entry=100, sl=102, tps=(97, 95, 92))
@@ -258,6 +262,7 @@ def fake_desk(**kw):
     from agents import ModelPool
     desk = TradingDesk.__new__(TradingDesk)
     desk.pool, desk.min_rr, desk.min_confidence, desk.min_votes = ModelPool(["m1", "m2"], rpm=50), 1.5, 70, 3
+    desk.usage = {"day": None, "calls": 0, "failures": 0}
     desk.fake = FakeModels(**kw)
     desk.client = types.SimpleNamespace(aio=types.SimpleNamespace(models=desk.fake))
     return desk
@@ -320,6 +325,136 @@ class UITests(unittest.TestCase):
         self.assertIn("Market Now", ui.market_dashboard(market, SESSION, True, datetime.now(timezone.utc)))
 
 
+class LevelsAndEngineTests(unittest.TestCase):
+    def test_key_levels(self):
+        from levels import key_levels
+        daily = [candle("2026-09-14 00:00:00", 10, 20, 5, 15), candle("2026-09-18 00:00:00", 15, 30, 12, 20),
+                 candle("2026-09-21 00:00:00", 20, 25, 18, 22), candle("2026-09-22 00:00:00", 22, 24, 21, 23)]
+        m5 = [candle("2026-09-22 01:00:00", 22, 23.5, 21.5, 23), candle("2026-09-22 08:00:00", 23, 26, 20, 24)]
+        lv = key_levels(daily, m5)
+        self.assertEqual((lv["PDH"], lv["PDL"]), (25, 18))
+        self.assertEqual((lv["PWH"], lv["PWL"]), (30, 5))
+        self.assertEqual((lv["Asia High"], lv["Asia Low"]), (23.5, 21.5))
+
+    def test_setups_respect_clear_path(self):
+        for seed in range(80):
+            market = analyze_market(random_market(seed))
+            for style in setups.STYLES:
+                s = find_setup(style, market, SESSION, 1.5)
+                if not s:
+                    continue
+                st = setups.STYLES[style]
+                opp = "bearish" if s["direction"] == "BUY" else "bullish"
+                zones = [z for z in market[st["entry"]]["smc"]["order_blocks"] + market[st["confirm"]]["smc"]["order_blocks"]
+                         if z["direction"] == opp]
+                for z in zones:
+                    edge = z["bottom"] if s["direction"] == "BUY" else z["top"]
+                    between = s["entry"] < edge < s["tps"][0]["price"] if s["direction"] == "BUY" \
+                        else s["tps"][0]["price"] < edge < s["entry"]
+                    self.assertFalse(between, f"opposing zone at {edge} blocks TP1 in {s}")
+
+
+class NewsTests(unittest.TestCase):
+    def test_parse_blackout_and_alerts(self):
+        from news import NewsCalendar, parse
+        items = [{"title": "Non-Farm Employment Change", "country": "USD", "date": "2026-10-02T08:30:00-04:00",
+                  "impact": "High", "forecast": "150K", "previous": "142K"},
+                 {"title": "ISM", "country": "USD", "date": "2026-10-02T10:00:00-04:00", "impact": "Medium"},
+                 {"title": "German CPI", "country": "EUR", "date": "2026-10-02T08:00:00-04:00", "impact": "High"},
+                 {"title": "Bank Holiday", "country": "USD", "date": "2026-10-02T00:00:00-04:00", "impact": "Holiday"}]
+        events = parse(items, ("USD",))
+        self.assertEqual([e["title"] for e in events], ["Non-Farm Employment Change", "ISM"])
+        self.assertEqual(events[0]["time"], datetime(2026, 10, 2, 12, 30, tzinfo=timezone.utc))
+        cal = NewsCalendar()
+        cal.events = events
+        self.assertIsNotNone(cal.blackout(datetime(2026, 10, 2, 12, 10, tzinfo=timezone.utc)))
+        self.assertIsNone(cal.blackout(datetime(2026, 10, 2, 13, 10, tzinfo=timezone.utc)))
+        self.assertIsNone(cal.blackout(datetime(2026, 10, 2, 14, 0, tzinfo=timezone.utc)))  # medium impact only
+        at = datetime(2026, 10, 2, 12, 15, tzinfo=timezone.utc)
+        self.assertEqual(len(cal.due_alerts(at)), 1)
+        self.assertEqual(cal.due_alerts(at), [])  # only once
+        self.assertIn("Non-Farm", ui.news_screen(cal.upcoming(at, 48), None, None))
+
+
+class LotAndCaptionTests(unittest.TestCase):
+    def test_lot_size(self):
+        self.assertEqual(ui.lot_size(1000, 1, 5.0)[0], 0.02)   # $10 risk / ($5 * 100oz)
+        self.assertEqual(ui.lot_size(10000, 2, 2.5)[0], 0.8)
+        t, _ = make_trade()
+        self.assertIn("Your lot: 0.05", ui.lot_line({"balance": 1000, "risk": 1}, t))  # SL $2 -> 0.05
+        self.assertIn("/balance", ui.lot_line({"balance": None}, t))
+        self.assertIn("min", ui.lot_line({"balance": 50, "risk": 1}, t))
+
+    def test_caption_fits_telegram_limit(self):
+        t, _ = make_trade()
+        t["headline"] = "x" * 80
+        t["confluences"] = ["a very long confluence description " * 3] * 7
+        t["reports"] = [{"icon": "🏗", "vote": "TAKE"}] * 5
+        self.assertLessEqual(len(ui.signal_caption(t, "💰 Your lot: 0.05 (risk $10.00 = 1% of $1,000)")), 1024)
+
+
+class ChartTests(unittest.TestCase):
+    def test_charts_render_png(self):
+        import chart
+        setup, market, data = first_setup()
+        t, _ = make_trade()
+        t.update(entry=setup["entry"], stop_loss=setup["stop_loss"], tps=[x["price"] for x in setup["tps"]])
+        tf = setup["timeframes"]["entry"]
+        png = chart.signal_chart(data[tf], t, market[tf]["smc"], market["levels"], "H1")
+        self.assertEqual(png[:4], b"\x89PNG")
+        self.assertEqual(chart.market_chart(data["15min"], market["15min"]["smc"], market["levels"], "M15")[:4],
+                         b"\x89PNG")
+
+
+def synthetic_history(days=12, seed=1):
+    rnd, price, t, m5, drift = random.Random(seed), 2650.0, datetime(2026, 8, 3), [], 0.0
+    while t < datetime(2026, 8, 3) + timedelta(days=days):
+        if t.weekday() < 5:
+            if rnd.random() < 0.01:
+                drift = rnd.choice([-1, 1]) * rnd.uniform(0.02, 0.15)
+            o = price
+            c = o + drift + rnd.gauss(0, 0.9)
+            m5.append(candle(t.strftime("%Y-%m-%d %H:%M:%S"), o, max(o, c) + abs(rnd.gauss(0, .5)),
+                             min(o, c) - abs(rnd.gauss(0, .5)), c))
+            price = c
+        t += timedelta(minutes=5)
+
+    def agg(minutes):
+        out = {}
+        for c in m5:
+            dt = datetime.strptime(c["time"], "%Y-%m-%d %H:%M:%S")
+            k = dt.replace(hour=0, minute=0) if minutes == 1440 else dt - timedelta(minutes=(dt.hour * 60 + dt.minute) % minutes)
+            key = k.strftime("%Y-%m-%d %H:%M:%S")
+            if key not in out:
+                out[key] = dict(c, time=key)
+            else:
+                b = out[key]
+                b["high"], b["low"], b["close"] = max(b["high"], c["high"]), min(b["low"], c["low"]), c["close"]
+        return list(out.values())
+    return {"5min": m5, "15min": agg(15), "1h": agg(60), "4h": agg(240), "1day": agg(1440)}
+
+
+class BacktestTests(unittest.TestCase):
+    def test_runs_without_lookahead_and_reports(self):
+        import backtest
+        data = synthetic_history(days=30)
+        r = backtest.run(data, "intraday")
+        self.assertNotIn("error", r)
+        self.assertGreater(r["steps"], 100)
+        for t in r["trades"]:
+            # every signal was created from candles that had already closed
+            self.assertLessEqual(t["created_candle"], t["created_at"][:19].replace("T", " "))
+        self.assertIn("Backtest", ui.backtest_report(r))
+        self.assertIn("error", backtest.run({k: v[:50] for k, v in data.items()}, "swing"))
+
+    def test_realized_r(self):
+        t, _ = make_trade(entry_type="MARKET")
+        t["stage"] = 1
+        self.assertAlmostEqual(tracker.realized_r(t, t["entry"]), 0.5)   # 1/3 * 1.5R, rest at breakeven
+        t["stage"] = 3
+        self.assertAlmostEqual(tracker.realized_r(t), (1.5 + 2.5 + 4) / 3)
+
+
 class EndToEndTests(unittest.TestCase):
     def test_scan_publishes_and_tracks(self):
         os.environ.update(TELEGRAM_BOT_TOKEN="1:x", GEMINI_API_KEY="x", TWELVEDATA_API_KEY="x")
@@ -334,6 +469,11 @@ class EndToEndTests(unittest.TestCase):
                 sent.append((chat_id, text, kw))
                 return types.SimpleNamespace(message_id=len(sent))
 
+            async def send_photo(self, chat_id, photo, caption=None, **kw):
+                assert isinstance(photo, (bytes, str)) and len(caption) <= 1024
+                sent.append((chat_id, caption, kw))
+                return types.SimpleNamespace(message_id=len(sent), photo=[types.SimpleNamespace(file_id="F")])
+
         with tempfile.TemporaryDirectory() as d:
             os.environ["DATA_FILE"] = os.path.join(d, "data.json")
             os.environ["STYLES"] = setup["style"]
@@ -345,6 +485,12 @@ class EndToEndTests(unittest.TestCase):
                     os.environ.pop(k)
             gb.desk = fake_desk()
             gb.storage.set_subscribed(111, True)
+            gb.storage.set_field(111, "balance", 5000)
+            gb.storage.claim_owner(111)
+
+            async def no_news():
+                return None
+            gb.news.refresh = no_news
 
             async def fake_get():
                 return data, {}
@@ -354,10 +500,11 @@ class EndToEndTests(unittest.TestCase):
             self.assertIn("signal sent", " ".join(notes))
             self.assertEqual(sent[0][0], 111)
             self.assertIn("XAU/USD", sent[0][1])
+            self.assertIn("Your lot", sent[0][1])
             trade = gb.storage.open_trades()[0]
 
             # Every menu screen renders.
-            for key in ("menu", "trades", "hist", "perf", "mkt", "set", "help"):
+            for key in ("menu", "trades", "hist", "perf", "mkt", "set", "help", "risk", "news", "status", "bt"):
                 text, kb = asyncio.run(gb.screen(key, 111, 111))
                 self.assertTrue(text and kb)
             self.assertIn("AI Desk", ui.ai_report(trade))
@@ -372,10 +519,148 @@ class EndToEndTests(unittest.TestCase):
             m5 = data["5min"]
             m5.append(candle("9999-12-31 23:59:00", level, max(level, trade["entry"]), min(level, trade["entry"]), level))
             asyncio.run(gb.scan(FakeBot(), manual=True))
-            replies = [s for s in sent[1:] if s[2].get("reply_to_message_id") == 1]
+            replies = [s for s in sent[1:] if s[2].get("reply_parameters") and s[2]["reply_parameters"].message_id == 1]
             self.assertTrue(replies)
             self.assertEqual(gb.storage.trade(trade["id"])["status"], "closed")
+
+            # A high-impact event right now pauses new signals.
+            gb.news.events = [{"title": "CPI m/m", "country": "USD", "impact": "High", "forecast": "", "previous": "",
+                               "time": datetime.now(timezone.utc) + timedelta(minutes=10)}]
+            notes = asyncio.run(gb.scan(FakeBot(), manual=True))
+            self.assertIn("News pause", notes[0])
+            self.assertTrue(any("HIGH-IMPACT NEWS" in x[1] for x in sent))
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InteractionTests(unittest.TestCase):
+    """Buttons, commands, health alerts and briefings against a fake Telegram."""
+
+    def setUp(self):
+        os.environ.update(TELEGRAM_BOT_TOKEN="1:x", GEMINI_API_KEY="x", TWELVEDATA_API_KEY="x")
+        import bot as botmod
+        from config import load_config
+        self.tmp = tempfile.TemporaryDirectory()
+        os.environ["DATA_FILE"] = os.path.join(self.tmp.name, "data.json")
+        try:
+            self.gb = botmod.GoldBot(load_config())
+        finally:
+            os.environ.pop("DATA_FILE")
+        self.gb.desk = fake_desk()
+        self.setup, market, self.data = first_setup()
+        self.sent = []
+        sent = self.sent
+
+        class FakeMsg:
+            def __init__(self, chat_type="private"):
+                self.chat = types.SimpleNamespace(id=111, type=chat_type)
+
+            async def reply_text(self, text, **kw):
+                sent.append(("text", text))
+                return self
+
+            async def reply_photo(self, photo, **kw):
+                sent.append(("photo", kw.get("caption")))
+
+            async def edit_text(self, text, **kw):
+                sent.append(("edit", text))
+
+        class FakeBot:
+            async def send_message(self, chat_id, text, **kw):
+                sent.append(("send", text))
+                return types.SimpleNamespace(message_id=len(sent))
+
+            async def send_photo(self, chat_id, photo, caption=None, **kw):
+                sent.append(("sendphoto", caption))
+                return types.SimpleNamespace(message_id=len(sent), photo=[types.SimpleNamespace(file_id="F")])
+
+        self.FakeMsg, self.bot = FakeMsg, FakeBot()
+
+        async def get():
+            return self.data, {}
+        self.gb.data.get = get
+
+        async def no_news():
+            return None
+        self.gb.news.refresh = no_news
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def press(self, data, chat_type="private"):
+        answers = []
+        msg = self.FakeMsg(chat_type)
+
+        async def answer(text=None, show_alert=False):
+            answers.append(text)
+
+        async def edit(text, **kw):
+            self.sent.append(("edit", text))
+        q = types.SimpleNamespace(data=data, message=msg, from_user=types.SimpleNamespace(id=111),
+                                  answer=answer, edit_message_text=edit)
+        update = types.SimpleNamespace(callback_query=q)
+        ctx = types.SimpleNamespace(bot=self.bot, args=[])
+        asyncio.run(self.gb.on_button(update, ctx))
+        return answers
+
+    def command(self, method, text, args=()):
+        msg = self.FakeMsg()
+        msg.text = text
+        update = types.SimpleNamespace(message=msg, effective_chat=types.SimpleNamespace(id=111),
+                                       effective_user=types.SimpleNamespace(id=111))
+        asyncio.run(method(update, types.SimpleNamespace(bot=self.bot, args=list(args))))
+
+    def test_owner_commands_and_buttons(self):
+        self.command(self.gb.cmd_start, "/start")
+        self.assertIn("owner", self.sent[0][1])
+        self.command(self.gb.cmd_balance, "/balance 2500", ["2500"])
+        self.command(self.gb.cmd_risk, "/risk 2", ["2"])
+        self.command(self.gb.cmd_lot, "/lot 50", ["50"])
+        self.assertIn("0.10", self.sent[-1][1])  # 2% of $2500 = $50 risk / (50 pips = $5 * 100 oz)
+        for cmd in ("/news", "/status", "/market", "/stats", "/history", "/trades", "/help"):
+            self.command(self.gb.cmd_simple, cmd)
+        self.command(self.gb.cmd_scan, "/scan")
+        self.assertIn("Scan complete", self.sent[-1][1])
+
+        for data in ("menu", "trades", "hist", "perf", "mkt", "set", "risk", "news", "status", "bt", "help",
+                     "sty:scalp", "tog:briefings", "rk:2", "alert", "chart:15min", "aiview", "scan"):
+            self.press(data)
+        self.assertTrue(any(kind == "photo" for kind, _ in self.sent))
+
+        trade = self.gb.storage.open_trades()[0]
+        for prefix in ("t:", "r:", "f:"):
+            self.press(prefix + trade["id"])
+        self.assertTrue(self.press("t:" + trade["id"], chat_type="channel")[0])
+        self.assertIn("not found", self.press("t:nope")[0])
+
+    def test_non_owner_is_blocked(self):
+        self.gb.storage.claim_owner(999)
+        self.assertIn("owner", self.press("scan")[0])
+
+    def test_health_alerts_and_briefing(self):
+        self.gb.storage.claim_owner(111)
+        good_get = self.gb.data.get
+
+        async def broken():
+            raise RuntimeError("Twelve Data (5min): You have run out of API credits for the current minute.")
+        self.gb.data.get = broken
+        ctx = types.SimpleNamespace(bot=self.bot)
+        import sessions as sess
+        orig_open = sess.is_market_open
+        sess.is_market_open = lambda now=None: True
+        try:
+            for _ in range(3):
+                asyncio.run(self.gb.scheduled_scan(ctx))
+            self.assertTrue(any("Bot problem" in t and "limit" in t for _, t in self.sent))
+            self.gb.data.get = good_get
+            asyncio.run(self.gb.scheduled_scan(ctx))
+            self.assertTrue(any("Recovered" in t for _, t in self.sent))
+            self.assertEqual(self.gb.fail_count, 0)
+
+            self.gb.storage.set_subscribed(111, True)
+            asyncio.run(self.gb.briefing(types.SimpleNamespace(bot=self.bot, job=types.SimpleNamespace(data="London"))))
+            self.assertTrue(any(kind == "sendphoto" and "London Open Briefing" in (t or "") for kind, t in self.sent))
+        finally:
+            sess.is_market_open = orig_open

@@ -10,6 +10,7 @@ Each trading style uses three timeframes:
 import smc
 import volume
 from indicators import ema, macd, rsi
+from levels import BUY_SIDE, SELL_SIDE, key_levels
 
 STYLES = {
     "scalp": {"label": "⚡ Scalping", "entry": "5min", "confirm": "15min", "bias": "1h",
@@ -28,6 +29,8 @@ def analyze_market(candles_by_tf: dict[str, list[dict]], volume_by_tf: dict[str,
     volume_by_tf = volume_by_tf or {}
     market = {}
     for tf, candles in candles_by_tf.items():
+        if len(candles) < 30:
+            continue
         closes = [c["close"] for c in candles]
         m = macd(closes)
         market[tf] = {
@@ -42,6 +45,7 @@ def analyze_market(candles_by_tf: dict[str, list[dict]], volume_by_tf: dict[str,
                 "macd_hist": m["histogram"] if m else None,
             },
         }
+    market["levels"] = key_levels(candles_by_tf.get("1day"), candles_by_tf.get("5min"))
     return market
 
 
@@ -95,11 +99,14 @@ def validate_levels(direction: str, entry: float, sl: float, tps: list[float], p
 
 def find_setup(style: str, market: dict, session: dict, min_rr: float) -> dict | None:
     st = STYLES[style]
+    if any(tf not in market for tf in (st["entry"], st["confirm"], st["bias"])):
+        return None
     e, c, b = market[st["entry"]], market[st["confirm"]], market[st["bias"]]
     es, cs, bs = e["smc"], c["smc"], b["smc"]
     price, a = e["price"], es["atr"]
     if not a:
         return None
+    key = market.get("levels", {})
 
     bias = bs["trend"] or cs["trend"]
     if bias is None:
@@ -117,21 +124,39 @@ def find_setup(style: str, market: dict, session: dict, min_rr: float) -> dict |
         score += 15
         conf.append(f"{TF_LABEL[st['confirm']]} structure agrees")
 
-    # Trigger on the entry timeframe: fresh structure shift and/or liquidity sweep.
+    # Trigger on the entry timeframe: fresh structure shift and/or a liquidity sweep.
     ev = es["last_event"]
     struct_trigger = ev and ev["direction"] == want and es["last_event_age"] <= 20
     # A sweep only counts while price holds beyond its wick.
     sweeps = [s for s in es["liquidity"]["sweeps"] if s["direction"] == want
               and (price > s["extreme"] if bull else price < s["extreme"])]
-    if not struct_trigger and not sweeps:
+    # Sweep of a key level (PDL/PWL/Asia low for buys, PDH/PWH/Asia high for sells) and reclaim.
+    key_sweep = None
+    for name in (SELL_SIDE if bull else BUY_SIDE):
+        lvl = key.get(name)
+        if lvl is None or abs(price - lvl) > 3 * a:
+            continue
+        if bull and es["recent"]["low"] < lvl < price:
+            key_sweep = {"name": name, "level": lvl, "extreme": es["recent"]["low"]}
+        elif not bull and price < lvl < es["recent"]["high"]:
+            key_sweep = {"name": name, "level": lvl, "extreme": es["recent"]["high"]}
+        if key_sweep:
+            break
+    if not struct_trigger and not sweeps and not key_sweep:
         return None
     if struct_trigger:
         score += 15
         conf.append(f"{TF_LABEL[st['entry']]} {ev['type']} {want} at {ev['level']:.2f}")
+        if ev.get("body", 0) >= a:
+            score += 5
+            conf.append("Strong displacement candle")
     sweep = sweeps[-1] if sweeps else None
     if sweep:
         score += 15
         conf.append(f"{sweep['side'].capitalize()} liquidity swept at {sweep['level']:.2f}")
+    if key_sweep:
+        score += 10 if sweep else 15
+        conf.append(f"{key_sweep['name']} ({key_sweep['level']:.2f}) swept and reclaimed")
 
     # Point of interest to enter from.
     pois = [dict(z, kind="Order Block") for z in es["order_blocks"] if z["direction"] == want]
@@ -151,15 +176,14 @@ def find_setup(style: str, market: dict, session: dict, min_rr: float) -> dict |
     else:
         entry_type, entry = "LIMIT", round(poi["top"] if bull else poi["bottom"], 2)
 
-    # Stop loss beyond the POI and the sweep wick, plus an ATR buffer.
+    # Stop loss beyond the POI and any sweep wick, plus an ATR buffer.
+    wicks = [w["extreme"] for w in (sweep, key_sweep) if w]
     if bull:
-        base = min(poi["bottom"], sweep["extreme"] if sweep else poi["bottom"])
-        sl = base - 0.25 * a
+        sl = min([poi["bottom"]] + wicks) - 0.25 * a
     else:
-        base = max(poi["top"], sweep["extreme"] if sweep else poi["top"])
-        sl = base + 0.25 * a
+        sl = max([poi["top"]] + wicks) + 0.25 * a
     # Resting liquidity just beyond the stop attracts stop hunts: put the stop past it instead.
-    pools = []
+    pools = [key[n] for n in (SELL_SIDE if bull else BUY_SIDE) if n in key]
     for tf in (st["entry"], st["confirm"], st["bias"]):
         liq = market[tf]["smc"]["liquidity"]
         pools += liq["sell_side"] + liq["equal_lows"] if bull else liq["buy_side"] + liq["equal_highs"]
@@ -178,14 +202,35 @@ def find_setup(style: str, market: dict, session: dict, min_rr: float) -> dict |
     sl = round(sl, 2)
 
     # Take profits at the next resting liquidity above (buy) / below (sell).
-    levels = []
+    targets = [key[n] for n in (BUY_SIDE if bull else SELL_SIDE) if n in key]
     for tf in (st["entry"], st["confirm"], st["bias"]):
         liq = market[tf]["smc"]["liquidity"]
-        levels += liq["buy_side"] + liq["equal_highs"] if bull else liq["sell_side"] + liq["equal_lows"]
+        targets += liq["buy_side"] + liq["equal_highs"] if bull else liq["sell_side"] + liq["equal_lows"]
     vol = e["volume"]
     if vol.get("available"):
-        levels += [vol["poc"], vol["value_area_high"] if bull else vol["value_area_low"]]
-    tps = pick_targets(entry, risk, levels, bull, min_rr)
+        targets += [vol["poc"], vol["value_area_high"] if bull else vol["value_area_low"]]
+    tps = pick_targets(entry, risk, targets, bull, min_rr)
+
+    # Clear path: an opposing order block / FVG before TP1 would stall the move.
+    opposing = [z for z in es["order_blocks"] + cs["order_blocks"] if z["direction"] == against]
+    opposing += [z for z in cs["fvgs"] if z["direction"] == against]
+    edges = []
+    for z in opposing:
+        if z["bottom"] <= entry <= z["top"]:
+            return None  # entering inside an opposing zone
+        edge = z["bottom"] if bull else z["top"]
+        if (bull and entry < edge < tps[0]["price"]) or (not bull and tps[0]["price"] < edge < entry):
+            edges.append(edge)
+    if edges:
+        edge = min(edges) if bull else max(edges)
+        tp1 = edge - 0.1 * a if bull else edge + 0.1 * a
+        if abs(tp1 - entry) < min_rr * risk:
+            return None  # not enough room before the opposing zone
+        tps[0] = {"price": round(tp1, 2), "rr": round(abs(tp1 - entry) / risk, 2), "source": "before opposing zone"}
+        conf.append(f"TP1 placed before opposing zone at {edge:.2f}")
+    else:
+        score += 5
+        conf.append("Clear path to TP1")
 
     # Premium / discount.
     zone = es["range"]["zone"]

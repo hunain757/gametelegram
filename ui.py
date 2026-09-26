@@ -69,7 +69,63 @@ def signal_card(t: dict) -> str:
 
 def signal_keyboard(trade_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[Btn("📍 Live Status", callback_data=f"t:{trade_id}"),
-                                  Btn("🧠 AI Desk Report", callback_data=f"r:{trade_id}")]])
+                                  Btn("🧠 AI Desk", callback_data=f"r:{trade_id}"),
+                                  Btn("📋 Full Analysis", callback_data=f"f:{trade_id}")]])
+
+
+def lot_size(balance: float, risk_pct: float, sl_distance: float, contract: float = 100) -> tuple[float, float]:
+    """Lots for a given account risk. Gold: 1 lot = `contract` oz, so $1 move = $contract per lot."""
+    risk_usd = balance * risk_pct / 100
+    lots = int(risk_usd / (sl_distance * contract) * 100) / 100 if sl_distance > 0 else 0.0
+    return max(lots, 0.0), risk_usd
+
+
+def lot_line(user: dict | None, t: dict, contract: float = 100) -> str:
+    if not user:
+        return ""
+    if not user.get("balance"):
+        return "💰 Send <code>/balance 1000</code> to get your lot size on every signal"
+    sl = abs(t["entry"] - t["stop_loss"])
+    lots, risk_usd = lot_size(user["balance"], user.get("risk", 1.0), sl, contract)
+    if lots < 0.01:
+        real = sl * contract * 0.01
+        return f"💰 <b>Lot 0.01</b> (min) – risks ${real:,.2f}, above your {user.get('risk', 1.0):g}% (${risk_usd:,.2f})"
+    return f"💰 <b>Your lot: {lots:.2f}</b>  (risk ${risk_usd:,.2f} = {user.get('risk', 1.0):g}% of ${user['balance']:,.0f})"
+
+
+def signal_caption(t: dict, lot: str = "") -> str:
+    """Short version of the signal card that fits a photo caption (Telegram limit: 1024 characters)."""
+    bull = t["direction"] == "BUY"
+    icon = "🟢" if bull else "🔴"
+    order = f"{t['direction']} {'NOW' if t['entry_type'] == 'MARKET' else 'LIMIT'}"
+    risk = abs(t["entry"] - t["stop_loss"])
+    lines = [f"{icon} <b>XAU/USD · {order}</b> · {t['style_label']}"]
+    if t.get("headline"):
+        lines.append(f"<i>{escape(t['headline'])}</i>")
+    lines += [LINE,
+              f"📍 Entry  <code>{p(t['entry'])}</code>",
+              f"🛑 SL  <code>{p(t['stop_loss'])}</code>  (−{pips(risk)} pips)"]
+    for i, (tp, rr) in enumerate(zip(t["tps"], t["rr"]), 1):
+        lines.append(f"🎯 TP{i}  <code>{p(tp)}</code>  (1:{rr:g})")
+    lines.append(LINE)
+    if t.get("engine_only"):
+        lines.append(f"🤖 Engine score {t['score']}% {bar(t['score'])} · AI offline")
+    else:
+        agents = "".join(f"{r['icon']}{'✅' if r['vote'] == 'TAKE' else '❌' if r['vote'] == 'SKIP' else '⚠️'} "
+                         for r in t.get("reports", []))
+        lines.append(f"🧠 Confidence {t['confidence']}% {bar(t['confidence'])}")
+        lines.append(f"🤖 {t['votes']}/5 agree  {agents}")
+    lines += [f"• {escape(c)}" for c in t["confluences"][:3]]
+    if lot:
+        lines.append(lot)
+    if t["entry_type"] == "LIMIT":
+        lines.append(f"⏳ Valid until {hhmm(t['expires_at'])}")
+    lines.append("🔒 SL → entry after TP1 · <i>Not financial advice</i>")
+    text = "\n".join(lines)
+    while len(text) > 1000 and len(lines) > 12:
+        lines.pop(-4 if t["entry_type"] == "LIMIT" else -3)
+        text = "\n".join(lines)
+    return text
 
 
 def event_message(t: dict, ev: dict) -> str:
@@ -138,24 +194,29 @@ def ai_report(t: dict) -> str:
 
 def main_menu(user: dict, is_admin: bool) -> tuple[str, InlineKeyboardMarkup]:
     styles = ", ".join(STYLES[s]["label"] for s in STYLES if s in user.get("styles", [])) or "none"
+    lot = f"${user['balance']:,.0f} · {user.get('risk', 1.0):g}% risk" if user.get("balance") else "not set"
     text = (
         "🏆 <b>GOLD SMC AI SIGNALS</b> 🏆\n"
         f"{LINE}\n"
         "🤖 6 AI agents scan <b>XAU/USD</b> 24/5 on M5 → D1\n"
-        "💧 Smart Money Concepts · 📊 Volume · 🎯 Auto TP/SL tracking\n\n"
+        "💧 Smart Money Concepts · 📊 Volume · 📰 News filter\n"
+        "🎯 Auto TP/SL tracking · 📈 Charts · 💰 Lot sizes\n\n"
         f"🔔 Alerts: <b>{'ON' if user.get('subscribed') else 'OFF'}</b>\n"
-        f"📡 Signal types: {styles}\n\n"
+        f"📡 Signals: {styles}\n"
+        f"💰 Account: {lot}\n\n"
         "Choose an option 👇"
     )
     rows = [
         [Btn("📡 Active Trades", callback_data="trades"), Btn("📜 History", callback_data="hist")],
         [Btn("📊 Performance", callback_data="perf"), Btn("🌍 Market Now", callback_data="mkt")],
-        [Btn("🧠 AI Market View", callback_data="aiview"), Btn("⚙️ Signal Types", callback_data="set")],
+        [Btn("🧠 AI Market View", callback_data="aiview"), Btn("📰 News", callback_data="news")],
+        [Btn("💰 Risk & Lot", callback_data="risk"), Btn("⚙️ Settings", callback_data="set")],
         [Btn(f"🔔 Alerts: {'ON ✅' if user.get('subscribed') else 'OFF ❌'}", callback_data="alert"),
          Btn("ℹ️ How it works", callback_data="help")],
     ]
     if is_admin:
-        rows.append([Btn("⚡ Scan Market Now", callback_data="scan")])
+        rows.append([Btn("⚡ Scan Now", callback_data="scan"), Btn("🩺 Status", callback_data="status"),
+                     Btn("🧪 Backtest", callback_data="bt")])
     return text, InlineKeyboardMarkup(rows)
 
 
@@ -166,11 +227,35 @@ def back(extra: list | None = None) -> InlineKeyboardMarkup:
 def settings(user: dict) -> tuple[str, InlineKeyboardMarkup]:
     rows = [[Btn(f"{'✅' if s in user.get('styles', []) else '❌'} {STYLES[s]['label']}", callback_data=f"sty:{s}")]
             for s in STYLES]
-    text = ("⚙️ <b>Signal Types</b>\nTap to switch on/off:\n\n"
+    rows.append([Btn(f"{'✅' if user.get('briefings', True) else '❌'} 🌅 Session briefings", callback_data="tog:briefings")])
+    rows.append([Btn(f"{'✅' if user.get('news_alerts', True) else '❌'} 📰 News alerts", callback_data="tog:news_alerts")])
+    text = ("⚙️ <b>Settings</b>\nTap to switch on/off:\n\n"
             "⚡ <b>Scalping</b> – M5 entries, H1 bias, quick trades\n"
             "📊 <b>Intraday</b> – M15 entries, H4 bias, same-day trades\n"
-            "🌊 <b>Swing</b> – H1 entries, D1 bias, multi-day trades")
+            "🌊 <b>Swing</b> – H1 entries, D1 bias, multi-day trades\n"
+            "🌅 <b>Briefings</b> – AI outlook + chart at London & New York open\n"
+            "📰 <b>News alerts</b> – warning before high-impact USD news")
     return text, back(rows)
+
+
+def risk_screen(user: dict, contract: float = 100) -> tuple[str, InlineKeyboardMarkup]:
+    bal = user.get("balance")
+    risk = user.get("risk", 1.0)
+    lines = ["💰 <b>Risk & Lot Size</b>", LINE,
+             f"Balance: <b>{'$' + format(bal, ',.2f') if bal else 'not set'}</b>",
+             f"Risk per trade: <b>{risk:g}%</b>" + (f"  (${bal * risk / 100:,.2f})" if bal else ""), ""]
+    if bal:
+        lines.append("<b>Lot size by stop-loss distance</b>")
+        for sl_pips in (30, 50, 80, 120, 200):
+            lots, _ = lot_size(bal, risk, sl_pips / 10, contract)
+            lines.append(f"  SL {sl_pips} pips → <b>{max(lots, 0.01):.2f}</b> lot")
+        lines.append("")
+    lines += ["Set your balance:  <code>/balance 1000</code>",
+              "Custom risk:  <code>/risk 1.5</code>",
+              "Quick calculator:  <code>/lot 50</code>  (SL in pips)",
+              f"<i>1 lot = {contract:g} oz · 1 pip = $0.10</i>"]
+    rows = [[Btn(f"{'✅ ' if abs(risk - r) < 1e-9 else ''}{r:g}%", callback_data=f"rk:{r:g}") for r in (0.5, 1, 2, 3)]]
+    return "\n".join(lines), back(rows)
 
 
 def trades_list(trades: list[dict], price: float | None) -> tuple[str, InlineKeyboardMarkup]:
@@ -259,16 +344,18 @@ def market_dashboard(market: dict | None, session: dict, is_open: bool, scanned_
 
 HELP = (
     "ℹ️ <b>How the bot works</b>\n" + LINE + "\n"
-    "1️⃣ Every 5 minutes it pulls gold candles on <b>M5, M15, H1, H4, D1</b>.\n"
-    "2️⃣ The <b>SMC engine</b> maps structure (BOS/CHoCH), order blocks, fair value gaps, "
-    "liquidity pools & sweeps, premium/discount, sessions and <b>volume</b> (PAXG).\n"
-    "3️⃣ When a setup appears, <b>5 AI specialists</b> review it in parallel:\n"
-    "   🏗 Structure · 💧 Liquidity/OB · 📊 Volume · ⚙️ Momentum · 🛡 Risk\n"
-    "4️⃣ The 👑 <b>Head Trader AI</b> reads their reports and makes the final call.\n"
-    "5️⃣ Only strong trades are sent. SL goes beyond the order block / sweep, "
-    "TPs sit at the next liquidity pools.\n"
-    "6️⃣ Every trade is <b>tracked live</b>: entry fill, TP1/TP2/TP3, SL, expiry – "
-    "you get a reply on the signal each time.\n\n"
+    "1️⃣ Every 5 minutes it reads gold on <b>M5, M15, H1, H4, D1</b> (+ PAXG volume).\n"
+    "2️⃣ The <b>SMC engine</b> maps BOS/CHoCH, order blocks, fair value gaps, liquidity pools & sweeps, "
+    "PDH/PDL, weekly high/low, the Asian range, premium/discount, killzones and volume.\n"
+    "3️⃣ A setup needs: higher-timeframe bias + a sweep or structure shift + an OB/FVG to enter from + "
+    "a clear path to TP1.\n"
+    "4️⃣ <b>5 AI specialists</b> review it (🏗 Structure · 💧 Liquidity · 📊 Volume · ⚙️ Momentum · 🛡 Risk) "
+    "and the 👑 <b>Head Trader AI</b> makes the final call.\n"
+    "5️⃣ 📰 No new trades 30 min around high-impact USD news; you get a warning before it.\n"
+    "6️⃣ Signals come with a 📈 chart, 💰 your lot size, and are <b>tracked live</b>: entry, TP1/TP2/TP3, "
+    "SL, expiry – as replies on the signal.\n"
+    "7️⃣ Results are booked honestly: 1/3 closed at each TP, SL to breakeven after TP1.\n\n"
+    "<b>Commands</b>: /menu /trades /history /stats /market /news /balance /risk /lot /stop\n\n"
     f"<i>{DISCLAIMER}</i>"
 )
 
@@ -276,3 +363,79 @@ HELP = (
 def daily_report(s: dict, open_count: int) -> str:
     text = performance(s, title="🌙 <b>Daily Report · XAU/USD</b>")
     return text + f"\n\n📡 Open trades: {open_count}\n🕒 {datetime.now(timezone.utc).strftime('%d %b %Y')}"
+
+
+def market_keyboard() -> InlineKeyboardMarkup:
+    return back([[Btn("📈 M15 Chart", callback_data="chart:15min"), Btn("📈 H1 Chart", callback_data="chart:1h"),
+                  Btn("📈 H4 Chart", callback_data="chart:4h")],
+                 [Btn("🔄 Refresh", callback_data="mkt")]])
+
+
+def news_screen(events: list[dict], blackout: dict | None, error: str | None) -> str:
+    now = datetime.now(timezone.utc)
+    lines = ["📰 <b>Economic Calendar · USD</b>", LINE]
+    if blackout:
+        lines += [f"⛔ <b>News pause active:</b> {escape(blackout['title'])} – no new signals right now", ""]
+    if not events:
+        lines.append("No high/medium impact USD news in the next 7 days." if not error else
+                     "⚠️ Calendar unavailable right now.")
+    day = None
+    for e in events[:25]:
+        d = e["time"].strftime("%a %d %b")
+        if d != day:
+            lines += ["", f"<b>{d}</b>"]
+            day = d
+        mins = int((e["time"] - now).total_seconds() // 60)
+        when = "now" if -30 <= mins <= 0 else f"in {mins // 60}h {mins % 60}m" if 0 < mins < 24 * 60 else ""
+        extra = " · ".join(x for x in (f"F {e['forecast']}" if e["forecast"] else "",
+                                       f"P {e['previous']}" if e["previous"] else "") if x)
+        lines.append(f"{'🔴' if e['impact'] == 'High' else '🟠'} {e['time'].strftime('%H:%M')}  {escape(e['title'])}"
+                     + (f"  <i>{extra}</i>" if extra else "") + (f"  ⏰ {when}" if when else ""))
+    lines += ["", "<i>🔴 high impact: the bot pauses new signals 30 min before/after</i>"]
+    return "\n".join(lines)
+
+
+def news_alert(e: dict, minutes: int) -> str:
+    extra = " · ".join(x for x in (f"Forecast {e['forecast']}" if e["forecast"] else "",
+                                   f"Previous {e['previous']}" if e["previous"] else "") if x)
+    return (f"⚠️ <b>HIGH-IMPACT NEWS in {minutes} min</b>\n"
+            f"🔴 {e['country']} · <b>{escape(e['title'])}</b> at {e['time'].strftime('%H:%M UTC')}\n"
+            + (f"{extra}\n" if extra else "") +
+            "\nGold can move very fast. Consider moving open trades to breakeven or taking partial profit.\n"
+            "⛔ New signals are paused around the release.")
+
+
+def status_screen(info: dict) -> str:
+    ok = lambda b: "✅" if b else "⚠️"  # noqa: E731
+    lines = ["🩺 <b>Bot Status</b>", LINE,
+             f"⏱ Uptime: {info['uptime']}",
+             f"{'🟢 Market open' if info['market_open'] else '🔴 Market closed'}",
+             f"🔎 Last scan: {info['last_scan']}  ·  scans today: {info['scans_today']}",
+             f"{ok(not info['fail_count'])} Scan errors in a row: {info['fail_count']}"
+             + (f"\n   <i>{escape(info['last_error'][:150])}</i>" if info["last_error"] else ""),
+             f"📈 Twelve Data requests today: {info['td_requests']} / 800",
+             f"🧠 Gemini calls today: {info['ai_calls']} (failed {info['ai_failures']})",
+             f"{ok(info['volume_ok'])} Volume feed (PAXG): {'OK' if info['volume_ok'] else 'unavailable'}",
+             f"{ok(info['news_ok'])} News calendar: {'OK' if info['news_ok'] else 'unavailable'}",
+             f"📡 Open trades: {info['open_trades']}  ·  👥 users: {info['users']}",
+             "", "<b>Last scan</b>"]
+    lines += [f"• {escape(n)}" for n in info["notes"]] or ["• –"]
+    return "\n".join(lines)
+
+
+def backtest_report(r: dict) -> str:
+    if r.get("error"):
+        return f"🧪 Backtest failed: {escape(r['error'])}"
+    s = r["stats"]
+    lines = [f"🧪 <b>Backtest · {r['label']}</b>  (engine only, no AI)", LINE,
+             f"📅 {r['start']} → {r['end']}  ·  {r['steps']} scans",
+             f"📡 Signals: <b>{r['signals']}</b>  ·  expired/cancelled: {s['expired']}"]
+    if s["trades"]:
+        lines += [f"🎯 Win rate (TP1+): <b>{s['win_rate']}%</b>  {bar(s['win_rate'])}",
+                  f"✅ {s['wins']} wins  ❌ {s['losses']} losses  🏆 {s['tp3']} hit TP3",
+                  f"💰 Total: <b>{'+' if s['total_r'] >= 0 else ''}{s['total_r']}R</b>  ·  "
+                  f"avg {r['avg_r']:+.2f}R/trade",
+                  f"📉 Max drawdown: {r['max_dd']}R  ·  profit factor: {r['profit_factor']}"]
+    lines.append("\n<i>Past results do not guarantee future results. The live bot also filters with the AI desk"
+                 " and news, which the backtest does not.</i>")
+    return "\n".join(lines)

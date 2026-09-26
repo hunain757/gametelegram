@@ -6,7 +6,7 @@ where python >nul 2>nul
 if errorlevel 1 goto nopython
 
 if not exist venv\Scripts\python.exe python -m venv venv
-venv\Scripts\python -c "import telegram, google.genai, dotenv, socksio" >nul 2>nul
+venv\Scripts\python -c "import telegram, google.genai, dotenv, socksio, matplotlib" >nul 2>nul
 if errorlevel 1 venv\Scripts\python -m pip install -r requirements.txt
 if errorlevel 1 goto failed
 

@@ -42,13 +42,13 @@ def market_structure(candles: list[dict], swings: list[dict], right: int = 2) ->
         if last_high and not last_high.get("broken") and c["close"] > last_high["price"]:
             kind = "BOS" if trend == "bullish" else "CHoCH"
             events.append({"idx": i, "type": kind, "direction": "bullish", "level": last_high["price"],
-                           "swing_idx": last_high["idx"], "time": c["time"]})
+                           "swing_idx": last_high["idx"], "time": c["time"], "body": abs(c["close"] - c["open"])})
             last_high["broken"] = True
             trend = "bullish"
         if last_low and not last_low.get("broken") and c["close"] < last_low["price"]:
             kind = "BOS" if trend == "bearish" else "CHoCH"
             events.append({"idx": i, "type": kind, "direction": "bearish", "level": last_low["price"],
-                           "swing_idx": last_low["idx"], "time": c["time"]})
+                           "swing_idx": last_low["idx"], "time": c["time"], "body": abs(c["close"] - c["open"])})
             last_low["broken"] = True
             trend = "bearish"
     return {"trend": trend, "events": events}
@@ -192,5 +192,6 @@ def analyze(candles: list[dict]) -> dict:
         "fvgs": fair_value_gaps(candles, min_size=a * 0.1),
         "liquidity": liquidity(candles, swings, tolerance=a * 0.15),
         "range": dealing_range(candles),
+        "recent": {"high": max(c["high"] for c in candles[-10:]), "low": min(c["low"] for c in candles[-10:])},
         "n": n,
     }

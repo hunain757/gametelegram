@@ -56,7 +56,7 @@ A rule-based engine proposed this setup:
 Current market read (per timeframe):
 {market}
 
-Session: {session}
+Session and upcoming news: {session}
 
 Judge ONLY from your specialty and be strict: say SKIP if your part of the picture is weak.
 Reply with JSON only:
@@ -70,7 +70,7 @@ The engine proposed this setup:
 Market read (per timeframe):
 {market}
 
-Session: {session}
+Session and upcoming news: {session}
 
 Your five specialists reported:
 {reports}
@@ -103,8 +103,10 @@ def _r(x, n=2):
 
 def market_brief(market: dict) -> str:
     """Compact JSON of the per-timeframe read, for prompts."""
-    out = {}
+    out = {"key_levels": market.get("levels", {})}
     for tf, m in market.items():
+        if tf == "levels":
+            continue
         s, v, ind = m["smc"], m["volume"], m["ind"]
         out[TF_LABEL.get(tf, tf)] = {
             "price": _r(m["price"]),
@@ -189,6 +191,14 @@ class TradingDesk:
         self.min_rr = min_rr
         self.min_confidence = min_confidence
         self.min_votes = min_votes
+        self.usage = {"day": None, "calls": 0, "failures": 0}
+
+    def _count(self, failed: bool):
+        from datetime import date
+        if self.usage["day"] != date.today():
+            self.usage.update(day=date.today(), calls=0, failures=0)
+        self.usage["calls"] += 1
+        self.usage["failures"] += failed
 
     def model_for(self, i: int) -> str:
         """Head trader uses the main model; specialists are spread over the others."""
@@ -206,8 +216,10 @@ class TradingDesk:
                 raise last_error or RuntimeError("no Gemini model available")
             try:
                 resp = await self.client.aio.models.generate_content(model=model, contents=prompt, config=config)
+                self._count(False)
                 return resp.text or "", model
             except Exception as e:
+                self._count(True)
                 last_error = e
                 tried.add(model)
                 self.pool.penalize(model, e)

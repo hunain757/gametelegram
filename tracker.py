@@ -5,6 +5,7 @@ Rules (conservative):
     and is cancelled if price reaches TP1 without filling first
   * if one candle touches both the stop and a target, the stop is assumed to have hit first
   * after TP1 the stop moves to breakeven, after TP2 it moves to TP1
+  * results are booked as 1/3 of the position closed at each TP (realized R, not "max R reached")
 """
 
 import secrets
@@ -62,6 +63,17 @@ def new_trade(setup: dict, verdict: dict, candle_time: str, now: datetime | None
     }
 
 
+def realized_r(trade: dict, exit_price: float | None = None) -> float:
+    """Realized R with the standard plan: close 1/3 at each TP; the rest exits at `exit_price`."""
+    k = trade["stage"]
+    booked = sum(trade["rr"][:k]) / 3
+    if k == 3 or exit_price is None:
+        return booked
+    risk = abs(trade["entry"] - trade["initial_sl"])
+    move = (exit_price - trade["entry"]) if trade["direction"] == "BUY" else (trade["entry"] - exit_price)
+    return booked + (3 - k) / 3 * move / risk
+
+
 def _close(trade: dict, outcome: str, result_r: float, now: datetime):
     trade["status"] = "closed"
     trade["outcome"] = outcome
@@ -108,7 +120,7 @@ def update(trade: dict, candles: list[dict], now: datetime | None = None) -> lis
                 _close(trade, "loss", -1, now)
                 events.append({"kind": "sl", "price": trade["stop_loss"]})
             else:
-                _close(trade, "win", trade["rr"][trade["stage"] - 1], now)
+                _close(trade, "win", realized_r(trade, trade["stop_loss"]), now)
                 events.append({"kind": "protected_stop", "price": trade["stop_loss"], "stage": trade["stage"]})
             break
         if just_filled:
@@ -124,7 +136,7 @@ def update(trade: dict, candles: list[dict], now: datetime | None = None) -> lis
                 trade["stop_loss"] = trade["tps"][0]
                 events[-1]["new_sl"] = trade["tps"][0]
         if trade["stage"] == 3:
-            _close(trade, "win", trade["rr"][2], now)
+            _close(trade, "win", realized_r(trade), now)
             break
 
     if trade["status"] == "pending" and now >= datetime.fromisoformat(trade["expires_at"]):
@@ -133,7 +145,7 @@ def update(trade: dict, candles: list[dict], now: datetime | None = None) -> lis
     elif trade["status"] == "active" and trade["filled_at"] and \
             now - datetime.fromisoformat(trade["filled_at"]) > timedelta(days=MAX_ACTIVE_DAYS):
         last = candles[-1]["close"] if candles else trade["entry"]
-        r = ((last - trade["entry"]) if bull else (trade["entry"] - last)) / abs(trade["entry"] - trade["initial_sl"])
+        r = realized_r(trade, last)
         _close(trade, "win" if trade["stage"] else ("loss" if r < 0 else "breakeven"), r, now)
         events.append({"kind": "timeout", "price": last})
 

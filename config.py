@@ -34,6 +34,10 @@ class Config:
     admin_ids: list[int]
     data_file: str
     proxy_url: str
+    contract_size: float
+    news_blackout_min: int
+    news_currencies: tuple
+    briefings: bool
 
 
 def load_config() -> Config:
@@ -74,4 +78,8 @@ def load_config() -> Config:
         admin_ids=[int(x) for x in _list(os.getenv("ADMIN_IDS", ""))],
         data_file=os.getenv("DATA_FILE", "data.json"),
         proxy_url=os.getenv("PROXY_URL", ""),
+        contract_size=float(os.getenv("CONTRACT_SIZE", "100")),
+        news_blackout_min=int(os.getenv("NEWS_BLACKOUT_MIN", "30")),
+        news_currencies=tuple(_list(os.getenv("NEWS_CURRENCIES", "USD"))),
+        briefings=os.getenv("BRIEFINGS", "on").lower() not in ("0", "off", "false", "no"),
     )

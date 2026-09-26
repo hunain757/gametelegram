@@ -65,6 +65,10 @@ class MarketData:
         self.requests_today = 0
         self._day = datetime.now(timezone.utc).date()
 
+    @property
+    def volume_ok(self) -> bool:
+        return bool(self._vcache) and time.time() >= self._volume_off_until
+
     async def get(self) -> tuple[dict[str, list[dict]], dict[str, list[dict]]]:
         """Candles and volume candles for every timeframe, fetching only what is stale."""
         now = time.time()

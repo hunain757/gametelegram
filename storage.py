@@ -34,7 +34,29 @@ class Storage:
 
     @staticmethod
     def _new_user() -> dict:
-        return {"subscribed": True, "styles": list(STYLES)}
+        return {"subscribed": True, "styles": list(STYLES), "balance": None, "risk": 1.0,
+                "briefings": True, "news_alerts": True}
+
+    @property
+    def owner(self) -> int | None:
+        return self.data.get("owner")
+
+    def claim_owner(self, user_id: int) -> bool:
+        """The first person to /start the bot becomes its owner (used when ADMIN_IDS is not set)."""
+        if self.data.get("owner"):
+            return False
+        self.data["owner"] = user_id
+        self.save()
+        return True
+
+    def set_field(self, chat_id: int, key: str, value):
+        self.user(chat_id)[key] = value
+        self.save()
+
+    def toggle_field(self, chat_id: int, key: str):
+        u = self.user(chat_id)
+        u[key] = not u.get(key, True)
+        self.save()
 
     def user(self, chat_id: int) -> dict:
         key = str(chat_id)
@@ -55,9 +77,11 @@ class Storage:
             styles.append(style)
         self.save()
 
-    def subscribers(self, style: str | None = None) -> list[int]:
+    def subscribers(self, style: str | None = None, flag: str | None = None) -> list[int]:
+        """Subscribed chats, optionally only those following `style` or with preference `flag` on."""
         return [int(k) for k, u in self.data["users"].items()
-                if u.get("subscribed") and (style is None or style in u.get("styles", []))]
+                if u.get("subscribed") and (style is None or style in u.get("styles", []))
+                and (flag is None or u.get(flag, True))]
 
     # ---------- trades ----------
 

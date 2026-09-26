@@ -1,28 +1,31 @@
 """Gold (XAU/USD) Smart-Money AI signal bot for Telegram.
 
 Every few minutes: fetch M5..D1 gold candles (+ PAXG volume) -> SMC engine finds setups for
-scalping / intraday / swing -> 5 AI specialists + Head Trader review them -> approved trades
-are sent with live TP/SL tracking.
+scalping / intraday / swing -> news filter -> 5 AI specialists + Head Trader review them ->
+approved trades are sent with a chart, per-user lot size and live TP/SL tracking.
 """
 
 import asyncio
 import logging
 import time
+from datetime import date, datetime, time as dtime, timedelta, timezone
 from html import escape
-from datetime import datetime, time as dtime, timedelta, timezone
 
-from telegram import Update
+from telegram import ReplyParameters, Update
 from telegram.constants import ChatType, ParseMode
 from telegram.error import BadRequest, NetworkError
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
+import backtest
+import chart
 import sessions
 import tracker
 import ui
 from agents import TradingDesk
 from config import Config, load_config
 from market_data import MarketData
-from setups import STYLES, analyze_market, find_setup
+from news import NewsCalendar
+from setups import STYLES, TF_LABEL, analyze_market, find_setup
 from storage import Storage, stats
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
@@ -36,6 +39,18 @@ NETWORK_HELP = (
     "(a SOCKS5/HTTP proxy - the MTProto proxy used by the Telegram app will NOT work)."
 )
 HTML = ParseMode.HTML
+FAILS_BEFORE_ALERT = 3
+
+
+def failure_hint(error: str) -> str:
+    e = error.lower()
+    if "apikey" in e or "api key" in e or "api_key" in e:
+        return "Check TWELVEDATA_API_KEY – Twelve Data rejected the key."
+    if "credits" in e or "limit" in e or "429" in e:
+        return "Twelve Data limit reached – wait, or raise SCAN_INTERVAL_MINUTES."
+    if "connect" in e or "timeout" in e or "name or service" in e:
+        return "Internet / connection problem on the server."
+    return "See the server logs for details."
 
 
 class GoldBot:
@@ -46,16 +61,60 @@ class GoldBot:
         self.desk = TradingDesk(cfg.gemini_api_key, cfg.gemini_model, cfg.min_risk_reward,
                                 cfg.min_confidence, cfg.min_agent_votes, cfg.gemini_fallback_models,
                                 cfg.gemini_rpm_per_model)
+        self.news = NewsCalendar(cfg.news_currencies)
         self.scan_lock = asyncio.Lock()
+        self.started = time.time()
+        self.candles: dict | None = None
         self.market: dict | None = None
         self.last_scan: datetime | None = None
         self.last_notes: list[str] = []
+        self.scans = {"day": None, "count": 0}
+        self.fail_count = 0
+        self.last_error = ""
+        self._ai_down_alert_at = 0.0
         self._ai_view: tuple[float, str] = (0.0, "")
+        self.backtest_running = False
+
+    # ================= helpers =================
+
+    def admins(self) -> list[int]:
+        if self.cfg.admin_ids:
+            return self.cfg.admin_ids
+        return [self.storage.owner] if self.storage.owner else []
+
+    def is_admin(self, user_id: int) -> bool:
+        return user_id in self.admins()
+
+    async def tell_admins(self, bot, text: str):
+        for admin in self.admins():
+            try:
+                await bot.send_message(admin, text, parse_mode=HTML)
+            except Exception as e:
+                log.warning("Could not message admin %s: %s", admin, e)
+
+    def _targets(self, style: str | None = None, flag: str | None = None) -> list:
+        targets = self.storage.subscribers(style, flag)
+        if self.cfg.channel_id:
+            targets.append(self.cfg.channel_id)
+        return targets
+
+    async def broadcast(self, bot, text: str, flag: str | None = None, photo: bytes | None = None):
+        file_id = None
+        for chat_id in self._targets(flag=flag):
+            try:
+                if photo:
+                    msg = await bot.send_photo(chat_id, photo=file_id or photo, caption=text, parse_mode=HTML)
+                    if not file_id and getattr(msg, "photo", None):
+                        file_id = msg.photo[-1].file_id
+                else:
+                    await bot.send_message(chat_id, text, parse_mode=HTML)
+            except Exception as e:
+                log.warning("Could not send to %s: %s", chat_id, e)
 
     # ================= scanning =================
 
     async def scan(self, bot, manual: bool = False) -> list[str]:
-        """One full cycle: data -> track open trades -> find & review setups -> publish."""
+        """One full cycle: data -> track trades -> news -> find & review setups -> publish."""
         if not manual and not sessions.is_market_open():
             return ["Market closed"]
         if self.scan_lock.locked():
@@ -63,17 +122,39 @@ class GoldBot:
 
         async with self.scan_lock:
             candles, volumes = await self.data.get()
+            self.candles = candles
             self.market = analyze_market(candles, volumes)
-            self.last_scan = datetime.now(timezone.utc)
-            session = sessions.current()
+            now = datetime.now(timezone.utc)
+            self.last_scan = now
+            if self.scans["day"] != date.today():
+                self.scans = {"day": date.today(), "count": 0}
+            self.scans["count"] += 1
+            await self.news.refresh()
+            session = sessions.current(now)
+            session["news"] = self.news.brief(now)
             m5 = candles["5min"]
 
+            # 1) live tracking of every open trade
             for trade in self.storage.open_trades():
                 for ev in tracker.update(trade, m5):
                     await self.notify(bot, trade, ev)
             self.storage.save()
 
+            # 2) warn before high-impact news
+            for ev in self.news.due_alerts(now, 20):
+                mins = max(int((ev["time"] - now).total_seconds() // 60), 0)
+                await self.broadcast(bot, ui.news_alert(ev, mins), flag="news_alerts")
+
+            # 3) no new trades around high-impact news
             notes = []
+            blackout = self.news.blackout(now, self.cfg.news_blackout_min, self.cfg.news_blackout_min) \
+                if self.cfg.news_blackout_min else None
+            if blackout:
+                notes.append(f"📰 News pause: {blackout['title']} at {blackout['time'].strftime('%H:%M UTC')}")
+                self.last_notes = notes
+                return notes
+
+            # 4) find, review and publish setups
             open_trades = self.storage.open_trades()
             for style in self.cfg.styles:
                 label = STYLES[style]["label"]
@@ -94,6 +175,8 @@ class GoldBot:
                 self.storage.mark_seen(setup["key"])
                 log.info("Reviewing %s %s setup (score %s)", style, setup["direction"], setup["score"])
                 verdict = await self.desk.review(setup, self.market, session)
+                if verdict.get("ai_down"):
+                    await self._alert_ai_down(bot)
                 if not verdict["approved"]:
                     if verdict.get("ai_down") and self.cfg.engine_only_score and \
                             setup["score"] >= self.cfg.engine_only_score:
@@ -112,24 +195,52 @@ class GoldBot:
             log.info("Scan done: %s", " | ".join(notes))
             return notes
 
+    async def _alert_ai_down(self, bot):
+        if time.time() - self._ai_down_alert_at > 7200:
+            self._ai_down_alert_at = time.time()
+            await self.tell_admins(bot, "⚠️ <b>Gemini AI is not responding</b> (quota or overload). Setups are "
+                                        "skipped until it recovers. Check your GEMINI_API_KEY quota.")
+
     async def scheduled_scan(self, context: ContextTypes.DEFAULT_TYPE):
         try:
             await self.scan(context.bot)
-        except Exception:
-            log.exception("Scheduled scan failed")
-
-    def _targets(self, style: str | None) -> list:
-        targets = self.storage.subscribers(style)
-        if self.cfg.channel_id:
-            targets.append(self.cfg.channel_id)
-        return targets
+        except Exception as e:
+            self.fail_count += 1
+            self.last_error = str(e)
+            log.exception("Scheduled scan failed (%s in a row)", self.fail_count)
+            if self.fail_count == FAILS_BEFORE_ALERT:
+                await self.tell_admins(context.bot, f"⚠️ <b>Bot problem:</b> the last {FAILS_BEFORE_ALERT} market scans "
+                                                    f"failed.\n<code>{escape(self.last_error[:300])}</code>\n\n"
+                                                    f"💡 {failure_hint(self.last_error)}")
+            return
+        if self.fail_count >= FAILS_BEFORE_ALERT:
+            await self.tell_admins(context.bot, "✅ <b>Recovered</b> – market scans are working again.")
+        self.fail_count, self.last_error = 0, ""
 
     async def publish(self, bot, trade: dict):
         self.storage.add_trade(trade)
-        text, kb = ui.signal_card(trade), ui.signal_keyboard(trade["id"])
+        png = None
+        try:
+            tf = trade["timeframes"]["entry"]
+            png = await asyncio.to_thread(chart.signal_chart, self.candles[tf], trade, self.market[tf]["smc"],
+                                          self.market.get("levels", {}), TF_LABEL[tf])
+        except Exception:
+            log.exception("Signal chart failed; sending text only")
+
+        kb = ui.signal_keyboard(trade["id"])
+        file_id = None
         for chat_id in self._targets(trade["style"]):
+            user = self.storage.data["users"].get(str(chat_id))
+            lot = ui.lot_line(user, trade, self.cfg.contract_size)
             try:
-                msg = await bot.send_message(chat_id, text, parse_mode=HTML, reply_markup=kb)
+                if png:
+                    msg = await bot.send_photo(chat_id, photo=file_id or png, caption=ui.signal_caption(trade, lot),
+                                               parse_mode=HTML, reply_markup=kb)
+                    if not file_id and getattr(msg, "photo", None):
+                        file_id = msg.photo[-1].file_id
+                else:
+                    text = ui.signal_card(trade) + (f"\n\n{lot}" if lot else "")
+                    msg = await bot.send_message(chat_id, text, parse_mode=HTML, reply_markup=kb)
                 trade["messages"][str(chat_id)] = msg.message_id
             except Exception as e:
                 log.warning("Could not send signal to %s: %s", chat_id, e)
@@ -139,8 +250,8 @@ class GoldBot:
         text = ui.event_message(trade, ev)
         for chat_id, msg_id in trade["messages"].items():
             try:
-                await bot.send_message(chat_id, text, parse_mode=HTML, reply_to_message_id=msg_id,
-                                       allow_sending_without_reply=True)
+                await bot.send_message(chat_id, text, parse_mode=HTML,
+                                       reply_parameters=ReplyParameters(msg_id, allow_sending_without_reply=True))
             except Exception as e:
                 log.warning("Could not send update to %s: %s", chat_id, e)
 
@@ -149,22 +260,34 @@ class GoldBot:
         closed = self.storage.closed_trades(since)
         if not closed and not self.storage.open_trades():
             return
-        text = ui.daily_report(stats(closed), len(self.storage.open_trades()))
-        for chat_id in self._targets(None):
-            try:
-                await context.bot.send_message(chat_id, text, parse_mode=HTML)
-            except Exception as e:
-                log.warning("Could not send daily report to %s: %s", chat_id, e)
+        await self.broadcast(context.bot, ui.daily_report(stats(closed), len(self.storage.open_trades())))
 
-    # ================= commands & buttons =================
+    async def briefing(self, context: ContextTypes.DEFAULT_TYPE):
+        """AI outlook + chart at the London and New York opens."""
+        name = context.job.data
+        if not self.cfg.briefings or not sessions.is_market_open() or not self.market:
+            return
+        try:
+            text = await self.desk.market_view(self.market, {**sessions.current(), "news": self.news.brief()})
+            png = await asyncio.to_thread(chart.market_chart, self.candles["15min"], self.market["15min"]["smc"],
+                                          self.market.get("levels", {}), "M15")
+        except Exception:
+            log.exception("Briefing failed")
+            return
+        caption = f"🌅 <b>{name} Open Briefing · XAU/USD</b>\n{ui.LINE}\n{escape(text)}"
+        if len(caption) > 1000:
+            caption = caption[:990].rsplit(" ", 1)[0] + "…"
+        await self.broadcast(context.bot, caption, flag="briefings", photo=png)
 
-    def is_admin(self, user_id: int) -> bool:
-        return not self.cfg.admin_ids or user_id in self.cfg.admin_ids
+    # ================= commands =================
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        chat_id = update.effective_chat.id
+        chat_id, user_id = update.effective_chat.id, update.effective_user.id
         self.storage.set_subscribed(chat_id, True)
-        text, kb = ui.main_menu(self.storage.user(chat_id), self.is_admin(update.effective_user.id))
+        if not self.cfg.admin_ids and self.storage.claim_owner(user_id):
+            await update.message.reply_text("👑 <b>You are the owner of this bot.</b> Admin tools (scan, status, "
+                                            "backtest, error alerts) are unlocked for you.", parse_mode=HTML)
+        text, kb = ui.main_menu(self.storage.user(chat_id), self.is_admin(user_id))
         await update.message.reply_text(text, parse_mode=HTML, reply_markup=kb)
 
     async def cmd_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -176,32 +299,122 @@ class GoldBot:
         await update.message.reply_text("🔕 Alerts OFF. Send /start to switch them on again.")
 
     async def cmd_simple(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """/trades, /stats, /market, /help – same screens as the menu buttons."""
-        key = {"trades": "trades", "stats": "perf", "market": "mkt", "help": "help", "history": "hist"}[
-            update.message.text.split()[0].lstrip("/").split("@")[0]]
+        """/trades /stats /market /help /history /news /status – same screens as the menu buttons."""
+        cmd = update.message.text.split()[0].lstrip("/").split("@")[0]
+        key = {"trades": "trades", "stats": "perf", "market": "mkt", "help": "help", "history": "hist",
+               "news": "news", "status": "status"}[cmd]
         text, kb = await self.screen(key, update.effective_chat.id, update.effective_user.id)
         await update.message.reply_text(text, parse_mode=HTML, reply_markup=kb)
 
+    async def cmd_balance(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            value = float(context.args[0].replace(",", "").replace("$", ""))
+            assert value > 0
+        except (IndexError, ValueError, AssertionError):
+            await update.message.reply_text("Usage: <code>/balance 1000</code>", parse_mode=HTML)
+            return
+        self.storage.set_field(update.effective_chat.id, "balance", value)
+        text, kb = ui.risk_screen(self.storage.user(update.effective_chat.id), self.cfg.contract_size)
+        await update.message.reply_text("✅ Balance saved.\n\n" + text, parse_mode=HTML, reply_markup=kb)
+
+    async def cmd_risk(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            value = float(context.args[0].rstrip("%"))
+            assert 0 < value <= 10
+        except (IndexError, ValueError, AssertionError):
+            await update.message.reply_text("Usage: <code>/risk 1</code>  (percent per trade, 0.1–10)", parse_mode=HTML)
+            return
+        self.storage.set_field(update.effective_chat.id, "risk", value)
+        text, kb = ui.risk_screen(self.storage.user(update.effective_chat.id), self.cfg.contract_size)
+        await update.message.reply_text("✅ Risk saved.\n\n" + text, parse_mode=HTML, reply_markup=kb)
+
+    async def cmd_lot(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user = self.storage.user(update.effective_chat.id)
+        try:
+            sl_pips = float(context.args[0])
+            assert sl_pips > 0
+        except (IndexError, ValueError, AssertionError):
+            await update.message.reply_text("Usage: <code>/lot 50</code>  (stop loss in pips; 1 pip = $0.10)",
+                                            parse_mode=HTML)
+            return
+        if not user.get("balance"):
+            await update.message.reply_text("Set your balance first: <code>/balance 1000</code>", parse_mode=HTML)
+            return
+        lots, risk_usd = ui.lot_size(user["balance"], user.get("risk", 1.0), sl_pips / 10, self.cfg.contract_size)
+        await update.message.reply_text(
+            f"💰 SL <b>{sl_pips:g} pips</b> with {user.get('risk', 1.0):g}% risk (${risk_usd:,.2f})\n"
+            f"➡️ Lot size: <b>{max(lots, 0.01):.2f}</b>" + ("  (minimum lot – risk is higher)" if lots < 0.01 else ""),
+            parse_mode=HTML)
+
     async def cmd_scan(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self.is_admin(update.effective_user.id):
-            await update.message.reply_text("⛔ Only the bot admin can run a manual scan.")
+            await update.message.reply_text("⛔ Only the bot owner can run a manual scan.")
             return
         msg = await update.message.reply_text("🔎 AI desk is scanning XAU/USD on M5 → D1…")
         await msg.edit_text(await self._manual_scan_text(context.bot), parse_mode=HTML)
+
+    async def cmd_backtest(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self.is_admin(update.effective_user.id):
+            await update.message.reply_text("⛔ Only the bot owner can run a backtest.")
+            return
+        style = context.args[0] if context.args else "intraday"
+        if style not in STYLES:
+            await update.message.reply_text(f"Usage: <code>/backtest intraday</code>  ({', '.join(STYLES)})",
+                                            parse_mode=HTML)
+            return
+        await self.run_backtest(context.bot, update.effective_chat.id, style)
+
+    async def run_backtest(self, bot, chat_id: int, style: str):
+        if self.backtest_running:
+            await bot.send_message(chat_id, "🧪 A backtest is already running, please wait.")
+            return
+        self.backtest_running = True
+        try:
+            await bot.send_message(chat_id, f"🧪 Backtesting {STYLES[style]['label']} on the last few weeks of gold "
+                                            "data… this takes 1–5 minutes.")
+            data = await backtest.fetch_history(self.cfg.twelvedata_api_key, self.cfg.symbol, style)
+            result = await asyncio.to_thread(backtest.run, data, style, self.cfg.min_risk_reward,
+                                             self.cfg.min_engine_score)
+        except Exception as e:
+            log.exception("Backtest failed")
+            result = {"error": str(e)[:200]}
+        finally:
+            self.backtest_running = False
+        await bot.send_message(chat_id, ui.backtest_report(result), parse_mode=HTML)
 
     async def _manual_scan_text(self, bot) -> str:
         try:
             notes = await self.scan(bot, manual=True)
         except Exception as e:
             log.exception("Manual scan failed")
-            return f"❌ Scan failed: {e}"
-        return "🔎 <b>Scan complete</b>\n" + "\n".join(f"• {n}" for n in notes)
+            return f"❌ Scan failed: {escape(str(e)[:300])}\n💡 {failure_hint(str(e))}"
+        closed = "" if sessions.is_market_open() else "\n\n<i>Market is closed – setups are rare until it reopens.</i>"
+        return "🔎 <b>Scan complete</b>\n" + "\n".join(f"• {escape(n)}" for n in notes) + closed
+
+    def status_info(self) -> dict:
+        up = int(time.time() - self.started)
+        return {
+            "uptime": f"{up // 86400}d {up % 86400 // 3600}h {up % 3600 // 60}m",
+            "market_open": sessions.is_market_open(),
+            "last_scan": self.last_scan.strftime("%H:%M UTC") if self.last_scan else "–",
+            "scans_today": self.scans["count"] if self.scans["day"] == date.today() else 0,
+            "fail_count": self.fail_count,
+            "last_error": self.last_error,
+            "td_requests": self.data.requests_today,
+            "ai_calls": self.desk.usage["calls"],
+            "ai_failures": self.desk.usage["failures"],
+            "volume_ok": self.data.volume_ok,
+            "news_ok": self.news.error is None,
+            "open_trades": len(self.storage.open_trades()),
+            "users": len(self.storage.subscribers()),
+            "notes": self.last_notes,
+        }
+
+    # ================= screens & buttons =================
 
     async def screen(self, key: str, chat_id: int, user_id: int):
         user = self.storage.user(chat_id)
         price = self.market["5min"]["price"] if self.market else None
-        if key == "menu":
-            return ui.main_menu(user, self.is_admin(user_id))
         if key == "trades":
             return ui.trades_list(self.storage.open_trades(), price)
         if key == "hist":
@@ -210,9 +423,22 @@ class GoldBot:
             return ui.performance(stats(self.storage.closed_trades())), ui.back()
         if key == "mkt":
             text = ui.market_dashboard(self.market, sessions.current(), sessions.is_market_open(), self.last_scan)
-            return text, ui.back()
+            return text, ui.market_keyboard()
         if key == "set":
             return ui.settings(user)
+        if key == "risk":
+            return ui.risk_screen(user, self.cfg.contract_size)
+        if key == "news":
+            await self.news.refresh()
+            now = datetime.now(timezone.utc)
+            return ui.news_screen(self.news.upcoming(now, 24 * 7), self.news.blackout(now), self.news.error), ui.back()
+        if key == "status" and self.is_admin(user_id):
+            return ui.status_screen(self.status_info()), ui.back()
+        if key == "bt" and self.is_admin(user_id):
+            from telegram import InlineKeyboardButton as Btn
+            rows = [[Btn(STYLES[s]["label"], callback_data=f"bt:{s}") for s in STYLES]]
+            return ("🧪 <b>Backtest</b>\nReplay the last weeks of gold data through the SMC engine and see the "
+                    "win rate, R and drawdown. Choose a style:"), ui.back(rows)
         if key == "help":
             return ui.HELP, ui.back()
         return ui.main_menu(user, self.is_admin(user_id))
@@ -224,32 +450,59 @@ class GoldBot:
         user_id = q.from_user.id
 
         # Buttons under a signal (also work in channels, where we answer with a popup).
-        if data[:2] in ("t:", "r:"):
+        if data[:2] in ("t:", "r:", "f:"):
             trade = self.storage.trade(data[2:])
             if not trade:
                 await q.answer("Trade not found", show_alert=True)
                 return
             price = self.market["5min"]["price"] if self.market else None
-            text = ui.trade_status(trade, price) if data[0] == "t" else ui.ai_report(trade)
+            text = {"t": lambda: ui.trade_status(trade, price), "r": lambda: ui.ai_report(trade),
+                    "f": lambda: ui.signal_card(trade)}[data[0]]()
             if chat.type == ChatType.CHANNEL:
-                plain = text.replace("<b>", "").replace("</b>", "").replace("<i>", "").replace("</i>", "")
-                plain = plain.replace("<code>", "").replace("</code>", "")
+                plain = text
+                for tag in ("<b>", "</b>", "<i>", "</i>", "<code>", "</code>"):
+                    plain = plain.replace(tag, "")
                 await q.answer(plain[:195], show_alert=True)
             else:
                 await q.answer()
                 await q.message.reply_text(text, parse_mode=HTML)
             return
 
+        if data.startswith("chart:"):
+            tf = data[6:]
+            if not self.candles or tf not in self.candles:
+                await q.answer("No market data yet – wait for the first scan", show_alert=True)
+                return
+            await q.answer("Drawing chart…")
+            png = await asyncio.to_thread(chart.market_chart, self.candles[tf], self.market[tf]["smc"],
+                                          self.market.get("levels", {}), TF_LABEL[tf])
+            await q.message.reply_photo(png, caption=f"📈 XAU/USD {TF_LABEL[tf]} · {self.market[tf]['price']:,.2f}")
+            return
+
+        if data.startswith("bt:"):
+            if not self.is_admin(user_id):
+                await q.answer("Only the owner can run backtests", show_alert=True)
+                return
+            await q.answer("Backtest started")
+            asyncio.create_task(self.run_backtest(context.bot, chat.id, data[3:]))
+            return
+
         if data.startswith("sty:"):
             self.storage.toggle_style(chat.id, data[4:])
             data = "set"
+        elif data.startswith("tog:"):
+            self.storage.toggle_field(chat.id, data[4:])
+            data = "set"
+        elif data.startswith("rk:"):
+            self.storage.set_field(chat.id, "risk", float(data[3:]))
+            data = "risk"
         elif data == "alert":
             u = self.storage.user(chat.id)
             self.storage.set_subscribed(chat.id, not u.get("subscribed"))
             data = "menu"
         elif data == "scan":
             if not self.is_admin(user_id):
-                await q.answer("Only the admin can scan manually", show_alert=True)
+                await q.answer("Only the owner can scan manually", show_alert=True)
                 return
             await q.answer("Scanning…")
             await q.message.reply_text(await self._manual_scan_text(context.bot), parse_mode=HTML)
@@ -273,7 +526,7 @@ class GoldBot:
         cached_at, text = self._ai_view
         if time.time() - cached_at > 600:
             try:
-                text = await self.desk.market_view(self.market, sessions.current())
+                text = await self.desk.market_view(self.market, {**sessions.current(), "news": self.news.brief()})
                 self._ai_view = (time.time(), text)
             except Exception as e:
                 log.warning("AI market view failed: %s", e)
@@ -281,12 +534,8 @@ class GoldBot:
         return f"🧠 <b>AI Market View · XAU/USD</b>\n{ui.LINE}\n{escape(text)}\n\n<i>{ui.DISCLAIMER}</i>"
 
     async def on_startup(self, app: Application):
-        for admin in self.cfg.admin_ids:
-            try:
-                await app.bot.send_message(admin, "✅ <b>Gold AI bot is online</b> – scanning every "
-                                                  f"{self.cfg.scan_interval_minutes} min.", parse_mode=HTML)
-            except Exception:
-                pass
+        await self.tell_admins(app.bot, f"✅ <b>Gold AI bot is online</b> – scanning every "
+                                        f"{self.cfg.scan_interval_minutes} min.")
 
 
 def main():
@@ -300,14 +549,20 @@ def main():
     app.add_handler(CommandHandler(["start", "subscribe"], bot.cmd_start))
     app.add_handler(CommandHandler("menu", bot.cmd_menu))
     app.add_handler(CommandHandler(["stop", "unsubscribe"], bot.cmd_stop))
-    app.add_handler(CommandHandler(["trades", "stats", "market", "help", "history"], bot.cmd_simple))
+    app.add_handler(CommandHandler(["trades", "stats", "market", "help", "history", "news", "status"], bot.cmd_simple))
+    app.add_handler(CommandHandler("balance", bot.cmd_balance))
+    app.add_handler(CommandHandler("risk", bot.cmd_risk))
+    app.add_handler(CommandHandler("lot", bot.cmd_lot))
     app.add_handler(CommandHandler("scan", bot.cmd_scan))
+    app.add_handler(CommandHandler("backtest", bot.cmd_backtest))
     app.add_handler(CallbackQueryHandler(bot.on_button))
 
-    app.job_queue.run_repeating(bot.scheduled_scan, interval=cfg.scan_interval_minutes * 60, first=10)
-    # Mon-Fri (python-telegram-bot counts Sunday as 0).
-    app.job_queue.run_daily(bot.daily_report, time=dtime(cfg.daily_report_hour, 5, tzinfo=timezone.utc),
-                            days=(1, 2, 3, 4, 5))
+    jq = app.job_queue
+    jq.run_repeating(bot.scheduled_scan, interval=cfg.scan_interval_minutes * 60, first=10)
+    weekdays = (1, 2, 3, 4, 5)  # python-telegram-bot counts Sunday as 0
+    jq.run_daily(bot.daily_report, time=dtime(cfg.daily_report_hour, 5, tzinfo=timezone.utc), days=weekdays)
+    jq.run_daily(bot.briefing, time=dtime(7, 2, tzinfo=timezone.utc), days=weekdays, data="London")
+    jq.run_daily(bot.briefing, time=dtime(12, 32, tzinfo=timezone.utc), days=weekdays, data="New York")
 
     log.info("Gold SMC AI bot started: styles=%s, scan every %s min", ",".join(cfg.styles),
              cfg.scan_interval_minutes)

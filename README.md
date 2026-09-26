@@ -11,40 +11,64 @@ every 5 min ─► Twelve Data: XAU/USD M5 · M15 · H1 · H4 · D1   (+ Binance
                 │
                 ▼
         SMC ENGINE (per timeframe)
-        • swings, BOS / CHoCH, trend
+        • swings, BOS / CHoCH, trend, displacement strength
         • order blocks, fair value gaps
         • liquidity pools, equal highs/lows, liquidity sweeps
+        • key levels: PDH/PDL, previous week high/low, Asian range, daily/weekly open
         • premium / discount, sessions & killzones
         • volume: relative volume, delta (buy/sell pressure), POC & value area
                 │
                 ▼
         SETUP FINDER (per style)          bias TF → confirm TF → entry TF
-        ⚡ Scalping   H1 → M15 → M5         trigger: CHoCH/BOS or liquidity sweep
+        ⚡ Scalping   H1 → M15 → M5         trigger: CHoCH/BOS, liquidity sweep or key-level sweep
         📊 Intraday   H4 → H1  → M15        entry: order block / FVG retest
         🌊 Swing      D1 → H4  → H1         SL: beyond POI, sweep wick and nearby liquidity
-                │                            TPs: next liquidity pools (min 1:1.5)
+                │                            TPs: next liquidity / key levels (min 1:1.5)
+                │                            TP1 must have a clear path (no opposing OB/FVG)
+                ▼
+        📰 NEWS FILTER – no new trades 30 min around high-impact USD news (ForexFactory calendar)
+                │
                 ▼ (only setups with confluence score ≥ MIN_ENGINE_SCORE)
-        AI DESK (Gemini, each agent on its own model)
+        AI DESK (Gemini, each agent on its own model, automatic fallback when one is busy)
         🏗 Structure  💧 Liquidity/OB  📊 Volume  ⚙️ Momentum  🛡 Risk   → vote TAKE/SKIP
         👑 Head Trader reads all 5 reports → final TAKE/SKIP, confidence, fine-tuned levels
                 │
                 ▼ (Head Trader TAKE + confidence ≥ 70 + ≥ 3/5 agents agree)
-        TELEGRAM signal card  ─►  live tracking replies on the signal:
-        ✅ entry filled · 🎯 TP1 (move SL to BE) · 🎯 TP2 · 🏆 TP3 · 🛑 SL · ⌛ expired
+        TELEGRAM: 📈 chart + signal + 💰 your lot size ─► live tracking replies on the signal:
+        ✅ entry filled · 🎯 TP1 (SL → breakeven) · 🎯 TP2 · 🏆 TP3 · 🛑 SL · ⌛ expired
 ```
 
 ## Telegram features
 
-- **Signal cards** with entry / SL / TP1–TP3 (pips and R:R), AI confidence bar, each agent's vote,
-  confluence list and the Head Trader's reasoning
-- Buttons on each signal: **📍 Live Status** (floating pips, TPs hit) and **🧠 AI Desk Report** (every agent's analysis)
-- **Menu** (`/start`): 📡 Active Trades · 📜 History · 📊 Performance (win rate, R) · 🌍 Market Now
-  (structure on every TF, liquidity, order blocks, FVGs, volume) · 🧠 AI Market View · ⚙️ Signal Types
-  (turn scalping / intraday / swing on or off) · 🔔 Alerts on/off · ⚡ Scan now (admin)
+- **Signal with chart**: candles, order blocks, FVGs, key levels, entry / SL / TP1–TP3 lines and risk/reward boxes;
+  caption with pips, R:R, AI confidence, each agent's vote, top confluences and **your personal lot size**
+- Buttons on each signal: **📍 Live Status** · **🧠 AI Desk** (every agent's analysis) · **📋 Full Analysis**
+- **Live tracking** replies on the signal: entry filled, TP1/TP2/TP3, stop loss, breakeven, expiry
+- **Menu** (`/start`): 📡 Active Trades · 📜 History · 📊 Performance · 🌍 Market Now (+ 📈 M15/H1/H4 charts) ·
+  🧠 AI Market View · 📰 News calendar · 💰 Risk & Lot · ⚙️ Settings (scalping / intraday / swing,
+  briefings, news alerts) · 🔔 Alerts on/off
+- **News alerts** 20 minutes before high-impact USD news, and a pause on new signals around it
+- **Session briefings**: AI outlook + chart at the London and New York open
 - **Daily report** (Mon–Fri) with win rate and total R
+- **Owner tools**: ⚡ Scan now · 🩺 Status (API usage, errors, feeds) · 🧪 Backtest · automatic alerts when
+  scans keep failing or the AI is down (the first person to `/start` the bot becomes the owner, or set `ADMIN_IDS`)
 - Optional **channel** posting (`CHANNEL_ID`)
 
-Commands: `/start` `/menu` `/trades` `/history` `/stats` `/market` `/scan` `/help` `/stop`
+Commands: `/start` `/menu` `/trades` `/history` `/stats` `/market` `/news` `/balance 1000` `/risk 1` `/lot 50`
+`/scan` `/status` `/backtest intraday` `/help` `/stop`
+
+**Honest results**: trades are booked as if 1/3 of the position is closed at each TP and the stop moves to
+breakeven after TP1 – not the inflated "max TP reached" many signal channels show.
+
+## Backtest
+
+```bash
+python backtest.py intraday      # or scalp / swing   (also: /backtest in Telegram, owner only)
+```
+
+Replays the last weeks of gold data candle by candle (no look-ahead) through the same engine and tracker,
+and prints win rate, total/average R, max drawdown and profit factor. The AI desk and news filter are not
+replayed. Use it to tune `MIN_ENGINE_SCORE`, `MIN_RISK_REWARD` and `STYLES` before trusting a style.
 
 ## Keys you need
 
@@ -95,8 +119,9 @@ otherwise Telegram rejects the second copy. A server outside your country also m
 6. **Settings → Region**: pick a Europe or Asia region (Binance volume data is not available from US servers).
 7. **Deploy**. The **Logs** tab should show `Gold SMC AI bot started`.
 
-Every push to `main` redeploys automatically. Railway is a paid service after its trial (a bot this size
-fits the smallest plan); check their current pricing.
+Every push to `main` redeploys automatically. Railway's free allowance is small (a one-time trial credit,
+then a small monthly credit); a bot that runs 24/7 may use more than that, so check your usage in the
+Railway dashboard. For a truly free 24/7 server use Option B on Oracle Cloud's Always Free VM.
 
 ### Option B – Any Ubuntu / Debian VPS (cheapest long-term)
 
