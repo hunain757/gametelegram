@@ -12,6 +12,11 @@ GROUPS = {"trend": "Trend following", "breakout": "Breakout", "reversion": "Mean
           "smc": "ICT / SMC", "momentum": "Momentum timing", "volume": "Volume"}
 
 
+# Strategy families that do not apply in a regime (their votes are shown but not counted).
+NOT_IN = {"trending": ("reversion",), "ranging": ("trend", "breakout"), "compressed": ("trend", "reversion"),
+          "volatile": ("reversion",), "transition": ()}
+
+
 def _v(x, *path):
     for p in path:
         if not isinstance(x, dict):
@@ -142,18 +147,25 @@ def evaluate(market: dict, direction: str, timeframes: dict, entry: float | None
         add("Buy/sell pressure (delta)", "volume", side("buy" in str(press).lower(), "sell" in str(press).lower()),
             f"volume pressure: {press}")
 
-    agrees = sum(x["verdict"] == "agrees" for x in out)
-    against = sum(x["verdict"] == "against" for x in out)
-    return {"direction": direction, "results": out, "agrees": agrees, "against": against,
-            "neutral": len(out) - agrees - against,
+    # Regime filter: a strategy only counts in the market conditions it was designed for.
+    reg = (c.get("regime") or e.get("regime") or {}).get("regime", "transition")
+    for x in out:
+        x["applicable"] = x["group"] not in NOT_IN.get(reg, ())
+    used = [x for x in out if x["applicable"]]
+    agrees = sum(x["verdict"] == "agrees" for x in used)
+    against = sum(x["verdict"] == "against" for x in used)
+    return {"direction": direction, "regime": reg, "results": out, "agrees": agrees, "against": against,
+            "neutral": len(used) - agrees - against, "ignored": len(out) - len(used),
             "score": round(100 * agrees / (agrees + against)) if agrees + against else 50,
-            "groups": {g: {"label": GROUPS[g],
-                           "agrees": sum(x["verdict"] == "agrees" for x in out if x["group"] == g),
-                           "against": sum(x["verdict"] == "against" for x in out if x["group"] == g)}
+            "groups": {g: {"label": GROUPS[g], "applicable": g not in NOT_IN.get(reg, ()),
+                           "agrees": sum(x["verdict"] == "agrees" for x in used if x["group"] == g),
+                           "against": sum(x["verdict"] == "against" for x in used if x["group"] == g)}
                        for g in GROUPS if any(x["group"] == g for x in out)}}
 
 
 def brief(board: dict, groups: tuple[str, ...] | None = None) -> list[str]:
     """One line per strategy, optionally only some groups."""
-    return [f"{x['name']} [{x['tf']}]: {x['verdict'].upper()} - {x['detail']}"
+    return [f"{x['name']} [{x['tf']}]: {x['verdict'].upper()}"
+            + ("" if x.get("applicable", True) else f" (not counted in a {board.get('regime')} market)")
+            + f" - {x['detail']}"
             for x in board.get("results", []) if not groups or x["group"] in groups]

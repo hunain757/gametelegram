@@ -2,9 +2,9 @@
 for that job, and passes its finding on - every hand-over is shown on the local dashboard.
 
   Stage 1  18 analysts in 3 desks study the setup in parallel
-             📐 Technical desk (9)  structure, liquidity, order blocks, FVGs, volume, candles, momentum, trend, volatility
-             🧭 Strategy desk  (5)  multi-timeframe, ICT/Fibonacci, key levels & pivots, trend-following, breakout/reversion
-             🌍 Macro desk     (4)  economic calendar, world events, central banks & dollar, intermarket & sentiment
+             Technical desk (9)  structure, liquidity, order blocks, FVGs, volume, candles, momentum, trend, volatility
+             Strategy desk  (5)  multi-timeframe, ICT/Fibonacci, key levels & pivots, trend-following, breakout/reversion
+             Macro desk     (4)  economic calendar, world events, central banks & dollar, intermarket & sentiment
   Stage 2  3 desk leads check their members' evidence, challenge doubtful members (debate) and give one desk verdict
   Stage 3  3 verifiers cross-check the desks: confluence, risk, devil's advocate
   Stage 4  the Head Trader reads everything and decides TAKE/SKIP with final levels
@@ -32,100 +32,101 @@ from setups import TF_LABEL, validate_levels
 log = logging.getLogger("goldbot.agents")
 
 DESKS = {
-    "tech": {"name": "Technical desk", "icon": "📐"},
-    "strategy": {"name": "Strategy desk", "icon": "🧭"},
-    "macro": {"name": "Macro & news desk", "icon": "🌍"},
+    "tech": {"name": "Technical desk", "icon": "TECH"},
+    "strategy": {"name": "Strategy desk", "icon": "STRAT"},
+    "macro": {"name": "Macro & news desk", "icon": "MACRO"},
 }
 
 # Each analyst: its job ("focus"), the inputs it receives (shown on the dashboard) and the exact data slice.
 #   fields  per-timeframe keys of the market read      ind     which indicators (per timeframe)
 #   extras  other inputs: key_levels, adr, pivots, strategies:<groups>, calendar, headlines:<category>, intermarket
 ANALYSTS = [
-    # ---------------- 📐 technical desk ----------------
-    {"key": "structure", "desk": "tech", "name": "Market Structure Analyst", "icon": "🏗",
+    # ---------------- technical desk ----------------
+    {"key": "structure", "desk": "tech", "name": "Market Structure Analyst", "icon": "MS",
      "focus": "Market structure on every timeframe: trend, BOS vs CHoCH, whether the higher timeframes support this "
               "direction and whether the entry-timeframe shift is a real break or noise inside a range.",
-     "fields": ("price", "trend", "structure_events", "range"), "extras": ()},
-    {"key": "liquidity", "desk": "tech", "name": "Liquidity & Sweep Hunter", "icon": "💧",
+     "fields": ("price", "trend", "regime", "structure_events", "range"), "extras": ()},
+    {"key": "liquidity", "desk": "tech", "name": "Liquidity & Sweep Hunter", "icon": "LQ",
      "focus": "Liquidity: which pools (swing highs/lows, equal highs/lows, PDH/PDL, PWH/PWL, Asia range) were swept "
               "before this move, which still rest as targets, and whether the stop sits where liquidity will be hunted.",
      "fields": ("price", "atr", "buy_side_liquidity", "sell_side_liquidity", "equal_highs", "equal_lows",
                 "recent_sweeps"), "extras": ("key_levels",)},
-    {"key": "orderblocks", "desk": "tech", "name": "Order Block & Breaker Specialist", "icon": "🧱",
+    {"key": "orderblocks", "desk": "tech", "name": "Order Block & Breaker Specialist", "icon": "OB",
      "focus": "Order blocks and breaker blocks: is the entry zone a fresh, untested OB or a valid breaker, did it "
               "cause a real break of structure, is an opposing OB/breaker between entry and TP1?",
      "fields": ("price", "atr", "order_blocks", "breaker_blocks", "structure_events"), "extras": ()},
-    {"key": "imbalance", "desk": "tech", "name": "FVG & Imbalance Analyst", "icon": "⚡",
+    {"key": "imbalance", "desk": "tech", "name": "FVG & Imbalance Analyst", "icon": "FVG",
      "focus": "Fair value gaps: is an unfilled FVG supporting the entry, are opposing FVGs in the path to the "
               "targets, and did price displace (leave imbalance) in the trade direction?",
      "fields": ("price", "atr", "fvgs"), "extras": ()},
-    {"key": "volume", "desk": "tech", "name": "Volume Profile & Order Flow Analyst", "icon": "📊",
+    {"key": "volume", "desk": "tech", "name": "Volume Profile & Order Flow Analyst", "icon": "VOL",
      "focus": "Volume (Binance: PAXG/USDT for gold, spot volume for crypto): relative volume, delta (buy/sell "
               "pressure), volume bubbles (institutional candles), POC / value area and OBV. Does volume confirm the "
               "move or show absorption against it? If volume data is unavailable say so and vote SKIP.",
      "fields": ("price", "volume"), "ind": ("obv",), "extras": ()},
-    {"key": "price_action", "desk": "tech", "name": "Price Action & Pattern Reader", "icon": "🕯",
+    {"key": "price_action", "desk": "tech", "name": "Price Action & Pattern Reader", "icon": "PA",
      "focus": "Read the candles: recent candles on each timeframe, candlestick patterns (engulfing, pin bars, "
               "stars, inside bars, dojis), double tops/bottoms, rejection wicks. Is there real rejection from the "
               "entry zone or is price slicing through it?",
      "fields": ("price", "recent_candles", "candle_patterns"), "extras": ()},
-    {"key": "momentum", "desk": "tech", "name": "Momentum Oscillator Analyst", "icon": "🚀",
+    {"key": "momentum", "desk": "tech", "name": "Momentum Oscillator Analyst", "icon": "MOM",
      "focus": "Momentum oscillators: RSI, RSI divergence, MACD histogram, Stochastic, Stochastic RSI, CCI and "
               "Williams %R on each timeframe. Is momentum turning in the trade direction, or overbought/oversold "
               "exhaustion / divergence against it?",
      "fields": ("price",), "ind": ("rsi", "rsi_divergence", "macd_hist", "stochastic", "stoch_rsi", "cci",
                                    "williams_r"), "extras": ()},
-    {"key": "trend", "desk": "tech", "name": "Trend Indicator Analyst", "icon": "📈",
+    {"key": "trend", "desk": "tech", "name": "Trend Indicator Analyst", "icon": "TRD",
      "focus": "Trend indicators: EMA 20/50/200 stack, ADX with +DI/-DI, Supertrend, Ichimoku (cloud, Tenkan/Kijun), "
               "Heikin-Ashi and VWAP. Is there a real trend in the trade direction and how strong is it?",
      "fields": ("price",), "ind": ("ema20", "ema50", "ema200", "adx", "supertrend", "ichimoku", "heikin_ashi",
                                    "vwap"), "extras": ()},
-    {"key": "volatility", "desk": "tech", "name": "Volatility Analyst", "icon": "🌡",
+    {"key": "volatility", "desk": "tech", "name": "Volatility Analyst", "icon": "VLT",
      "focus": "Volatility: ATR, Bollinger Bands (width, position), TTM squeeze, Donchian channel and how much of the "
               "average daily range is used. Is there enough room to reach the targets, or is the market too "
               "compressed / already over-extended?",
-     "fields": ("price", "atr"), "ind": ("bollinger", "squeeze", "donchian"), "extras": ("adr",)},
-    # ---------------- 🧭 strategy desk ----------------
-    {"key": "mtf", "desk": "strategy", "name": "Multi-Timeframe Analyst", "icon": "🔭",
+     "fields": ("price", "atr", "regime"), "ind": ("bollinger", "bb_width_rank", "squeeze", "donchian"),
+     "extras": ("adr",)},
+    # ---------------- strategy desk ----------------
+    {"key": "mtf", "desk": "strategy", "name": "Multi-Timeframe Analyst", "icon": "MTF",
      "focus": "Top-down alignment D1 → H4 → H1 → M15 → M5: does every timeframe from the bias down to the entry "
               "agree with this direction? Name the exact timeframe that disagrees, if any.",
      "fields": ("price", "trend", "structure_events"), "ind": ("ema50", "ema200"),
      "extras": ("strategies:trend",)},
-    {"key": "ict", "desk": "strategy", "name": "ICT & Fibonacci Specialist", "icon": "🎯",
+    {"key": "ict", "desk": "strategy", "name": "ICT & Fibonacci Specialist", "icon": "ICT",
      "focus": "ICT model: premium/discount of the dealing range, Fibonacci OTE zone (62-79%), killzone timing, "
               "Asian range and the power-of-three (accumulation → manipulation → distribution). Is the entry at a "
               "textbook ICT location and time?",
      "fields": ("price", "range", "fib"), "extras": ("key_levels", "strategies:smc")},
-    {"key": "levels", "desk": "strategy", "name": "Key Levels & Pivot Analyst", "icon": "📏",
+    {"key": "levels", "desk": "strategy", "name": "Key Levels & Pivot Analyst", "icon": "LVL",
      "focus": "Horizontal levels: PDH/PDL, PWH/PWL, daily/weekly open, floor pivots (P, R1/R2, S1/S2), round "
               "numbers and Fibonacci levels. Does a level support the entry, and is a level blocking the way to TP1?",
      "fields": ("price", "atr", "fib"), "extras": ("key_levels", "pivots")},
-    {"key": "trend_follow", "desk": "strategy", "name": "Trend-Following Strategist", "icon": "🏄",
+    {"key": "trend_follow", "desk": "strategy", "name": "Trend-Following Strategist", "icon": "TF",
      "focus": "Run the trend-following strategies (EMA pullback, Supertrend+MACD, Ichimoku, ADX/DMI, Heikin-Ashi, "
               "multi-timeframe) on this setup. How many AGREE vs are AGAINST, and is this a with-trend trade?",
      "fields": ("price",), "extras": ("strategies:trend",)},
-    {"key": "breakout_rev", "desk": "strategy", "name": "Breakout & Reversion Strategist", "icon": "🔄",
+    {"key": "breakout_rev", "desk": "strategy", "name": "Breakout & Reversion Strategist", "icon": "B/R",
      "focus": "Run the breakout (Donchian, squeeze), mean-reversion (RSI+Bollinger, VWAP, divergence), momentum-"
               "timing and volume strategies. Is this a good breakout or a good reversion entry - or a chase that "
               "these strategies warn against?",
      "fields": ("price",), "extras": ("strategies:breakout,reversion,momentum,volume",)},
-    # ---------------- 🌍 macro & news desk ----------------
-    {"key": "calendar", "desk": "macro", "name": "Economic Calendar Analyst", "icon": "📅",
+    # ---------------- macro & news desk ----------------
+    {"key": "calendar", "desk": "macro", "name": "Economic Calendar Analyst", "icon": "CAL",
      "focus": "The economic calendar only: which high/medium-impact USD events (CPI, NFP, FOMC, PCE, GDP, jobless "
               "claims…) fall inside this trade's lifetime, and how close they are. A red event within the trade "
               "window = SKIP. If no event threatens the trade, vote TAKE with a score of 60-70.",
      "fields": (), "extras": ("calendar",)},
-    {"key": "world", "desk": "macro", "name": "Geopolitics & World Events Analyst", "icon": "🌐",
+    {"key": "world", "desk": "macro", "name": "Geopolitics & World Events Analyst", "icon": "GEO",
      "focus": "What is happening in the world right now: wars, conflicts, sanctions, tariffs, elections, oil and "
               "crises in the headlines. Would these events push this instrument in the trade direction (e.g. "
               "risk-off = gold up) or against it? If no relevant headline exists, vote TAKE with a score of 55-65.",
      "fields": (), "extras": ("headlines:world",)},
-    {"key": "macro", "desk": "macro", "name": "Central Banks & Dollar Analyst", "icon": "🏦",
+    {"key": "macro", "desk": "macro", "name": "Central Banks & Dollar Analyst", "icon": "CB",
      "focus": "Central banks and the US dollar: Fed/FOMC tone, inflation and jobs data, yields, rate-cut/hike "
               "expectations and dollar strength in the headlines. A stronger dollar and higher yields weigh on gold "
               "and bitcoin. Does the macro backdrop support this direction? No relevant headline = TAKE 55-65.",
      "fields": (), "extras": ("headlines:macro",)},
-    {"key": "intermarket", "desk": "macro", "name": "Intermarket & Sentiment Analyst", "icon": "🔗",
+    {"key": "intermarket", "desk": "macro", "name": "Intermarket & Sentiment Analyst", "icon": "IMK",
      "focus": "Other markets and sentiment: the other instrument's trend and move today, the gold/bitcoin "
               "correlation, and this instrument's own news flow (gold or crypto headlines). Is money flowing with "
               "this trade or against it?",
@@ -133,23 +134,23 @@ ANALYSTS = [
 ]
 
 LEADS = [
-    {"key": "tech_lead", "desk": "tech", "name": "Technical Desk Lead", "icon": "📐",
+    {"key": "tech_lead", "desk": "tech", "name": "Technical Desk Lead", "icon": "TL",
      "focus": "Check the 9 technical analysts' evidence against the chart data and give the technical verdict."},
-    {"key": "strategy_lead", "desk": "strategy", "name": "Strategy Desk Lead", "icon": "🧭",
+    {"key": "strategy_lead", "desk": "strategy", "name": "Strategy Desk Lead", "icon": "SL",
      "focus": "Check the 5 strategy analysts against the strategy board and levels and give the strategy verdict."},
-    {"key": "macro_lead", "desk": "macro", "name": "Macro & News Desk Lead", "icon": "🌍",
+    {"key": "macro_lead", "desk": "macro", "name": "Macro & News Desk Lead", "icon": "ML",
      "focus": "Check the 4 macro/news analysts against the calendar, headlines and other markets and give the "
               "fundamental verdict."},
 ]
 
 VERIFIERS = [
-    {"key": "confluence", "name": "Confluence Verifier", "icon": "🔗",
+    {"key": "confluence", "name": "Confluence Verifier", "icon": "CNF",
      "focus": "Cross-check the three desks against each other AND against the market data: do technical, strategy "
               "and macro agree, did any desk claim something the data does not show, which contradiction matters most?"},
-    {"key": "risk", "name": "Risk Manager", "icon": "🛡",
+    {"key": "risk", "name": "Risk Manager", "icon": "RSK",
      "focus": "Verify the stop loss (beyond invalidation, outside obvious stop hunts), risk/reward of each target, "
               "volatility, news risk inside the trade window and whether a limit entry can fill. Protect capital first."},
-    {"key": "devil", "name": "Devil's Advocate", "icon": "😈",
+    {"key": "devil", "name": "Devil's Advocate", "icon": "DEV",
      "focus": "Attack the trade with everything the desks found: the strongest reasons it will FAIL (trap, fake "
               "breakout, counter-trend, liquidity that will be taken against it, news). Vote TAKE only if you "
               "honestly cannot find a serious flaw."},
@@ -160,10 +161,10 @@ for _a in ANALYSTS:
     _a.setdefault("ind", None)
 
 SPECIALISTS = ANALYSTS + VERIFIERS
-HEAD = {"key": "head", "name": "Head Trader", "icon": "👑",
+HEAD = {"key": "head", "name": "Head Trader", "icon": "HT",
         "focus": "Reads the 3 desk verdicts, the 3 verifiers, the strategy board and the track record → TAKE/SKIP, "
                  "confidence and final levels."}
-AUDITOR = {"key": "auditor", "name": "Signal Auditor", "icon": "✅",
+AUDITOR = {"key": "auditor", "name": "Signal Auditor", "icon": "AUD",
            "focus": "Final consistency check of the signal before it is sent – can veto."}
 ALL_AGENTS = ANALYSTS + LEADS + VERIFIERS + [HEAD, AUDITOR]
 PIPELINE = [("Stage 1 · 18 analysts", ANALYSTS), ("Stage 2 · Desk leads", LEADS), ("Stage 3 · Verifiers", VERIFIERS),
@@ -321,6 +322,8 @@ Verifiers:
 
 Desk track record for this trading style (learn from it): {history}
 
+Each agent's own record on past signals (trust the reliable ones more): {records}
+
 Make the final call. Only TAKE a trade when technicals, strategies and macro line up and the risk is clean;
 SKIP otherwise - a missed trade costs nothing, a bad one costs money.
 You may fine-tune entry / stop loss / targets (keep the same direction; TP1 must be at least 1:{min_rr}),
@@ -398,6 +401,7 @@ def _tf_slice(m: dict, fields, ind_keep=None) -> dict:
         "equal_lows": s["liquidity"]["equal_lows"][-2:],
         "recent_sweeps": [f"{w['side']} swept @ {w['level']:.2f}" for w in s["liquidity"]["sweeps"][-2:]],
         "range": s["range"],
+        "regime": m.get("regime"),
         "fib": {k: _r(x) for k, x in (m.get("fib") or {}).items()},
         "candle_patterns": [f"{x['name']}" + (f" @ {x['level']}" if "level" in x else f" ({x['age']} candles ago)")
                             for x in s.get("patterns", [])][-4:],
@@ -419,7 +423,7 @@ def market_brief(market: dict, agent: str | None = None, tfs=None) -> str:
         return agent_data(spec, {"_market": market})
     out = {"key_levels": market.get("levels", {}), "average_daily_range": market.get("adr", {}),
            "pivots": market.get("pivots", {})}
-    all_fields = ("price", "atr", "trend", "structure_events", "order_blocks", "fvgs", "breaker_blocks",
+    all_fields = ("price", "atr", "trend", "regime", "structure_events", "order_blocks", "fvgs", "breaker_blocks",
                   "buy_side_liquidity", "sell_side_liquidity", "equal_highs", "equal_lows", "recent_sweeps", "range",
                   "candle_patterns", "recent_candles", "volume", "indicators")
     for tf in TF_ORDER:
@@ -464,6 +468,38 @@ def agent_data(spec: dict, ctx: dict) -> str:
         elif x == "intermarket":
             out["other_markets"] = extra.get("intermarket") or "no other market data"
     return json.dumps(out, separators=(",", ":"))
+
+
+def agent_records(closed_trades: list[dict]) -> dict[str, dict]:
+    """Each agent's record on finished signals: it was right when it said TAKE and the trade reached TP1,
+    or said SKIP and the trade lost. Smoothed accuracy (starts at 50 %) becomes its voting weight."""
+    rec: dict[str, dict] = {}
+    for t in closed_trades:
+        if t.get("outcome") not in ("win", "loss", "breakeven") or not t.get("reports"):
+            continue
+        won = (t.get("stage") or 0) >= 1
+        for r in t["reports"]:
+            key = r.get("key")
+            if not key or r.get("vote") not in ("TAKE", "SKIP"):
+                continue
+            x = rec.setdefault(key, {"n": 0, "correct": 0, "take": 0, "take_wins": 0})
+            x["n"] += 1
+            x["correct"] += (r["vote"] == "TAKE") == won
+            if r["vote"] == "TAKE":
+                x["take"] += 1
+                x["take_wins"] += won
+    for x in rec.values():
+        x["accuracy"] = round(100 * x["correct"] / x["n"])
+        x["weight"] = round(0.5 + (x["correct"] + 2) / (x["n"] + 4), 3)  # 1.0 with no history
+    return rec
+
+
+def records_text(records: dict, agents: list[dict], min_n: int = 3) -> str:
+    rows = sorted(((a["name"], records[a["key"]]) for a in agents if records.get(a["key"], {}).get("n", 0) >= min_n),
+                  key=lambda x: -x[1]["accuracy"])
+    if not rows:
+        return "not enough finished signals yet"
+    return "; ".join(f"{name} {r['accuracy']}% right ({r['n']} signals)" for name, r in rows)
 
 
 def setup_brief(setup: dict) -> str:
@@ -750,11 +786,11 @@ class TradingDesk:
         mon = self.monitor
         now = time.time()
         if now - getattr(self, "_last_ping", 0) < 90:
-            mon.event("🩺 Agent test was run less than 90 s ago – please wait (it uses your free Gemini quota)", "skip")
+            mon.event("Agent test was run less than 90 s ago – please wait (it uses your free Gemini quota)", "skip")
             return []
         self._last_ping = now
         mapping = self.agent_models()
-        mon.event(f"🩺 Testing the Gemini models/keys used by the {len(mapping)} agents…")
+        mon.event(f"Testing the Gemini models/keys used by the {len(mapping)} agents…")
         for key in mapping:
             mon.agent(key, "thinking", summary="Health check…", vote=None, score=None, points=[], err=None)
 
@@ -785,19 +821,19 @@ class TradingDesk:
             r = results.get(model, {})
             if r.get("ok"):
                 mon.agent(key, "done", vote=None, model=slot_label(model), seconds=r.get("seconds"), err=None,
-                          summary=f"Online ✔ ({slot_label(model)} answered in {r.get('seconds')}s)")
+                          summary=f"Online ({slot_label(model)} answered in {r.get('seconds')}s)")
             elif online:
                 mon.agent(key, "done", vote=None, model=slot_label(online[0]), err=None,
-                          summary=f"Online ✔ via backup {slot_label(online[0])} ({slot_label(model)}: {r.get('error')})")
+                          summary=f"Online via backup {slot_label(online[0])} ({slot_label(model)}: {r.get('error')})")
             else:
                 mon.agent(key, "error", err=r.get("kind"), summary=r.get("error") or "no model available")
         ok_agents = len(mapping) if online else 0
-        mon.event(f"🩺 Models online: {len(online)}/{len(results)} → agents working: {ok_agents}/{len(mapping)}",
+        mon.event(f"Models online: {len(online)}/{len(results)} → agents working: {ok_agents}/{len(mapping)}",
                   "take" if online else "error")
         if not online:
             kinds = {r.get("kind") for r in results.values()}
             if "quota_day" in kinds:
-                mon.event("⛔ All Gemini models used their free daily quota. The AI desk resumes after the reset "
+                mon.event("All Gemini models used their free daily quota. The AI desk resumes after the reset "
                           "(midnight Pacific ≈ 07:00 UTC). Engine-only signals (score ≥ ENGINE_ONLY_SCORE) still work.",
                           "error")
         return list(results.values())
@@ -827,7 +863,7 @@ class TradingDesk:
                           points=[str(p)[:160] for p in (data.get("evidence") or data.get("points") or [])][:3],
                           risk=str(data.get("risk", ""))[:160],
                           doubtful=[str(x) for x in (data.get("doubtful") or [])][:9])
-            pts = report["points"] + ([f"⚠ Risk: {report['risk']}"] if report["risk"] else [])
+            pts = report["points"] + ([f"Risk: {report['risk']}"] if report["risk"] else [])
             mon.agent(key, "done", vote=report["vote"], score=score, summary=report["summary"], points=pts,
                       model=model, seconds=round(time.monotonic() - started, 1))
             mon.event(f"{agent['icon']} {agent['name']}: {report['vote']} ({score}) – {report['summary']}",
@@ -901,7 +937,7 @@ class TradingDesk:
             jobs += [(lead, r) for r in targets]
         if not jobs:
             return
-        mon.event(f"🗣 Debate: desk leads challenge {len(jobs)} analysts")
+        mon.event(f"Debate: desk leads challenge {len(jobs)} analysts")
 
         async def answer(lead: dict, r: dict):
             spec = specs[r["key"]]
@@ -931,7 +967,7 @@ class TradingDesk:
                       points=[f"Debate: {r['debate']}"] + r.get("points", [])[:2])
             mon.message(r["key"], lead["key"], f"{'Changed to ' + vote if r['changed'] else 'Keeps ' + vote}: "
                                                f"{r['debate']}", "reply")
-            mon.event(f"🗣 {spec['icon']} {spec['name']}: "
+            mon.event(f"Debate · {spec['name']}: "
                       + (f"changed {old} → {vote}" if r["changed"] else f"keeps {vote}") + f" – {r['debate']}",
                       "take" if vote == "TAKE" else "skip")
 
@@ -951,6 +987,7 @@ class TradingDesk:
                  "intermarket": session.get("intermarket")}
         sess = {k: session[k] for k in ("sessions", "killzone", "utc_time") if k in session}
         tfs = [t for t in (setup.get("timeframes") or {}).values() if t in market] or list(TF_ORDER)
+        sess["market_regime"] = {TF_LABEL[t]: (market[t].get("regime") or {}).get("regime") for t in tfs}
         board = strategies.evaluate(market, setup["direction"], setup.get("timeframes") or {}, setup["entry"])
         brief = (f"{setup['style_label']} {setup['direction']} {setup['entry_type']} @ {setup['entry']} · SL "
                  f"{setup['stop_loss']} · TP1 {setup['tps'][0]['price']} · engine score {setup['score']} · "
@@ -965,9 +1002,9 @@ class TradingDesk:
         mon.board = board
         for a in LEADS + VERIFIERS + [HEAD, AUDITOR]:
             mon.agent(a["key"], "waiting", summary="Waiting for reports…", vote=None, score=None, points=[])
-        mon.event(("🧪 PRACTICE review (no signal will be sent): " if practice else "🧠 AI desk reviewing ")
+        mon.event(("PRACTICE review (no signal will be sent): " if practice else "AI desk reviewing ")
                   + f"{setup.get('symbol_name', 'XAU/USD')} {setup['style_label']} {setup['direction']} @ {setup['entry']} (engine score {setup['score']})")
-        mon.event(f"📋 Strategy board: {board['agrees']} agree · {board['against']} against · {board['neutral']} neutral")
+        mon.event(f"Strategy board ({board['regime']} market): {board['agrees']} agree · {board['against']} against · {board['neutral']} neutral")
         mon.review_start(f"{setup.get('symbol_name', 'XAU/USD')} {setup['style_label']} {setup['direction']} @ {setup['entry']}",
                          practice)
         verdict = await self._review(setup, ctx, mon)
@@ -975,7 +1012,7 @@ class TradingDesk:
         mon.agent("head", "done" if not verdict.get("ai_down") else "error",
                   vote="TAKE" if verdict["approved"] else "SKIP", score=verdict["confidence"],
                   summary=verdict.get("reason") or verdict.get("reject_reason") or "")
-        mon.event(f"👑 Head Trader: {'✅ APPROVED' if verdict['approved'] else '❌ REJECTED'} – "
+        mon.event(f"Head Trader: {'APPROVED' if verdict['approved'] else 'REJECTED'} – "
                   f"{verdict.get('reject_reason') or verdict.get('headline') or verdict.get('reason')}",
                   "take" if verdict["approved"] else "skip")
         mon.review({"practice": practice, "symbol": setup.get("symbol_name", "XAU/USD"), "style": setup["style_label"],
@@ -991,7 +1028,7 @@ class TradingDesk:
     async def _review(self, setup: dict, ctx: dict, mon: Monitor) -> dict:
         board = ctx["_board"]
         # Stage 1: the engine hands the setup to the 18 analysts; each works on its own data in parallel.
-        mon.event(f"📤 Stage 1: engine → {len(ANALYSTS)} analysts (technical, strategy, macro desks)")
+        mon.event(f"Stage 1: engine → {len(ANALYSTS)} analysts (technical, strategy, macro desks)")
         analysts = list(await asyncio.gather(*(self._analyst(a, ctx, mon) for a in ANALYSTS)))
         verdict = {"reports": list(analysts), "votes": 0, "errors": 0, "approved": False, "board": board,
                    "confidence": 0, "headline": "", "reason": "", "levels": None}
@@ -1001,14 +1038,14 @@ class TradingDesk:
             return verdict
 
         # Stage 2: each desk lead checks its analysts, then challenges the doubtful ones (debate).
-        mon.event("📤 Stage 2: analysts → 📐 Technical / 🧭 Strategy / 🌍 Macro desk leads")
+        mon.event("Stage 2: analysts → Technical / Strategy / Macro desk leads")
         leads = list(await asyncio.gather(*(self._lead(lead, [r for r in analysts if r["desk"] == lead["desk"]], ctx, mon)
                                             for lead in LEADS)))
         if getattr(self, "debate", True):
             await self._debate(leads, analysts, ctx, mon)
 
         # Stage 3: the verifiers receive the three desk verdicts (plus every analyst's one-liner).
-        mon.event("📤 Stage 3: desk verdicts → Confluence Verifier, Risk Manager, Devil's Advocate")
+        mon.event("Stage 3: desk verdicts → Confluence Verifier, Risk Manager, Devil's Advocate")
         board_summary = f"{board['agrees']} agree, {board['against']} against, {board['neutral']} neutral"
         vctx = dict(instrument=ctx["instrument"], setup=ctx["setup"], market=ctx["market"], session=ctx["session_news"],
                     board_summary=board_summary, board="\n".join(strategies.brief(board)),
@@ -1023,26 +1060,31 @@ class TradingDesk:
         l_votes = sum(r["vote"] == "TAKE" for r in leads)
         v_votes = sum(r["vote"] == "TAKE" for r in verifiers)
         need = self._need(len(answered))
+        records = getattr(self, "records", None) or {}
+        wsum = sum(records.get(r["key"], {}).get("weight", 1.0) for r in answered)
+        weighted = round(100 * sum(records.get(r["key"], {}).get("weight", 1.0) for r in answered
+                                   if r["vote"] == "TAKE") / wsum) if wsum else 0
         reports = list(analysts) + list(leads) + list(verifiers)
         per_desk = {d: f"{sum(r['vote'] == 'TAKE' for r in analysts if r['desk'] == d)}/"
                        f"{sum(1 for r in analysts if r['desk'] == d)}" for d in DESKS}
         verdict.update(reports=reports, votes=a_votes + l_votes + v_votes, analyst_votes=a_votes, lead_votes=l_votes,
                        verifier_votes=v_votes, errors=sum(r["vote"] == "ERROR" for r in reports), need=need,
-                       per_desk=per_desk)
-        tally = (f"{a_votes}/{len(answered)} analysts TAKE (need {need}) – technical {per_desk['tech']}, "
-                 f"strategy {per_desk['strategy']}, macro {per_desk['macro']}")
+                       per_desk=per_desk, weighted_agreement=weighted)
+        tally = (f"{a_votes}/{len(answered)} analysts TAKE (need {need}), reliability-weighted agreement "
+                 f"{weighted}% – technical {per_desk['tech']}, strategy {per_desk['strategy']}, macro {per_desk['macro']}")
 
         # Stage 4: the Head Trader reads the desks and the verifiers.
         for r in leads + verifiers:
             if r["vote"] != "ERROR":
                 mon.message(r["key"], "head", f"{r['vote']} {r['score']} – {r['summary']}")
-        mon.event("📤 Stage 4: 3 desk verdicts + 3 verifiers → 👑 Head Trader")
+        mon.event("Stage 4: 3 desk verdicts + 3 verifiers → Head Trader")
         mon.agent("head", "thinking", summary="Reading the desks and verifiers and making the final call…")
         try:
             text, _ = await self._ask(HEAD_PROMPT.format(
                 instrument=ctx["instrument"], setup=ctx["setup"], market=ctx["market"], session=ctx["session_news"],
                 board_summary=board_summary, tally=tally, desks=_reports_text(leads),
                 verifiers=_reports_text(verifiers), history=ctx.get("history") or "no closed trades yet",
+                records=records_text(records, ANALYSTS + LEADS + VERIFIERS),
                 min_rr=self.min_rr), preferred=self.slots_for("head"))
             head = parse_json(text)
         except Exception as e:
@@ -1087,6 +1129,8 @@ class TradingDesk:
             reasons.append(f"only {len(answered)}/{len(ANALYSTS)} analysts answered")
         if a_votes < need:
             reasons.append(f"only {a_votes}/{len(answered)} analysts agree (need {need})")
+        elif records and weighted < 100 * need / max(len(answered), 1) - 1e-9:
+            reasons.append(f"the most reliable analysts disagree (weighted agreement {weighted}%)")
         if l_votes < 2:
             reasons.append(f"only {l_votes}/{len(LEADS)} desks agree")
         if v_votes < 2:
@@ -1100,7 +1144,7 @@ class TradingDesk:
         # Stage 5: the Signal Auditor checks the final signal and can veto it.
         mon.message("head", "auditor", f"TAKE {setup['direction']} · confidence {verdict['confidence']}% – "
                                        f"{verdict['headline'] or verdict['reason'][:120]}", "decision")
-        mon.event("📤 Stage 5: Head Trader's signal → ✅ Signal Auditor")
+        mon.event("Stage 5: Head Trader's signal → Signal Auditor")
         mon.agent("auditor", "thinking", summary="Checking the final signal…")
         final = verdict["levels"] or {"entry": setup["entry"], "stop_loss": setup["stop_loss"],
                                       "tps": [t["price"] for t in setup["tps"]]}
@@ -1123,7 +1167,7 @@ class TradingDesk:
             approve, note, issues = True, "auditor offline – desk decision stands", []
             mon.agent("auditor", "error", summary=note)
         verdict["audit"] = {"approve": approve, "note": note, "issues": issues}
-        mon.message("auditor", "telegram", ("✅ Signal approved – " if approve else "⛔ Vetoed – ")
+        mon.message("auditor", "telegram", ("Signal approved – " if approve else "Vetoed – ")
                     + (note or "; ".join(issues)), "decision")
         verdict["approved"] = approve
         if not approve:

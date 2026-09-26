@@ -320,3 +320,41 @@ def fib_levels(high: float, low: float) -> dict:
     r = high - low
     return {"0.382": high - 0.382 * r, "0.5": high - 0.5 * r, "0.618": high - 0.618 * r,
             "0.705": high - 0.705 * r, "0.786": high - 0.786 * r}
+
+
+def bb_width_rank(closes: list[float], period: int = 20, lookback: int = 120) -> float | None:
+    """Where today's Bollinger width sits among the last `lookback` widths (0 = tightest, 100 = widest)."""
+    if len(closes) < period + 20:
+        return None
+    widths = []
+    for end in range(max(period, len(closes) - lookback), len(closes) + 1):
+        w = closes[end - period:end]
+        mid = sum(w) / period
+        sd = (sum((x - mid) ** 2 for x in w) / period) ** 0.5
+        widths.append(sd / mid if mid else 0.0)
+    now = widths[-1]
+    return round(100 * sum(1 for x in widths if x < now) / max(len(widths) - 1, 1), 1)
+
+
+def regime(ind: dict) -> dict:
+    """Market regime from the indicators of one timeframe:
+    trending (ADX ≥ 25), compressed (squeeze / tightest bands), volatile (widest bands without trend),
+    ranging (ADX < 20) or transition."""
+    a = (ind.get("adx") or {}).get("adx")
+    rank = ind.get("bb_width_rank")
+    sq = (ind.get("squeeze") or {}).get("on")
+    direction = None
+    if ind.get("adx"):
+        direction = "up" if ind["adx"]["plus_di"] > ind["adx"]["minus_di"] else "down"
+    if a is not None and a >= 25:
+        name = "trending"
+    elif sq or (rank is not None and rank <= 20):
+        name = "compressed"
+    elif rank is not None and rank >= 85:
+        name = "volatile"
+    elif a is not None and a < 20:
+        name = "ranging"
+    else:
+        name = "transition"
+    return {"regime": name, "adx": round(a, 1) if a is not None else None, "bb_width_rank": rank,
+            "direction": direction if name == "trending" else None}

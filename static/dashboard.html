@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Gold AI Control Room</title>
+<title>AI Control Room</title>
 <link rel="icon" href="data:,">
 <script src="/static/lightweight-charts.js"></script>
 <style>
@@ -75,6 +75,23 @@ background:var(--panel2);border:1px solid var(--line);font-size:13px;animation:f
 @media(max-width:800px){.msg{grid-template-columns:1fr}}
 .banner{padding:12px 16px;border-radius:12px;border:1px solid #6b2a2f;background:#2a1216;color:#ffd0d4;font-size:14px}
 .banner b{color:#fff}.news div{padding:5px 0;border-bottom:1px dashed #19212f;font-size:13px}
+/* brand, kpis, code badges */
+.logo{display:inline-grid;place-items:center;width:38px;height:38px;border-radius:10px;font:800 14px/1 ui-monospace,Consolas,monospace;color:#161100;background:linear-gradient(135deg,var(--gold2),var(--gold));letter-spacing:.5px}
+.tk{font:700 11px ui-monospace,Consolas,monospace;padding:1px 5px;border-radius:4px;background:rgba(0,0,0,.18)}
+.kpis{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.kpi{background:linear-gradient(180deg,var(--panel),#0c1119);border:1px solid var(--line);border-radius:12px;padding:10px 14px}
+.kl{font-size:10.5px;text-transform:uppercase;letter-spacing:1.2px;color:var(--mut)}.kv2{font:700 20px/1.3 ui-monospace,Consolas,monospace;margin-top:2px;text-transform:capitalize}.ks{font-size:11.5px;color:var(--mut)}
+.code{fill:#223049;stroke:none}.code.tech{fill:#16335a}.code.strategy{fill:#4a3a10}.code.macro{fill:#133d2b}
+.codet{fill:#e8eefc;font:700 9.5px ui-monospace,Consolas,monospace;letter-spacing:.3px}
+.codeb{display:inline-block;min-width:30px;text-align:center;font:700 10px/16px ui-monospace,Consolas,monospace;padding:0 5px;border-radius:4px;background:#223049;color:#e8eefc;vertical-align:1px}
+.codeb.tech{background:#16335a}.codeb.strategy{background:#4a3a10}.codeb.macro{background:#133d2b}
+.sd{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:var(--mut)}.sd.ok{background:var(--green)}.sd.bad{background:var(--red)}
+.fl{display:inline-block;min-width:32px;font:700 10px ui-monospace,Consolas,monospace;color:var(--gold)}
+.imp{display:inline-block;font:700 9.5px/15px ui-monospace,Consolas,monospace;padding:0 5px;border-radius:4px;margin-right:4px}.imp.hi{background:#5a1f29;color:#ffc0c8}.imp.md{background:#4a3410;color:#ffd699}
+.vchip{display:inline-block;min-width:58px;font:700 9.5px/15px ui-monospace,Consolas,monospace;text-align:center;border-radius:4px;margin-right:6px}
+.v-agrees{background:#0f3a26;color:#6ff0ae}.v-against{background:#4a1a22;color:#ff9aa8}.v-neutral{background:#263045;color:var(--mut)}
+.bgroup.off{opacity:.55}
+section h2{border-left:3px solid var(--gold);padding-left:9px}
 /* detail / directory / board */
 .job{font-size:13px;margin:6px 0}.chips{font-size:12px;margin:6px 0;line-height:1.9}.chip{display:inline-block;background:#1b2436;border:1px solid var(--line);border-radius:99px;padding:0 8px;margin:0 4px 0 0;font-size:11px;color:#b8c3d8}
 .flowline{font-size:12px;color:var(--mut);margin:6px 0 8px;line-height:1.6}.lnk{color:var(--gold2);text-decoration:none}
@@ -99,35 +116,36 @@ background:var(--panel2);border:1px solid var(--line);font-size:13px;animation:f
 </head>
 <body>
 <header>
-  <div class="brand"><span style="font-size:24px">🏆</span><div><b>Gold AI Control Room</b><br><small>Gold & Bitcoin · 26-agent desk · local only</small></div></div>
+  <div class="brand"><span class="logo">AU</span><div><b>AI Control Room</b><br><small>Gold &amp; Bitcoin · 26-agent desk · local only</small></div></div>
   <div class="symtabs" id="symtabs"></div>
   <div class="ticker"><span class="px" id="px">—</span><span class="src" id="pxsrc">waiting for data</span></div>
   <div class="pills" id="pills"></div>
   <div style="display:flex;gap:8px">
-    <button id="scanBtn" onclick="act('scan')">⚡ Scan now</button>
-    <button id="practiceBtn" onclick="act('practice')" title="Run the whole 26-agent desk on live data now – no signal is sent">🎓 Practice AI review</button>
-    <button class="alt" id="pingBtn" onclick="act('ping')">🩺 Test agents</button>
+    <button id="scanBtn" onclick="act('scan')">Scan now</button>
+    <button id="practiceBtn" onclick="act('practice')" title="Run the whole 26-agent desk on live data now – no signal is sent">Practice AI review</button>
+    <button class="alt" id="pingBtn" onclick="act('ping')">Test agents</button>
   </div>
 </header>
 <main>
   <div id="banner"></div>
+  <div class="kpis" id="kpis"></div>
   <div class="row">
-    <section><h2><span>🧠 Agent network – how information flows</span><span id="phase"></span></h2>
+    <section><h2><span>Agent network – how information flows</span><span id="phase"></span></h2>
       <svg id="net" viewBox="0 0 1400 940"></svg>
     </section>
-    <section id="detail"><h2>🔍 Agent details</h2><div id="detailBody" class="empty">Click any agent in the network.</div>
+    <section id="detail"><h2>Agent details</h2><div id="detailBody" class="empty">Click any agent in the network.</div>
       <div class="mini" id="mini"></div></section>
   </div>
-  <section><h2><span>💬 Agent conversation – what each agent sends to the next</span>
+  <section><h2><span>Agent conversation – what each agent sends to the next</span>
       <span class="toggles"><label><input type="checkbox" id="onlySel"> only the selected agent</label></span></h2>
     <div id="chat" class="chat"></div></section>
   <div class="row">
-    <section><h2><span>🗂 Agent directory – every agent, its only job, its data, who it talks to</span><span class="role">click a row</span></h2>
+    <section><h2><span>Agent directory – every agent, its only job, its data, who it talks to</span><span class="role">click a row</span></h2>
       <div class="dirwrap" id="directory"></div></section>
-    <section><h2><span>📋 Strategy board</span><span id="boardSum"></span></h2><div class="boardwrap" id="board"></div></section>
+    <section><h2><span>Strategy board</span><span id="boardSum"></span></h2><div class="boardwrap" id="board"></div></section>
   </div>
   <div class="row">
-    <section><h2><span>📈 Live chart</span>
+    <section><h2><span>Live chart</span>
         <span class="tabs" id="tabs"></span></h2>
       <div class="toggles">
         <button class="alt" style="padding:3px 10px;font-size:12px" onclick="resetView()">⟲ Reset view</button>
@@ -140,19 +158,19 @@ background:var(--panel2);border:1px solid var(--line);font-size:13px;animation:f
       </div>
       <div id="chartWrap"><div id="chart"></div><canvas id="overlay"></canvas><div class="legend" id="legend"></div></div>
     </section>
-    <section><h2>⚡ Live activity</h2><div class="log" id="log"></div></section>
+    <section><h2>Live activity</h2><div class="log" id="log"></div></section>
   </div>
   <div class="grid3">
-    <section><h2><span>🎬 Live review – stage by stage</span><span id="rvTimer"></span></h2><div id="live_review"></div></section>
-    <section style="grid-column:span 2"><h2><span>🔑 API keys & Gemini models</span><span id="keysSum"></span></h2><div id="keys"></div></section>
+    <section><h2><span>Live review – stage by stage</span><span id="rvTimer"></span></h2><div id="live_review"></div></section>
+    <section style="grid-column:span 2"><h2><span>API keys &amp; Gemini models</span><span id="keysSum"></span></h2><div id="keys"></div></section>
   </div>
   <div class="grid3">
-    <section><h2>🧠 Last AI decisions</h2><div id="reviews"></div></section>
-    <section><h2>📡 Open trades</h2><div id="trades"></div></section>
-    <section><h2>📰 News & calendar</h2><div id="news" class="news"></div></section>
-    <section><h2>🌍 Market structure</h2><div id="market"></div></section>
-    <section><h2>🩺 System & data</h2><div class="kv" id="system"></div></section>
-    <section><h2>📊 Performance</h2><div class="kv" id="perf"></div></section>
+    <section><h2>Last AI decisions</h2><div id="reviews"></div></section>
+    <section><h2>Open trades</h2><div id="trades"></div></section>
+    <section><h2>News &amp; calendar</h2><div id="news" class="news"></div></section>
+    <section><h2>Market structure</h2><div id="market"></div></section>
+    <section><h2>System &amp; data</h2><div class="kv" id="system"></div></section>
+    <section><h2>Performance</h2><div class="kv" id="perf"></div></section>
   </div>
 </main>
 <script>
@@ -176,12 +194,13 @@ const net = $("net");
 let pos = {};
 function el(tag, attrs, parent){ const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); (parent||net).appendChild(e); return e; }
 const KEYCOL = ["#3d9bff", "#b36bff", "#22c7b8", "#ffab1a"];
+const CODECOL = {tech: "#16335a", strategy: "#4a3a10", macro: "#133d2b"};
 const DESKCOL = {tech: "rgba(61,155,255,.06)", strategy: "rgba(245,197,66,.06)", macro: "rgba(34,199,122,.06)"};
 let deskBoxes = [];
 function layout(agents){
   pos = {}; deskBoxes = [];
   const X = {0: 70, 1: 300, 2: 610, 3: 840, 4: 1045, 5: 1215}, MID = 470;
-  pos.engine = {x: X[0], y: MID, w: 120, h: 54, icon: "⚙️", name: "SMC Engine", sub: "finds setups"};
+  pos.engine = {x: X[0], y: MID, w: 120, h: 54, icon: "ENG", name: "SMC Engine", sub: "finds setups"};
   let y = 100;
   const desks = state.desks || {};
   for (const d of Object.keys(desks)) {
@@ -190,15 +209,15 @@ function layout(agents){
     const top = y;
     members.forEach(a => { pos[a.key] = {x: X[1], y, w: 236, h: 38, icon: a.icon, desk: d, key: a.home_key,
       name: a.name.replace(" Analyst", "").replace(" Specialist", "").replace(" & Pattern Reader", " Reader").replace(" Strategist", ""), sub: ""}; y += 44; });
-    deskBoxes.push({d, top: top - 48, bottom: y - 44 + 8, label: desks[d].icon + " " + desks[d].name + " · " + members.length});
+    deskBoxes.push({d, top: top - 48, bottom: y - 44 + 8, label: desks[d].name + " · " + members.length});
     const lead = agents.find(a => a.stage === 2 && a.desk === d);
-    if (lead) pos[lead.key] = {x: X[2], y: (top + y - 44) / 2, w: 218, h: 48, icon: lead.icon, key: lead.home_key, name: lead.name, sub: ""};
+    if (lead) pos[lead.key] = {x: X[2], y: (top + y - 44) / 2, w: 218, h: 48, icon: lead.icon, desk: d, key: lead.home_key, name: lead.name, sub: ""};
     y += 58;
   }
   const ver = agents.filter(a => a.stage === 3);
   ver.forEach((a, i) => pos[a.key] = {x: X[3], y: MID + (i - (ver.length - 1) / 2) * 130, w: 180, h: 48, icon: a.icon, key: a.home_key, name: a.name, sub: ""});
   agents.filter(a => a.stage >= 4).forEach(a => pos[a.key] = {x: X[a.stage], y: MID, w: 150, h: 52, icon: a.icon, key: a.home_key, name: a.name, sub: ""});
-  pos.telegram = {x: 1335, y: MID, w: 96, h: 48, icon: "📨", name: "Telegram", sub: "signal out"};
+  pos.telegram = {x: 1335, y: MID, w: 96, h: 48, icon: "OUT", name: "Telegram", sub: "signal out"};
 }
 const EDGES = [];
 function buildNet(agents){
@@ -224,11 +243,13 @@ function buildNet(agents){
   for (const k in pos) {
     const p = pos[k], n = el("g", {class: "node", id: "n-" + k, transform: `translate(${p.x - p.w/2},${p.y - p.h/2})`});
     el("rect", {width: p.w, height: p.h, rx: 9}, n);
-    if (p.key) { el("rect", {width: 4, height: p.h - 12, x: 3, y: 6, rx: 2, fill: KEYCOL[(p.key - 1) % 4], class: "keybar"}, n);
-                 el("text", {x: p.w - 8, y: 14, "text-anchor": "end", class: "kbadge", fill: KEYCOL[(p.key - 1) % 4]}, n).textContent = "K" + p.key; }
-    const small = p.h < 44;
-    el("text", {x: 12, y: small ? 16 : 21}, n).textContent = p.icon + "  " + p.name;
-    el("text", {x: 12, y: small ? 31 : 38, class: "sub", id: "s-" + k}, n).textContent = p.sub;
+    if (p.key) { el("rect", {width: 4, height: p.h - 12, x: 3, y: 6, rx: 2, style: `fill:${KEYCOL[(p.key - 1) % 4]};stroke:none`}, n);
+                 el("text", {x: p.w - 8, y: p.h - 7, "text-anchor": "end", class: "kbadge", style: `fill:${KEYCOL[(p.key - 1) % 4]}`}, n).textContent = "KEY " + p.key; }
+    const small = p.h < 44, bw = Math.max(26, 7 * String(p.icon).length + 10);
+    el("rect", {x: 12, y: small ? 7 : 9, width: bw, height: 16, rx: 4, style: `fill:${CODECOL[p.desk] || "#223049"};stroke:none;animation:none`}, n);
+    el("text", {x: 12 + bw / 2, y: small ? 19 : 21, "text-anchor": "middle", class: "codet"}, n).textContent = p.icon;
+    el("text", {x: 18 + bw, y: small ? 19 : 21}, n).textContent = p.name;
+    el("text", {x: 12, y: small ? 33 : 39, class: "sub", id: "s-" + k}, n).textContent = p.sub;
     n.onclick = () => { selected = k; render(); renderChat(state.flows || []); };
   }
   const lg = el("g", {transform: "translate(20, 928)"});
@@ -246,8 +267,8 @@ function paintNodes(agents){
     let sub = pos[k].sub;
     if (a) {
       if (a.status === "done" && a.vote) { cls += " " + a.vote; sub = `${a.vote} · ${a.score ?? ""}${a.seconds != null ? " · " + a.seconds + "s" : ""}`; }
-      else if (a.status === "done") { cls += " TAKE"; sub = "online ✔" + (a.seconds != null ? " · " + a.seconds + "s" : ""); }
-      else if (a.status === "error") { cls += " error"; sub = "⚠ " + ({quota_day: "daily quota used", quota_min: "rate limit, retrying",
+      else if (a.status === "done") { cls += " TAKE"; sub = "online" + (a.seconds != null ? " · " + a.seconds + "s" : ""); }
+      else if (a.status === "error") { cls += " error"; sub = "error: " + ({quota_day: "daily quota used", quota_min: "rate limit, retrying",
         busy: "Google busy", key: "key problem", missing: "model missing"}[a.err] || "error"); }
       else { cls += " " + a.status; sub = a.status === "idle" ? "idle" : a.status + "…"; }
     }
@@ -276,15 +297,15 @@ function animateFlows(flows){
       if (k < 1) requestAnimationFrame(step); else { dot.remove(); if (label) setTimeout(() => { label.remove(); activeLabels--; }, 400); } })(t0);
   }, i * 120));
 }
-const NAMES = {engine: "⚙️ SMC Engine", telegram: "📨 Telegram"};
-function who(k){ const a = state && state.agents.find(x => x.key === k); return a ? a.icon + " " + a.name : (NAMES[k] || k); }
+const NAMES = {engine: "SMC Engine", telegram: "Telegram"};
+function who(k){ const a = state && state.agents.find(x => x.key === k); return a ? a.name : (NAMES[k] || k); }
 function renderChat(flows){
   const only = $("onlySel").checked;
   const list = flows.filter(f => f.text && (!only || f.from === selected || f.to === selected)).slice(-80).reverse();
   H.chat = list.length ? list.map(f => `<div class="msg ${esc(f.kind)}"><span class="t">${esc(f.t)}</span>
       <span class="who">${esc(who(f.from))} → ${esc(who(f.to))}<span class="kind">${esc(f.kind)}</span></span>
       <span>${esc(f.text)}</span></div>`).join("")
-    : '<div class="empty">No messages yet. Press 🎓 Practice AI review to watch the 26 agents work on live data – or wait for the engine to find a real setup.</div>';
+    : '<div class="empty">No messages yet. Press Practice AI review to watch the 26 agents work on live data – or wait for the engine to find a real setup.</div>';
 }
 function link(k){ return `<a href="#" class="lnk" onclick="selected='${k}';render();renderChat(state.flows||[]);return false">${esc(who(k))}</a>`; }
 function renderDetail(agents){
@@ -293,18 +314,19 @@ function renderDetail(agents){
   else {
     const badge = a.status === "done" && a.vote ? a.vote : a.status;
     const desk = a.desk && state.desks ? state.desks[a.desk] : null;
-    H.detailBody = `<div class="nm">${a.icon} ${esc(a.name)}</div>
-      <div class="role">Stage ${a.stage}${desk ? " · " + desk.icon + " " + esc(desk.name) : ""} · <span style="color:${KEYCOL[(a.home_key - 1) % 4]}">API key ${a.home_key}</span></div>
+    H.detailBody = `<div class="nm"><span class="codeb ${a.desk || ""}">${esc(a.icon)}</span> ${esc(a.name)}</div>
+      <div class="role">Stage ${a.stage}${desk ? " · " + esc(desk.name) : ""} · <span style="color:${KEYCOL[(a.home_key - 1) % 4]}">API key ${a.home_key}</span></div>
       <div class="job"><b>Job:</b> ${esc(a.role)}</div>
+      ${a.record && a.record.n ? `<div class="job"><b>Track record:</b> right ${a.record.accuracy}% of ${a.record.n} finished signals · vote weight ${a.record.weight.toFixed(2)}</div>` : '<div class="role">Track record: builds up after finished signals</div>'}
       ${(a.inputs || []).length ? `<div class="chips"><b>Receives data:</b> ${a.inputs.map(x => `<span class="chip">${esc(x)}</span>`).join("")}</div>` : ""}
-      <div class="flowline">⬅ from ${(a.receives || []).map(link).join(", ")}<br>➡ to ${(a.sends || []).map(link).join(", ")}</div>
+      <div class="flowline"><span class="fl">IN</span> ${(a.receives || []).map(link).join(", ")}<br><span class="fl">OUT</span> ${(a.sends || []).map(link).join(", ")}</div>
       <span class="badge b-${esc(badge)}">${esc(badge)}${a.score != null && a.status === "done" ? " " + a.score : ""}</span>
       ${a.score != null ? `<div class="bar"><i style="width:${Math.max(0, Math.min(100, a.score))}%"></i></div>` : ""}
       <div style="margin-top:8px">${esc(a.summary) || '<span class="empty">Waiting for the next setup.</span>'}</div>
       ${(a.points||[]).length ? `<ul class="pts">${a.points.map(p => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
       <div class="role" style="margin-top:8px">${[a.model || a.slot, a.seconds != null ? a.seconds + "s" : "", a.at ? a.at + " UTC" : ""].filter(Boolean).map(esc).join(" · ")}</div>`;
   }
-  H.mini = agents.map(x => `<div onclick="selected='${x.key}';render()">${x.icon} ${esc(x.name.split(" ")[0])}
+  H.mini = agents.map(x => `<div onclick="selected='${x.key}';render()"><span class="codeb ${x.desk || ""}">${esc(x.icon)}</span> ${esc(x.name.split(" ")[0])}
      <span class="badge b-${x.status === "done" && x.vote ? x.vote : x.status}" style="float:right">${x.status === "done" && x.vote ? x.vote : x.status}</span></div>`).join("");
 }
 function renderDirectory(s){
@@ -312,20 +334,23 @@ function renderDirectory(s){
   const rows = s.agents.map((a, i) => {
     const badge = a.status === "done" && a.vote ? a.vote : a.status;
     return `<tr class="${a.key === selected ? "selrow" : ""}" onclick="selected='${a.key}';render()">
-      <td>${i + 1}</td><td><b>${a.icon} ${esc(a.name)}</b><br><span class="role">${a.desk ? esc(desks[a.desk].icon + " " + desks[a.desk].name) : "S" + a.stage}</span></td>
+      <td>${i + 1}</td><td><span class="codeb ${a.desk || ""}">${esc(a.icon)}</span> <b>${esc(a.name)}</b><br><span class="role">${a.desk ? esc(desks[a.desk].name) : "Stage " + a.stage}</span></td>
       <td class="jobc">${esc(a.role)}</td><td class="jobc">${(a.inputs || []).map(esc).join(", ") || "reports from " + a.receives.map(k => esc(who(k).split(" ").slice(1).join(" "))).join(", ")}</td>
       <td>${a.sends.map(k => esc(who(k))).join("<br>")}</td>
       <td><span style="color:${KEYCOL[(a.home_key - 1) % 4]};font-weight:800">K${a.home_key}</span><br><span class="role">${esc(a.model || a.slot || "")}</span></td>
+      <td>${a.record && a.record.n ? `<b>${a.record.accuracy}%</b><br><span class="role">${a.record.n} signals · w ${a.record.weight.toFixed(2)}</span>` : '<span class="role">–</span>'}</td>
       <td><span class="badge b-${esc(badge)}">${esc(badge)}${a.score != null && a.status === "done" ? " " + a.score : ""}</span><br><span class="role">${a.seconds != null ? a.seconds + "s" : ""}</span></td></tr>`; }).join("");
-  H.directory = `<table class="dir"><tr><th>#</th><th>Agent</th><th>Only job</th><th>Data it receives</th><th>Sends to</th><th>Key · model</th><th>Now</th></tr>${rows}</table>`;
+  H.directory = `<table class="dir"><tr><th>#</th><th>Agent</th><th>Only job</th><th>Data it receives</th><th>Sends to</th><th>Key · model</th><th>Record</th><th>Now</th></tr>${rows}</table>`;
 }
 function renderBoard(b){
   if (!b) { H.board = '<div class="empty">The strategy board runs with every AI review (17 classic strategies vote on the setup).</div>'; H.boardSum = ""; return; }
-  H.boardSum = `<span class="pill ok">✅ ${b.agrees}</span> <span class="pill bad">❌ ${b.against}</span> <span class="pill">➖ ${b.neutral}</span> <span class="pill">${esc(b.direction)}</span>`;
+  H.boardSum = `<span class="pill">${esc(b.direction)}</span> <span class="pill">regime: ${esc(b.regime || "–")}</span> <span class="pill ok">for ${b.agrees}</span> <span class="pill bad">against ${b.against}</span>` +
+    (b.ignored ? ` <span class="pill">not counted ${b.ignored}</span>` : "");
   const groups = {}; b.results.forEach(r => (groups[r.group] = groups[r.group] || []).push(r));
-  H.board = Object.entries(groups).map(([g, list]) => `<div class="bgroup"><div class="bgt">${esc((b.groups[g] || {}).label || g)}</div>` +
-    list.map(r => `<div class="brow"><span class="vchip v-${r.verdict}">${r.verdict === "agrees" ? "✅" : r.verdict === "against" ? "❌" : "➖"}</span>
-      <b>${esc(r.name)}</b> <span class="role">[${esc(r.tf)}]</span><br><span class="role">${esc(r.detail)}</span></div>`).join("") + "</div>").join("");
+  H.board = Object.entries(groups).map(([g, list]) => { const gi = b.groups[g] || {};
+    return `<div class="bgroup${gi.applicable === false ? " off" : ""}"><div class="bgt">${esc(gi.label || g)}${gi.applicable === false ? ` <span class="role">– not counted in a ${esc(b.regime)} market</span>` : ""}</div>` +
+    list.map(r => `<div class="brow"><span class="vchip v-${r.verdict}">${r.verdict === "agrees" ? "FOR" : r.verdict === "against" ? "AGAINST" : "–"}</span>
+      <b>${esc(r.name)}</b> <span class="role">[${esc(r.tf)}]</span><br><span class="role">${esc(r.detail)}</span></div>`).join("") + "</div>"; }).join("");
 }
 
 /* ---------------- live chart ---------------- */
@@ -347,7 +372,7 @@ async function loadChart(){
   let d; try { d = await (await fetch(`/api/candles?tf=${tf}&sym=${sym}`)).json(); } catch (e) { return; }
   if (my !== chartReq) return;  // a newer request (other TF / symbol) was started meanwhile: drop this stale answer
   chartData = d;
-  if (!chartData || !chartData.candles.length) { $("legend").textContent = "No market data yet – press ⚡ Scan now"; series.setData([]); series.setMarkers([]); clearLines(); drawOverlay(); return; }
+  if (!chartData || !chartData.candles.length) { $("legend").textContent = "No market data yet – press Scan now"; series.setData([]); series.setMarkers([]); clearLines(); drawOverlay(); return; }
   const keep = viewKey === want ? chart.timeScale().getVisibleLogicalRange() : null;
   series.setData(chartData.candles); series.setMarkers(chartData.markers);
   liveBar = Object.assign({}, chartData.candles[chartData.candles.length - 1]);
@@ -441,24 +466,24 @@ async function live(){
 function pill(t, c){ return `<span class="pill ${c || ""}">${t}</span>`; }
 function render(){
   const s = state; if (!s) return; const st = s.status;
-  const phase = {scanning: "🔎 Scanning market", ai_review: "🧠 AI desk working", idle: "💤 Waiting", starting: "⏳ Starting"}[s.phase] || s.phase;
+  const phase = {scanning: "Scanning market", ai_review: "AI desk working", idle: "Waiting", starting: "Starting"}[s.phase] || s.phase;
   const insts = s.instruments || [];
   if (!insts.find(i => i.key === sym) && insts.length) sym = insts[0].key;
-  H.symtabs = insts.length > 1 ? insts.map(i => `<button class="${i.key === sym ? "" : "alt"}" onclick="setSym('${i.key}')">${i.icon} ${esc(i.label)}${i.open ? "" : " 💤"}</button>`).join("") : "";
+  H.symtabs = insts.length > 1 ? insts.map(i => `<button class="${i.key === sym ? "" : "alt"}" onclick="setSym('${i.key}')"><span class="tk">${esc(i.icon)}</span> ${esc(i.label)}${i.open ? "" : ' <span class="role">closed</span>'}</button>`).join("") : "";
   const age = (s.data_ages || {})[sym] || s.data_age;
   const mk = (s.markets || {})[sym] || s.market;
   H.pills = [
     pill('<span class="dot"></span>Bot running', "ok"),
-    pill(age && age.open === false ? "🔴 Market closed" : "🟢 Market open", age && age.open === false ? "warn" : "ok"),
+    pill(age && age.open === false ? '<span class="sd bad"></span>Market closed' : '<span class="sd ok"></span>Market open', age && age.open === false ? "warn" : "ok"),
     pill(phase, s.phase === "idle" ? "" : "warn"),
-    age ? pill(`🕯 Last candle ${age.last_candle} (${age.minutes} min ago)`, age.minutes > 20 && age.open ? "bad" : "") : pill("No data yet", "warn"),
+    age ? pill(`Last candle ${age.last_candle} (${age.minutes} min ago)`, age.minutes > 20 && age.open ? "bad" : "") : pill("No data yet", "warn"),
     s.next_scan_in != null ? pill("Next scan in " + s.next_scan_in + "s") : "",
-    st.fail_count ? pill("⚠️ " + st.fail_count + " failed scans", "bad") : "",
+    st.fail_count ? pill(st.fail_count + " failed scans", "bad") : "",
   ].join("");
   $("phase").textContent = phase;
   const models = s.ai_models || [], ready = models.filter(m => m.ready).length;
   const dayOut = models.filter(m => m.kind === "quota_day");
-  H.banner = models.length && !ready ? `<div class="banner">⛔ <b>AI desk paused:</b> all ${models.length} Gemini models are resting` +
+  H.banner = models.length && !ready ? `<div class="banner"><b>AI desk paused:</b> all ${models.length} Gemini models are resting` +
       (dayOut.length ? ` – the free <b>daily quota</b> is used up. It resets at midnight Pacific time (≈ 07:00 UTC, in ~${Math.max(...dayOut.map(m => m.back_in_min))} min).` : ".") +
       ` The engine keeps scanning; only very strong engine-only setups are sent meanwhile. Tip: don't press "Test all agents" often – each test uses quota.</div>` : "";
   paintNodes(s.agents); renderDetail(s.agents);
@@ -466,18 +491,18 @@ function render(){
   H.reviews = s.reviews.length ? `<table><tr><th>Time</th><th>Setup</th><th>Desk</th><th>Result</th></tr>` +
     s.reviews.map(r => `<tr><td>${r.t}</td><td>${esc(r.style)} ${r.direction} @ ${r.entry}<br><span class="role">engine ${r.score}</span></td>
       <td>${[1, 2, 3].map(st => { const l = r.reports.filter(x => (x.stage || 1) === st); return l.length ? `${["", "Analysts", "Leads", "Verifiers"][st]} <b>${l.filter(x => x.vote === "TAKE").length}/${l.length}</b>` : ""; }).filter(Boolean).join("<br>")}
-        ${r.board ? `<br><span class="role">📋 strategies ${esc(r.board)}</span>` : ""}</td>
-      <td class="${r.approved ? "ok" : "bad"}">${r.approved ? "✅ SENT" : "❌ SKIPPED"}<br><span class="role">${esc(r.reason || "")}</span></td></tr>`).join("") + "</table>"
+        ${r.board ? `<br><span class="role">strategies ${esc(r.board)}</span>` : ""}</td>
+      <td class="${r.approved ? "ok" : "bad"}">${r.approved ? "SENT" : "SKIPPED"}<br><span class="role">${esc(r.reason || "")}</span></td></tr>`).join("") + "</table>"
     : '<div class="empty">No setup reviewed yet. The desk only works when the engine finds a real setup.</div>';
   H.trades = s.trades.length ? `<table><tr><th>Trade</th><th>Entry</th><th>SL</th><th>TPs</th><th>Status</th></tr>` +
     s.trades.map(t => `<tr><td>${esc(t.symbol || "")} ${t.direction}<br><span class="role">${esc(t.style_label)}</span></td><td>${t.entry}</td><td>${t.stop_loss}</td>
       <td>${t.tps.join("<br>")}</td><td>${t.status}<br>TP ${t.stage}/3</td></tr>`).join("") + "</table>" : '<div class="empty">No open trades.</div>';
-  const cal = (s.calendar || []).map(e => `<div>${e.impact === "High" ? "🔴" : "🟠"} <b>${esc(e.time)}</b> ${esc(e.title)} <span class="role">${esc([e.forecast && "F " + e.forecast, e.previous && "P " + e.previous].filter(Boolean).join(" · "))}</span></div>`).join("");
+  const cal = (s.calendar || []).map(e => `<div><span class="imp ${e.impact === "High" ? "hi" : "md"}">${e.impact === "High" ? "HIGH" : "MED"}</span> <b>${esc(e.time)}</b> ${esc(e.title)} <span class="role">${esc([e.forecast && "F " + e.forecast, e.previous && "P " + e.previous].filter(Boolean).join(" · "))}</span></div>`).join("");
   const hl = (s.headlines || []).map(h => `<div>${(h.cats || []).map(c => `<span class="ncat ${c}">${c}</span>`).join("")} <span class="role">${esc(h.time)} ${esc(h.source)}</span><br>${h.link ? `<a href="${esc(h.link)}" target="_blank" rel="noopener">${esc(h.title)}</a>` : esc(h.title)}</div>`).join("");
-  H.news = (cal ? "<b>📅 Next 48h (USD)</b>" + cal : '<div class="role">📅 No high/medium USD events in the next 48h.</div>') +
-    (hl ? "<br><b>🗞 Headlines</b>" + hl : `<div class="role">🗞 ${s.news_error ? "Headlines unavailable: " + esc(s.news_error.slice(0, 140)) : "No gold / USD / world / crypto headlines in the last 24h yet."}</div>`);
-  H.market = mk ? `<table><tr><th>TF</th><th>Trend</th><th>Last event</th><th>Zone</th><th>RSI</th><th>Candles</th></tr>` +
-    mk.tfs.map(r => `<tr><td><b>${r.label}</b></td><td class="${r.trend === "bullish" ? "ok" : r.trend === "bearish" ? "bad" : ""}">${r.trend || "ranging"}</td>
+  H.news = (cal ? "<b>Next 48h (USD)</b>" + cal : '<div class="role">No high/medium USD events in the next 48h.</div>') +
+    (hl ? "<br><b>Headlines</b>" + hl : `<div class="role">${s.news_error ? "Headlines unavailable: " + esc(s.news_error.slice(0, 140)) : "No gold / USD / world / crypto headlines in the last 24h yet."}</div>`);
+  H.market = mk ? `<table><tr><th>TF</th><th>Trend</th><th>Regime</th><th>Last event</th><th>Zone</th><th>RSI</th><th>Candles</th></tr>` +
+    mk.tfs.map(r => `<tr><td><b>${r.label}</b></td><td class="${r.trend === "bullish" ? "ok" : r.trend === "bearish" ? "bad" : ""}">${r.trend || "ranging"}</td><td>${esc(r.regime || "–")}</td>
       <td>${esc(r.event || "–")}</td><td>${r.zone}</td><td>${r.rsi ?? "–"}</td><td>${esc(r.patterns || "")}</td></tr>`).join("") + "</table>" +
     `<div class="role" style="margin-top:6px">${Object.entries(mk.levels).map(([k, v]) => k + " " + v).join(" · ")}${mk.adr && mk.adr.adr ? ` · ADR ${mk.adr.adr} (${mk.adr.used_pct}% used)` : ""}</div>`
     : '<div class="empty">No market data yet.</div>';
@@ -485,30 +510,47 @@ function render(){
   H.system = kv({"Uptime": st.uptime, "Price source": age ? esc(age.source) : "–", "Last candle": age ? `${age.last_candle} (${age.minutes} min ago)` : "–",
     "Scans today": st.scans_today, "Twelve Data": st.td_requests + " / 800 requests", "Gemini": `${st.ai_calls} calls (${st.ai_failures} retried)`,
     "Gemini models": models.length ? `${ready}/${models.length} ready` + models.filter(m => !m.ready).map(m => `<br><span class="role">${esc(m.model)}: ${esc(m.reason)}</span>`).join("") : "–",
-    "Volume feed": st.volume_ok ? "✅ OK" : "⚠️ unavailable", "News calendar": st.news_ok ? "✅ OK" : "⚠️ unavailable", "Telegram users": st.users,
+    "Volume feed": st.volume_ok ? '<span class="ok">OK</span>' : '<span class="warn">unavailable</span>', "News calendar": st.news_ok ? '<span class="ok">OK</span>' : '<span class="warn">unavailable</span>', "Telegram users": st.users,
     "Signal types": s.settings.styles.join(", "), "Rules": `Head TAKE, conf ≥ ${s.settings.min_confidence}%, ≥ ${Math.round(100 * s.settings.min_votes / 8)}% of analysts, ≥ 2/3 desk leads, ≥ 2/3 verifiers, strategy board not against, auditor OK`,
     "Last error": st.last_error ? `<span class="bad">${esc(st.last_error.slice(0, 160))}</span>` : "none"});
-  renderLive(s); renderKeys(models); renderDirectory(s); renderBoard(s.board);
+  renderKpis(s, mk, models); renderLive(s); renderKeys(models); renderDirectory(s); renderBoard(s.board);
   const p = s.performance;
   H.perf = p.trades ? kv({"Finished trades": p.trades, "Win rate (TP1+)": p.win_rate + "%", "Total": p.total_r + "R",
     "Wins / losses": p.wins + " / " + p.losses, "Hit TP3": p.tp3}) : '<span class="empty">No finished trades yet</span>';
+}
+function renderKpis(s, mk, models){
+  const p = s.performance || {}, st = s.status, ses = s.session || {};
+  const h1 = mk && mk.tfs ? mk.tfs.find(r => r.label === "H1") : null;
+  const ready = models.filter(m => m.ready).length;
+  const approved = (s.reviews || []).filter(r => r.approved && !r.practice).length;
+  const k = (label, value, sub, cls) => `<div class="kpi"><div class="kl">${label}</div><div class="kv2 ${cls || ""}">${value}</div><div class="ks">${sub || ""}</div></div>`;
+  H.kpis = [
+    k("Session", esc((ses.sessions || ["–"]).join(" / ")), ses.killzone ? esc(ses.killzone) + " killzone" : "no killzone"),
+    k("H1 regime", esc(h1 && h1.regime || "–"), h1 ? esc(h1.trend || "ranging") + " · " + esc(h1.zone) : ""),
+    k("Open trades", s.trades.length, (s.trades.filter(t => t.status === "active").length) + " running"),
+    k("Win rate", p.trades ? p.win_rate + "%" : "–", p.trades ? p.trades + " finished" : "no finished trades", p.trades ? (p.win_rate >= 50 ? "ok" : "bad") : ""),
+    k("Total", p.trades ? (p.total_r >= 0 ? "+" : "") + p.total_r + "R" : "–", p.trades ? "TP3 hit " + p.tp3 : "", p.trades ? (p.total_r >= 0 ? "ok" : "bad") : ""),
+    k("Desk reviews", (s.reviews || []).length, approved + " approved"),
+    k("Gemini today", st.ai_calls, st.ai_failures + " retried"),
+    k("Model slots", models.length ? ready + "/" + models.length : "–", (s.keys || 1) + " API key" + ((s.keys || 1) > 1 ? "s" : ""), models.length && !ready ? "bad" : "ok"),
+  ].join("");
 }
 function renderLive(s){
   const cur = s.current;
   const stages = (s.stages || []).map((n, i) => [n.replace(/^Stage \d+ · /, ""), s.agents.filter(a => a.stage === i + 1)]);
   const all = s.agents, take = all.filter(a => a.status === "done" && a.vote === "TAKE").length,
         skip = all.filter(a => a.status === "done" && a.vote === "SKIP").length, err = all.filter(a => a.status === "error").length;
-  const html = (cur ? `<div><b>${esc(cur.label)}</b> ${cur.practice ? '<span class="tag">practice</span>' : ""}</div>` : '<div class="empty">No review yet – press 🎓 Practice AI review or wait for a real setup.</div>') +
+  const html = (cur ? `<div><b>${esc(cur.label)}</b> ${cur.practice ? '<span class="tag">practice</span>' : ""}</div>` : '<div class="empty">No review yet – press Practice AI review or wait for a real setup.</div>') +
     `<div class="stages">` + stages.map(([n, list]) => {
       const done = list.filter(a => a.status === "done").length, bad = list.filter(a => a.status === "error").length,
             run = list.some(a => a.status === "thinking");
       return `<div class="stg ${run ? "run" : bad ? "err" : done === list.length && done ? "ok" : ""}"><div class="n">${n}</div><div class="c">${done}/${list.length}</div>
         <div class="bar"><i style="width:${list.length ? 100 * done / list.length : 0}%"></i></div></div>`; }).join("") + `</div>` +
     `<div class="tally">${Object.entries(s.desks || {}).map(([d, v]) => { const m = s.agents.filter(a => a.stage === 1 && a.desk === d);
-        return `<span>${v.icon} <b>${m.filter(a => a.status === "done" && a.vote === "TAKE").length}/${m.length}</b></span>`; }).join("")}</div>
-    <div class="tally" style="margin-top:6px"><span class="ok">✅ TAKE <b>${take}</b></span><span class="bad">❌ SKIP <b>${skip}</b></span><span class="warn">⚠ errors <b>${err}</b></span></div>` +
-    (cur ? (cur.end == null ? `<div class="verdict run">🧠 Desk is working…</div>`
-      : `<div class="verdict ${cur.approved ? "take" : "skip"}">${cur.approved ? "✅ APPROVED – signal " + (cur.practice ? "(practice, not sent)" : "sent") : "❌ REJECTED – no signal"}</div>`) : "");
+        return `<span>${esc(v.name.split(" ")[0])} <b>${m.filter(a => a.status === "done" && a.vote === "TAKE").length}/${m.length}</b></span>`; }).join("")}</div>
+    <div class="tally" style="margin-top:6px"><span class="ok">TAKE <b>${take}</b></span><span class="bad">SKIP <b>${skip}</b></span><span class="warn">errors <b>${err}</b></span></div>` +
+    (cur ? (cur.end == null ? `<div class="verdict run">Desk is working…</div>`
+      : `<div class="verdict ${cur.approved ? "take" : "skip"}">${cur.approved ? "APPROVED – signal " + (cur.practice ? "(practice, not sent)" : "sent") : "REJECTED – no signal"}</div>`) : "");
   H.live_review = html;
 }
 function renderKeys(models){
@@ -516,7 +558,7 @@ function renderKeys(models){
   const keys = [...new Set(models.map(m => m.key))].sort();
   H.keysSum = keys.map(k => { const ms = models.filter(m => m.key === k), r = ms.filter(m => m.ready).length;
     return `<span class="pill ${r ? "ok" : "bad"}">key ${k}: ${r}/${ms.length} ready</span>`; }).join(" ");
-  const used = {}; (state.agents || []).forEach(a => { if (a.slot) (used[a.slot] = used[a.slot] || []).push(a.icon); });
+  const used = {}; (state.agents || []).forEach(a => { if (a.slot) (used[a.slot] = used[a.slot] || []).push(`<span class="codeb ${a.desk || ""}">${esc(a.icon)}</span>`); });
   H.keys = `<table><tr><th>Model</th><th>Key</th><th>Tier</th><th>Health</th><th>OK / fail</th><th>Latency</th><th>Last min</th><th>Agents</th></tr>` +
     models.map(m => `<tr><td>${esc(m.name)}</td><td>key ${m.key}</td><td><span class="tag ${m.lite ? "lite" : "strong"}">${m.lite ? "lite" : "strong"}</span></td>
       <td><span class="hb ${m.ready ? "g" : "r"}"></span>${m.ready ? "ready" : `<span class="bad">resting${m.back_in_min ? " " + m.back_in_min + " min" : ""}</span><br><span class="role">${esc((m.reason || "").slice(0, 90))}</span>`}</td>
@@ -530,7 +572,7 @@ function tick(){
 setInterval(tick, 1000);
 async function refresh(){
   try { state = await (await fetch("/api/state")).json(); }
-  catch (e) { H.pills = pill("❌ Bot not running – start it with start.bat", "bad"); return; }
+  catch (e) { H.pills = pill("Bot not running – start it with start.bat", "bad"); return; }
   if (!Object.keys(pos).length || net.childElementCount === 0) buildNet(state.agents);
   render(); animateFlows(state.flows || []); renderChat(state.flows || []);
   if (state.chart_version && state.chart_version + tf + sym !== chartVersion) { chartVersion = state.chart_version + tf + sym; loadChart(); }

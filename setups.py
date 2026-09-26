@@ -9,18 +9,18 @@ Each trading style uses three timeframes:
 
 import smc
 import volume
-from indicators import (adx, bollinger, cci, donchian, ema, fib_levels, heikin_ashi_trend, ichimoku, macd,
-                        obv_trend, pivots, rsi, rsi_divergence, squeeze, stoch_rsi, stochastic, supertrend, vwap,
+from indicators import (adx, bb_width_rank, bollinger, cci, donchian, ema, fib_levels, heikin_ashi_trend, ichimoku, macd,
+                        obv_trend, pivots, regime, rsi, rsi_divergence, squeeze, stoch_rsi, stochastic, supertrend, vwap,
                         williams_r)
 from levels import BUY_SIDE, SELL_SIDE, key_levels
 from patterns import daily_range
 
 STYLES = {
-    "scalp": {"label": "⚡ Scalping", "entry": "5min", "confirm": "15min", "bias": "1h",
+    "scalp": {"label": "Scalping", "entry": "5min", "confirm": "15min", "bias": "1h",
               "expiry_min": 60, "max_risk_atr": 3.0},
-    "intraday": {"label": "📊 Intraday", "entry": "15min", "confirm": "1h", "bias": "4h",
+    "intraday": {"label": "Intraday", "entry": "15min", "confirm": "1h", "bias": "4h",
                  "expiry_min": 240, "max_risk_atr": 3.0},
-    "swing": {"label": "🌊 Swing", "entry": "1h", "confirm": "4h", "bias": "1day",
+    "swing": {"label": "Swing", "entry": "1h", "confirm": "4h", "bias": "1day",
               "expiry_min": 1440, "max_risk_atr": 3.5},
 }
 
@@ -60,8 +60,10 @@ def analyze_market(candles_by_tf: dict[str, list[dict]], volume_by_tf: dict[str,
                 "donchian": donchian(candles),
                 "squeeze": squeeze(candles),
                 "obv": obv_trend(volume_by_tf.get(tf)),
+                "bb_width_rank": bb_width_rank(closes),
             },
         }
+        market[tf]["regime"] = regime(market[tf]["ind"])
         rng = market[tf]["smc"]["range"]
         market[tf]["fib"] = fib_levels(rng["high"], rng["low"])
     market["levels"] = key_levels(candles_by_tf.get("1day"), candles_by_tf.get("5min"))
@@ -336,7 +338,7 @@ def find_setup(style: str, market: dict, session: dict, min_rr: float, tp1_max_r
         if ema_ok is False or st_ok is False or (adx_v is not None and adx_v < 18) \
                 or not (sweep or key_sweep) or not confirmed:
             return None
-        conf.append("🛡 Strict mode: all filters agree")
+        conf.append("Strict mode: all filters agree")
 
     # Most of the average daily range already used: less room left today.
     adr = market.get("adr") or {}

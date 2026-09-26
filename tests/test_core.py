@@ -3,6 +3,7 @@ import json
 import math
 import os
 import random
+import re
 import tempfile
 import time
 import types
@@ -340,7 +341,7 @@ class DebateTests(unittest.TestCase):
         self.assertTrue(any(f["kind"] == "challenge" and f["from"] == "tech_lead" and f["to"] == "structure" for f in flows))
         self.assertTrue(any(f["kind"] == "reply" and f["from"] == "structure" for f in flows))
         self.assertTrue(any(f["from"] == "engine" and ("SELL" in f["text"] or "BUY" in f["text"]) for f in flows))
-        self.assertIn("Debate", ui.ai_report({**v, "direction": "BUY", "style_label": "x", "confidence": 20,
+        self.assertIn("debated", ui.ai_report({**v, "direction": "BUY", "style_label": "x", "confidence": 20,
                                               "reason": "", "engine_only": False}))
 
     def test_multiple_keys_become_slots(self):
@@ -459,11 +460,11 @@ class UITests(unittest.TestCase):
                    {"kind": "protected_stop", "price": 100, "stage": 1}, {"kind": "expired"}, {"kind": "cancelled"}):
             self.assertTrue(ui.event_message(t, ev))
         self.assertIn("TP1", ui.trade_status(t, 101))
-        self.assertIn("AI Desk Report", ui.ai_report(t))
+        self.assertIn("AI DESK REPORT", ui.ai_report(t))
 
     def test_dashboard_renders(self):
         _, market, _ = first_setup()
-        self.assertIn("Market Now", ui.market_dashboard(market, SESSION, True, datetime.now(timezone.utc)))
+        self.assertIn("MARKET NOW", ui.market_dashboard(market, SESSION, True, datetime.now(timezone.utc)))
 
 
 class LevelsAndEngineTests(unittest.TestCase):
@@ -574,7 +575,7 @@ class LotAndCaptionTests(unittest.TestCase):
         self.assertEqual(ui.lot_size(1000, 1, 5.0)[0], 0.02)   # $10 risk / ($5 * 100oz)
         self.assertEqual(ui.lot_size(10000, 2, 2.5)[0], 0.8)
         t, _ = make_trade()
-        self.assertIn("Your lot: 0.05", ui.lot_line({"balance": 1000, "risk": 1}, t))  # SL $2 -> 0.05
+        self.assertIn("Position size: 0.05 lot", ui.lot_line({"balance": 1000, "risk": 1}, t))  # SL $2 -> 0.05
         self.assertIn("/balance", ui.lot_line({"balance": None}, t))
         self.assertIn("min", ui.lot_line({"balance": 50, "risk": 1}, t))
 
@@ -637,7 +638,7 @@ class BacktestTests(unittest.TestCase):
         for t in r["trades"]:
             # every signal was created from candles that had already closed
             self.assertLessEqual(t["created_candle"], t["created_at"][:19].replace("T", " "))
-        self.assertIn("Backtest", ui.backtest_report(r))
+        self.assertIn("BACKTEST", ui.backtest_report(r))
         self.assertIn("error", backtest.run({k: v[:50] for k, v in data.items()}, "swing"))
 
     def test_realized_r(self):
@@ -693,14 +694,22 @@ class EndToEndTests(unittest.TestCase):
             self.assertIn("signal sent", " ".join(notes))
             self.assertEqual(sent[0][0], 111)
             self.assertIn("XAU/USD", sent[0][1])
-            self.assertIn("Your lot", sent[0][1])
+            self.assertIn("Position size", sent[0][1])
             trade = gb.storage.open_trades()[0]
 
             # Every menu screen renders.
-            for key in ("menu", "trades", "hist", "perf", "mkt", "set", "help", "risk", "news", "status", "bt"):
+            emoji = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\uFE0F]")
+            for key in ("menu", "trades", "hist", "perf", "mkt", "set", "help", "risk", "news", "status", "bt", "desk"):
                 text, kb = asyncio.run(gb.screen(key, 111, 111))
                 self.assertTrue(text and kb)
-            self.assertIn("AI Desk", ui.ai_report(trade))
+                # house style: no emoji anywhere on Telegram - text or buttons
+                buttons = " ".join(b.text for row in kb.inline_keyboard for b in row)
+                self.assertIsNone(emoji.search(text + buttons), key)
+            self.assertIn("AI DESK", ui.ai_report(trade))
+            for msg in [sent[0][1], ui.ai_report(trade), ui.signal_card(trade), ui.trade_status(trade, None)]:
+                self.assertIsNone(emoji.search(msg))
+            page = open(os.path.join(os.path.dirname(__file__), "..", "static", "dashboard.html"), encoding="utf-8").read()
+            self.assertIsNone(emoji.search(page))
 
             # Same setup again is not re-sent.
             asyncio.run(gb.scan(FakeBot(), manual=True))
@@ -815,7 +824,7 @@ class InteractionTests(unittest.TestCase):
         for cmd in ("/news", "/status", "/market", "/stats", "/history", "/trades", "/help"):
             self.command(self.gb.cmd_simple, cmd)
         self.command(self.gb.cmd_scan, "/scan")
-        self.assertIn("Scan complete", self.sent[-1][1])
+        self.assertIn("SCAN COMPLETE", self.sent[-1][1])
 
         for data in ("menu", "trades", "hist", "perf", "mkt", "set", "risk", "news", "status", "bt", "help",
                      "sty:scalp", "tog:briefings", "rk:2", "alert", "chart:15min", "aiview", "scan"):
@@ -854,7 +863,7 @@ class InteractionTests(unittest.TestCase):
 
             self.gb.storage.set_subscribed(111, True)
             asyncio.run(self.gb.briefing(types.SimpleNamespace(bot=self.bot, job=types.SimpleNamespace(data="London"))))
-            self.assertTrue(any(kind == "sendphoto" and "London Open Briefing" in (t or "") for kind, t in self.sent))
+            self.assertTrue(any(kind == "sendphoto" and "LONDON OPEN BRIEFING" in (t or "") for kind, t in self.sent))
         finally:
             sess.is_market_open = orig_open
 
@@ -904,9 +913,9 @@ class DashboardTests(unittest.TestCase):
                 dash.server.shutdown()
                 return page, before, png, after
             page, before, png, after = asyncio.run(run())
-            self.assertIn(b"Gold AI Control Room", page)
+            self.assertIn(b"AI Control Room", page)
             self.assertIn(b"Agent network", page)
-            self.assertIn(b"API keys & Gemini models", page)
+            self.assertIn(b"API keys &amp; Gemini models", page)
             self.assertIn("current", before)
             self.assertTrue(all(a["slot"] for a in before["agents"]))
             self.assertEqual(len(before["agents"]), 26)
@@ -929,7 +938,7 @@ class OptimizeAndWeekendTests(InteractionTests):
             asyncio.run(self.gb.run_optimize(self.bot, 111, "intraday"))
         finally:
             backtest.fetch_history = orig
-        self.assertIn("Optimizer", self.sent[-1][1])
+        self.assertIn("OPTIMIZER", self.sent[-1][1])
         ranked = self.gb.last_optimize["intraday"]["ranked"]
         if ranked:
             self.press("apply:intraday:0")
@@ -949,7 +958,7 @@ class OptimizeAndWeekendTests(InteractionTests):
         self.assertTrue(self.gb.desk.monitor.reviews[0]["practice"])
         self.gb.storage.claim_owner(111)
         self.press("practice")
-        self.assertIn("Practice review", self.sent[-1][1])
+        self.assertIn("PRACTICE REVIEW", self.sent[-1][1])
 
     def test_market_closed_still_refreshes_data(self):
         import sessions as sess
@@ -1071,6 +1080,11 @@ class StrategyAndIndicatorTests(unittest.TestCase):
         self.assertEqual(ind.donchian(up)["breakout"], "up")
         piv = ind.pivots([{"high": 110, "low": 90, "close": 100}, up[-1]])
         self.assertEqual((piv["P"], piv["R1"], piv["S1"]), (100, 110, 90))
+        self.assertEqual(ind.regime({"adx": {"adx": 30, "plus_di": 25, "minus_di": 10}})["regime"], "trending")
+        self.assertEqual(ind.regime({"adx": {"adx": 15, "plus_di": 12, "minus_di": 10}, "bb_width_rank": 50})["regime"],
+                         "ranging")
+        self.assertEqual(ind.regime({"adx": {"adx": 22, "plus_di": 12, "minus_di": 10}, "squeeze": {"on": True}})["regime"],
+                         "compressed")
         fib = ind.fib_levels(200, 100)
         self.assertAlmostEqual(fib["0.705"], 129.5)
 
@@ -1079,7 +1093,10 @@ class StrategyAndIndicatorTests(unittest.TestCase):
         setup, market, _ = first_setup()
         board = strategies.evaluate(market, setup["direction"], setup["timeframes"], setup["entry"])
         self.assertGreaterEqual(len(board["results"]), 12)
-        self.assertEqual(board["agrees"] + board["against"] + board["neutral"], len(board["results"]))
+        self.assertEqual(board["agrees"] + board["against"] + board["neutral"] + board["ignored"], len(board["results"]))
+        self.assertIn(board["regime"], ("trending", "ranging", "compressed", "volatile", "transition"))
+        # strategies outside their regime are shown but not counted
+        self.assertEqual(board["ignored"], sum(not x["applicable"] for x in board["results"]))
         self.assertTrue({"trend", "breakout", "reversion", "smc", "momentum"} <= set(board["groups"]))
         flipped = strategies.evaluate(market, "SELL" if setup["direction"] == "BUY" else "BUY",
                                       setup["timeframes"], setup["entry"])
@@ -1110,3 +1127,25 @@ class StrategyAndIndicatorTests(unittest.TestCase):
         link = agents.links()
         self.assertEqual(link["world"]["to"], ["macro_lead"])
         self.assertIn("head", link["tech_lead"]["to"])
+
+
+class AgentRecordTests(unittest.TestCase):
+    def test_records_and_weighted_agreement(self):
+        from agents import agent_records, records_text, ANALYSTS
+        rep = lambda k, v: {"key": k, "vote": v}  # noqa: E731
+        trades = [{"outcome": "win", "stage": 2, "reports": [rep("structure", "TAKE"), rep("volume", "SKIP")]},
+                  {"outcome": "loss", "stage": 0, "reports": [rep("structure", "SKIP"), rep("volume", "TAKE")]},
+                  {"outcome": "win", "stage": 1, "reports": [rep("structure", "TAKE"), rep("volume", "SKIP")]},
+                  {"outcome": "expired", "stage": 0, "reports": [rep("structure", "TAKE")]}]
+        rec = agent_records(trades)
+        self.assertEqual((rec["structure"]["n"], rec["structure"]["accuracy"]), (3, 100))
+        self.assertEqual(rec["volume"]["accuracy"], 0)
+        self.assertGreater(rec["structure"]["weight"], 1.0)
+        self.assertLess(rec["volume"]["weight"], 1.0)
+        self.assertIn("Market Structure Analyst 100%", records_text(rec, ANALYSTS))
+        # the desk refuses when only the historically wrong analysts agree
+        setup, market, _ = first_setup()
+        desk = fake_desk()
+        desk.records = {a["key"]: {"weight": 1.5 if i < 9 else 0.5} for i, a in enumerate(ANALYSTS)}
+        v = asyncio.run(desk.review(setup, market, SESSION))
+        self.assertEqual(v["weighted_agreement"], 100)

@@ -2,6 +2,7 @@
 liquidity / key levels and the trade's entry, stop loss and targets."""
 
 import io
+import re
 
 import matplotlib
 
@@ -12,6 +13,13 @@ from matplotlib.patches import Rectangle  # noqa: E402
 BG, PANEL, GRID, TEXT = "#0b0e14", "#11151d", "#1c2230", "#c9d1d9"
 UP, DOWN = "#26a69a", "#ef5350"
 BLUE, GOLD, GREY = "#42a5f5", "#f5c542", "#7d8590"
+
+_EMOJI = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\uFE0F\u200d\u20BF]")
+
+
+def plain(text: str) -> str:
+    return _EMOJI.sub("", text or "").strip()
+
 
 KEY_LEVEL_NAMES = ("PDH", "PDL", "PWH", "PWL", "Asia High", "Asia Low")
 
@@ -94,7 +102,7 @@ def signal_chart(candles: list[dict], trade: dict, smc_read: dict, levels: dict,
 
     order = f"{trade['direction']} {'NOW' if trade['entry_type'] == 'MARKET' else 'LIMIT'}"
     fig, ax = _setup_axes(f"{trade.get('symbol_name', 'XAU/USD')}  {order}",
-                          f"{trade['style_label'][2:]}  ·  {tf_label} chart  ·  confidence {trade.get('confidence', 0)}%"
+                          f"{plain(trade['style_label'])}  ·  {tf_label} chart  ·  confidence {trade.get('confidence', 0)}%"
                           f"  ·  {trade.get('headline', '')}")
     _zones(ax, smc_read, offset, right, lo - pad, hi + pad)
     _draw_candles(ax, window)

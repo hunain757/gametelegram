@@ -81,7 +81,7 @@ sleep 5
 systemctl --no-pager --lines=5 status "$SERVICE" || true
 
 echo
-echo "✅ Bot is running 24/7. Useful commands:"
+echo "Bot is running 24/7. Useful commands:"
 echo "   Live logs:  sudo journalctl -u $SERVICE -f"
 echo "   Restart:    sudo systemctl restart $SERVICE"
 echo "   Stop:       sudo systemctl stop $SERVICE"
