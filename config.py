@@ -52,6 +52,7 @@ class Config:
     gemini_rpm_per_model: int
     ai_providers: list
     explain_language: str
+    min_conviction: int
     symbol: str
     volume_symbol: str
     styles: list[str]
@@ -114,6 +115,8 @@ def load_config() -> Config:
         ai_providers=_providers(),
         # Language of the AI's plain explanation on signals and market views, e.g. "Roman Urdu" or "English".
         explain_language=os.getenv("EXPLAIN_LANGUAGE", "simple English"),
+        # Weighted average of every agent's score (0-100) the desk needs before a signal is sent.
+        min_conviction=int(os.getenv("MIN_CONVICTION", "58")),
         symbol=os.getenv("SYMBOL", "XAU/USD"),
         volume_symbol=os.getenv("VOLUME_SYMBOL", "PAXGUSDT"),
         styles=styles,
@@ -134,7 +137,9 @@ def load_config() -> Config:
         briefings=os.getenv("BRIEFINGS", "on").lower() not in ("0", "off", "false", "no"),
         news_feeds=tuple(dict.fromkeys(_list(os.getenv("NEWS_FEEDS", "")) + list(news.DEFAULT_FEEDS))),
         markets=_markets(os.getenv("MARKETS", "XAUUSD,BTCUSD")),
-        strict_mode=os.getenv("STRICT_MODE", "on").lower() not in ("0", "off", "false", "no"),
+        # Strict engine mode (every filter must agree) finds very few setups; the 26-agent desk is the quality
+        # filter now, so the engine runs in normal mode unless STRICT_MODE=on.
+        strict_mode=os.getenv("STRICT_MODE", "off").lower() in ("1", "on", "true", "yes"),
         dashboard_port=int(os.getenv("DASHBOARD_PORT", "8080")),
         dashboard_host=os.getenv("DASHBOARD_HOST", "127.0.0.1"),
         # Open the dashboard in the browser automatically on Windows desktops.

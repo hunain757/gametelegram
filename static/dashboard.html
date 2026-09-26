@@ -41,7 +41,7 @@ section h2{margin:0 0 10px;font-size:12px;text-transform:uppercase;letter-spacin
 .node.sel rect{stroke:var(--gold);stroke-width:2.4}
 .node{cursor:pointer}
 @keyframes glow{50%{fill:#3a2c10}}
-.edge{stroke:#1d2636;stroke-width:1.1;fill:none}.edge.hot{stroke:var(--gold);stroke-width:2;opacity:.9;transition:stroke .6s}
+.edge{stroke:#1d2636;stroke-width:1.1;fill:none}.edge.used{stroke-width:1.8;opacity:.85}.edge.u-take{stroke:#1f9e62}.edge.u-skip{stroke:#b8404b}.edge.u-neutral,.edge.u-sent{stroke:#5d6882}.edge.u-challenge,.edge.u-reply{stroke:#c98a1a;stroke-dasharray:5 4}.edge.hot{stroke:var(--gold);stroke-width:2;opacity:.9;transition:stroke .6s}
 .pulse{fill:var(--gold2);filter:drop-shadow(0 0 6px var(--gold))}.pulse.back{fill:#ff8a96;filter:drop-shadow(0 0 6px #f04f5a)}
 .stage{fill:var(--mut);font-size:11px;letter-spacing:1px;text-transform:uppercase}
 .desklabel{fill:#aab4c8;font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase}.kbadge{font-size:9px;font-weight:800}
@@ -65,7 +65,7 @@ ul.pts{margin:6px 0 0;padding-left:18px;color:var(--mut)}
 table{width:100%;border-collapse:collapse;font-size:12.5px}td,th{padding:6px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{color:var(--mut);font-weight:600}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:5px 12px;font-size:13px}.kv span:nth-child(odd){color:var(--mut)}
 .empty{color:var(--mut);font-style:italic}
-.chat{max-height:340px;overflow:auto;display:flex;flex-direction:column;gap:6px}
+.chat{max-height:620px;overflow:auto;display:flex;flex-direction:column;gap:6px}
 .msg{display:grid;grid-template-columns:78px 250px 1fr;gap:10px;align-items:start;padding:7px 10px;border-radius:10px;
 background:var(--panel2);border:1px solid var(--line);font-size:13px;animation:fade .6s}
 .msg .who{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.msg .t{color:#5d6882;font:12px ui-monospace,Consolas,monospace}
@@ -101,6 +101,18 @@ section h2{border-left:3px solid var(--gold);padding-left:9px}
 .brow{padding:5px 0;border-bottom:1px dashed #19212f;font-size:12.5px}.vchip{margin-right:4px}
 .ncat{font-size:10px;padding:0 6px;border-radius:99px;background:#263045;color:var(--mut);margin-right:4px;text-transform:uppercase}
 .ncat.world{background:#3a1f12;color:#ffb38a}.ncat.macro{background:#12283a;color:#8cc8ff}.ncat.gold{background:#3a2c10;color:var(--gold2)}.ncat.crypto{background:#2a1a3a;color:#d9b3ff}
+/* workflow timeline */
+.phase{border:1px solid var(--line);border-radius:10px;overflow:hidden;flex-shrink:0}.chat>*{flex-shrink:0}
+.ph{display:flex;align-items:center;gap:10px;padding:7px 10px;background:#121a28;font-weight:700;font-size:13px}
+.pn{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--gold);color:#161100;font:800 12px ui-monospace,Consolas,monospace}
+.pt{margin-left:auto;font-weight:400;display:flex;gap:6px;align-items:center}
+.trow{display:grid;grid-template-columns:70px 330px 70px 1fr;gap:10px;align-items:start;padding:6px 10px;border-top:1px solid #172030;font-size:12.5px}
+.trow.sel{background:#1d190d}.trow .t{color:#5d6882;font:12px ui-monospace,Consolas,monospace}.trow .who{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.trow.wide .txt{grid-column:2/-1}.trow .arr{color:var(--gold)}.trow .txt{color:#c7cfdd}
+@media(max-width:900px){.trow{grid-template-columns:1fr}}
+.legend2{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;font-size:11.5px;color:var(--mut);margin:-4px 0 6px}
+.lg{display:inline-block;width:18px;height:3px;border-radius:2px;margin-right:-6px}.lg.u-take{background:#1f9e62}.lg.u-skip{background:#b8404b}.lg.u-neutral{background:#5d6882}.lg.u-challenge{background:#c98a1a}
+.mini-btn{padding:3px 10px;font-size:11.5px}
 /* explanation */
 .explain{margin-top:10px;padding:10px 12px;border-radius:10px;background:#0d1320;border:1px solid var(--line);font-size:13px;line-height:1.5}
 .exp{margin-bottom:6px}.evid{margin:4px 0 6px;padding-left:18px}.evid .pro{color:#8ff0bf}.evid .con{color:#ffb0ba}
@@ -134,13 +146,14 @@ section h2{border-left:3px solid var(--gold);padding-left:9px}
   <div id="banner"></div>
   <div class="kpis" id="kpis"></div>
   <div class="row">
-    <section><h2><span>Agent network – how information flows</span><span id="phase"></span></h2>
+    <section><h2><span>Agent network – how information flows</span><span><span id="phase"></span> <button class="alt mini-btn" id="replayBtn" onclick="replay()">Replay last review</button></span></h2>
+      <div class="legend2"><span class="lg u-take"></span>TAKE <span class="lg u-skip"></span>SKIP <span class="lg u-neutral"></span>NEUTRAL <span class="lg u-challenge"></span>challenge / reply <span class="role">– hover a line to read the message</span></div>
       <svg id="net" viewBox="0 0 1400 940"></svg>
     </section>
     <section id="detail"><h2>Agent details</h2><div id="detailBody" class="empty">Click any agent in the network.</div>
       <div class="mini" id="mini"></div></section>
   </div>
-  <section><h2><span>Agent conversation – what each agent sends to the next</span>
+  <section><h2><span>Workflow – every hand-over of the last review, step by step</span>
       <span class="toggles"><label><input type="checkbox" id="onlySel"> only the selected agent</label></span></h2>
     <div id="chat" class="chat"></div></section>
   <div class="row">
@@ -285,35 +298,93 @@ function paintNodes(agents){
   }
 }
 let activeLabels = 0;
+function edgeFor(f){
+  let e = EDGES.find(x => x.a === f.from && x.b === f.to), back = false;
+  if (!e) { e = EDGES.find(x => x.a === f.to && x.b === f.from); back = true; }  // replies/challenges run backwards
+  return e ? [e, back] : [null, false];
+}
+function flyOne(f, dur){
+  const [e, back] = edgeFor(f); if (!e) return;
+  e.path.classList.add("hot"); setTimeout(() => e.path.classList.remove("hot"), dur + 300);
+  const len = e.path.getTotalLength(), dot = el("circle", {r: 5, class: "pulse" + (back ? " back" : "")}); const t0 = performance.now();
+  const label = f.text && activeLabels < 3 ? el("text", {class: "flabel"}) : null;
+  if (label) { activeLabels++; label.textContent = (f.text.length > 46 ? f.text.slice(0, 45) + "…" : f.text); }
+  (function step(t){ const k = Math.min((t - t0) / dur, 1), pt = e.path.getPointAtLength(len * (back ? 1 - k : k));
+    dot.setAttribute("cx", pt.x); dot.setAttribute("cy", pt.y);
+    if (label) { label.setAttribute("x", pt.x + 8); label.setAttribute("y", pt.y - 8); }
+    if (k < 1) requestAnimationFrame(step); else { dot.remove(); if (label) setTimeout(() => { label.remove(); activeLabels--; }, 400); } })(t0);
+}
 function animateFlows(flows){
   const now = Date.now() / 1000;
   const fresh = flows.filter(f => f.id > lastFlowId && now - f.ts < 30);
   if (flows.length) lastFlowId = Math.max(lastFlowId, ...flows.map(f => f.id));
-  fresh.forEach((f, i) => setTimeout(() => {
-    let e = EDGES.find(x => x.a === f.from && x.b === f.to), back = false;
-    if (!e) { e = EDGES.find(x => x.a === f.to && x.b === f.from); back = true; }  // replies/challenges run backwards
-    if (!e) return;
-    e.path.classList.add("hot"); setTimeout(() => e.path.classList.remove("hot"), 1400);
-    const len = e.path.getTotalLength(), dot = el("circle", {r: 5, class: "pulse" + (back ? " back" : "")}); const t0 = performance.now();
-    const label = f.text && activeLabels < 3 ? el("text", {class: "flabel"}) : null;
-    if (label) activeLabels++;
-    if (label) label.textContent = (f.text.length > 46 ? f.text.slice(0, 45) + "…" : f.text);
-    const dur = f.text ? 1600 : 900;
-    (function step(t){ const k = Math.min((t - t0) / dur, 1), pt = e.path.getPointAtLength(len * (back ? 1 - k : k));
-      dot.setAttribute("cx", pt.x); dot.setAttribute("cy", pt.y);
-      if (label) { label.setAttribute("x", pt.x + 8); label.setAttribute("y", pt.y - 8); }
-      if (k < 1) requestAnimationFrame(step); else { dot.remove(); if (label) setTimeout(() => { label.remove(); activeLabels--; }, 400); } })(t0);
-  }, i * 120));
+  fresh.forEach((f, i) => setTimeout(() => flyOne(f, f.text ? 1600 : 900), i * 120));
+}
+function reviewFlows(){
+  const cur = state && state.current; const fl = (state && state.flows) || [];
+  return cur ? fl.filter(f => f.ts >= cur.ts - 1) : [];
+}
+function replay(){
+  const fl = reviewFlows(); if (!fl.length) return;
+  const b = $("replayBtn"); b.disabled = true;
+  fl.forEach((f, i) => setTimeout(() => flyOne(f, 900), i * 180));
+  setTimeout(() => { b.disabled = false; }, fl.length * 180 + 1200);
+}
+function voteOf(f){
+  if (f.kind === "challenge") return "challenge";
+  if (f.kind === "reply") return "reply";
+  const m = /^(Changed to |Keeps )?(TAKE|SKIP|NEUTRAL)/.exec(f.text || ""); if (m) return m[2].toLowerCase();
+  if (f.kind === "decision") return /Vetoed|SKIP/.test(f.text || "") ? "skip" : "take";
+  return "sent";
+}
+let pathSig = "";
+function paintPath(){
+  // Every line that carried a message in the current review stays lit, coloured by what was said.
+  const fl = reviewFlows(), last = {};
+  fl.forEach(f => { const [e] = edgeFor(f); if (e) last[e.a + ">" + e.b] = f; });
+  const sig = Object.entries(last).map(([k, f]) => k + f.id).join("|");
+  if (sig === pathSig) return; pathSig = sig;
+  EDGES.forEach(e => {
+    const f = last[e.a + ">" + e.b];
+    e.path.setAttribute("class", "edge" + (f ? " used u-" + voteOf(f) : ""));
+    let t = e.path.querySelector("title"); if (!t) { t = el("title", {}, e.path); }
+    t.textContent = f ? `${who(f.from)} → ${who(f.to)}: ${f.text || f.kind}` : `${who(e.a)} → ${who(e.b)}`;
+  });
 }
 const NAMES = {engine: "SMC Engine", telegram: "Telegram"};
 function who(k){ const a = state && state.agents.find(x => x.key === k); return a ? a.name : (NAMES[k] || k); }
+const PHASES = [
+  ["1", "Engine hands the setup to the analysts", f => f.from === "engine"],
+  ["2", "Analysts report to their desk lead", f => stageOf(f.from) === 1 && stageOf(f.to) === 2 && f.kind !== "reply"],
+  ["3", "Debate: desk leads challenge, analysts answer", f => f.kind === "challenge" || f.kind === "reply"],
+  ["4", "Desk leads brief the verifiers and the Head Trader", f => stageOf(f.from) === 2 && f.kind !== "challenge"],
+  ["5", "Verifiers report to the Head Trader", f => stageOf(f.from) === 3],
+  ["6", "Decision: Head Trader → Auditor → Telegram", f => f.from === "head" || f.from === "auditor"],
+];
+function stageOf(k){ const a = state && state.agents.find(x => x.key === k); return a ? a.stage : 0; }
+function chip(v){ return `<span class="vchip v-${v === "take" ? "agrees" : v === "skip" ? "against" : "neutral"}">${v.toUpperCase()}</span>`; }
+function row(f){
+  const a = state.agents.find(x => x.key === f.from);
+  return `<div class="trow ${f.from === selected || f.to === selected ? "sel" : ""}"><span class="t">${esc(f.t)}</span>
+    <span class="who">${a ? `<span class="codeb ${a.desk || ""}">${esc(a.icon)}</span> ` : ""}${esc(who(f.from))} <span class="arr">→</span> ${esc(who(f.to))}</span>
+    ${chip(voteOf(f))}<span class="txt">${esc(f.text || "")}</span></div>`;
+}
 function renderChat(flows){
   const only = $("onlySel").checked;
-  const list = flows.filter(f => f.text && (!only || f.from === selected || f.to === selected)).slice(-80).reverse();
-  H.chat = list.length ? list.map(f => `<div class="msg ${esc(f.kind)}"><span class="t">${esc(f.t)}</span>
-      <span class="who">${esc(who(f.from))} → ${esc(who(f.to))}<span class="kind">${esc(f.kind)}</span></span>
-      <span>${esc(f.text)}</span></div>`).join("")
-    : '<div class="empty">No messages yet. Press Practice AI review to watch the 26 agents work on live data – or wait for the engine to find a real setup.</div>';
+  let list = reviewFlows();
+  const raw = !list.length;
+  if (raw) list = flows.slice(-60);
+  list = list.filter(f => !only || f.from === selected || f.to === selected);
+  if (!list.length) { H.chat = '<div class="empty">No messages yet. Press Practice AI review to watch the 26 agents work on live data – or wait for the engine to find a real setup.</div>'; return; }
+  if (raw) { H.chat = list.slice().reverse().map(row).join(""); return; }
+  H.chat = PHASES.map(([n, title, test]) => {
+    const items = list.filter(test); if (!items.length) return "";
+    const votes = {take: 0, skip: 0, neutral: 0}; items.forEach(f => { const v = voteOf(f); if (v in votes) votes[v]++; });
+    const tally = Object.entries(votes).filter(([, c]) => c).map(([v, c]) => `${chip(v)}<b>${c}</b>`).join(" ");
+    const body = n === "1" && !only ? `<div class="trow wide"><span class="t">${esc(items[0].t)}</span><span class="txt">Setup sent to ${items.length} analysts: ${esc(items[0].text)}</span></div>`
+      : items.map(row).join("");
+    return `<div class="phase"><div class="ph"><span class="pn">${n}</span>${title}<span class="pt">${tally}</span></div>${body}</div>`;
+  }).join("");
 }
 function link(k){ return `<a href="#" class="lnk" onclick="selected='${k}';render();renderChat(state.flows||[]);return false">${esc(who(k))}</a>`; }
 function renderDetail(agents){
@@ -598,7 +669,7 @@ async function refresh(){
   try { state = await (await fetch("/api/state")).json(); }
   catch (e) { H.pills = pill("Bot not running – start it with start.bat", "bad"); return; }
   if (!Object.keys(pos).length || net.childElementCount === 0) buildNet(state.agents);
-  render(); animateFlows(state.flows || []); renderChat(state.flows || []);
+  render(); animateFlows(state.flows || []); renderChat(state.flows || []); paintPath();
   if (state.chart_version && state.chart_version + tf + sym !== chartVersion) { chartVersion = state.chart_version + tf + sym; loadChart(); }
 }
 function setSym(k){ if (k === sym) return; sym = k; try { localStorage.setItem("sym", k); } catch (e) {} lastPx = null; chartVersion = ""; liveBar = null; refresh(); live(); }

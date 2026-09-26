@@ -66,11 +66,22 @@ every 5 min ─► Twelve Data: XAU/USD M5 · M15 · H1 · H4 · D1   (+ Binance
                  agent's own accuracy → TAKE/SKIP, levels
         Stage 5  Signal Auditor checks the final signal and can veto it
                 │
-                ▼ (Head TAKE + confidence ≥ 70 + ≥ 62 % of analysts, also when weighted by each agent's
-                   track record + ≥ 2/3 desk leads + ≥ 2/3 verifiers + strategy board not against + auditor OK)
+                ▼ Decision: Head TAKE + confidence ≥ 70 + desk CONVICTION ≥ 58 (weighted average of every
+                  agent's score: analysts 40 %, desk leads 25 %, verifiers 25 %, strategy board 10 %)
+                  Hard vetoes only for concrete dangers: analysts split, too few analysts see an edge,
+                  Risk Manager finds a broken stop / R:R / news, strategy board clearly against, auditor veto
         TELEGRAM: chart + signal + your lot size ─► live tracking replies on the signal:
         entry filled · TP1 (SL → breakeven) · TP2 · TP3 · SL · expired
 ```
+
+## SMC grade
+
+Every setup gets a 10-point SMC checklist and a grade (A+ / A / B / C): HTF bias, confirm TF, liquidity
+sweep, BOS/CHoCH, displacement, quality POI (order block with an FVG inside, fresh zone, or nested inside a
+higher-timeframe OB/FVG), discount/premium, OTE entry (62-79 %), killzone timing and a clear path to a liquidity
+target. Judas swings (Asia range swept in a killzone) score extra. The grade and checklist are shown on the
+signal and given to the agents. The engine runs in normal mode by default (`STRICT_MODE=off`) – the desk is the
+quality filter; `MIN_CONVICTION` in `.env` sets how much agreement a signal needs.
 
 ## Telegram features
 

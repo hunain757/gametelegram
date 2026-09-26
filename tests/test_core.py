@@ -1344,7 +1344,39 @@ class NeutralVoteTests(unittest.TestCase):
         self.assertTrue(v["approved"], v.get("reject_reason"))
         v, desk = run(neutral_every=0, skip_every=2)   # 9 TAKE, 9 SKIP -> half against
         self.assertFalse(v["approved"])
-        self.assertIn("analysts say TAKE", v["reject_reason"])
+        self.assertIn("analysts split", v["reject_reason"])
         self.assertEqual(desk.monitor.agents["auditor"]["status"], "skipped")
         v, _ = run(neutral_every=1)               # everyone neutral -> no edge, no trade
         self.assertFalse(v["approved"])
+        self.assertIn("too few analysts see an edge", v["reject_reason"])
+        self.assertGreaterEqual(v["conviction"], 0)
+
+    def test_conviction_and_vetoes(self):
+        from agents import TradingDesk
+        desk = fake_desk()
+        r = lambda k, v, sc: {"key": k, "vote": v, "score": sc}  # noqa: E731
+        self.assertEqual(TradingDesk.support(r("x", "SKIP", 80)), 20)   # 'confident skip' = strongly against
+        self.assertEqual(TradingDesk.support(r("x", "TAKE", 30)), 70)
+        self.assertEqual(TradingDesk.support(r("x", "NEUTRAL", 90)), 60)
+        analysts = [r(f"a{i}", "TAKE", 75) for i in range(12)] + [r(f"b{i}", "NEUTRAL", 50) for i in range(6)]
+        board = {"agrees": 8, "against": 2, "score": 80}
+        conv = desk._conviction(analysts, [r("l", "TAKE", 70)] * 3,
+                                [r("confluence", "TAKE", 70), r("risk", "TAKE", 70), r("devil", "SKIP", 35)], board, {})
+        self.assertTrue(60 <= conv <= 75, conv)
+        self.assertEqual(desk._vetoes(analysts, [r("risk", "SKIP", 10)], board)[0][:20], "Risk Manager veto: ")
+        self.assertEqual(desk._vetoes(analysts, [r("risk", "SKIP", 40)], board), [])  # a mild concern is no veto
+
+
+class SmcGradeTests(unittest.TestCase):
+    def test_setup_has_grade_and_checklist_shown_on_telegram(self):
+        setup, market, _ = first_setup()
+        self.assertIn(setup["smc_grade"], ("A+", "A", "B", "C"))
+        self.assertEqual(len(setup["smc_checklist"]), 10)
+        self.assertTrue(setup["smc_checklist"]["HTF bias"])
+        v = asyncio.run(fake_desk().review(setup, market, SESSION))
+        self.assertIn("conviction", v)
+        t = tracker.new_trade(dict(setup, symbol_name="XAU/USD"), v, "2026-09-22 08:00:00")
+        card = ui.signal_card(t)
+        self.assertIn("SMC GRADE", card)
+        self.assertIn("SMC CHECKLIST", card)
+        self.assertIn("CONVICTION", card)

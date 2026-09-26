@@ -151,11 +151,14 @@ VERIFIERS = [
               "and macro agree, did any desk claim something the data does not show, which contradiction matters most?"},
     {"key": "risk", "name": "Risk Manager", "icon": "RSK",
      "focus": "Verify the stop loss (beyond invalidation, outside obvious stop hunts), risk/reward of each target, "
-              "volatility, news risk inside the trade window and whether a limit entry can fill. Protect capital first."},
+              "volatility, news risk inside the trade window and whether a limit entry can fill. Vote SKIP only for a "
+              "concrete risk problem (stop inside noise or a liquidity pool, R:R below the minimum, high-impact news "
+              "inside the trade window); otherwise TAKE with a score that reflects how clean the risk is."},
     {"key": "devil", "name": "Devil's Advocate", "icon": "DEV",
      "focus": "Attack the trade with everything the desks found: the strongest reasons it will FAIL (trap, fake "
-              "breakout, counter-trend, liquidity that will be taken against it, news). Vote TAKE only if you "
-              "honestly cannot find a serious flaw."},
+              "breakout, counter-trend, liquidity that will be taken against it, news), each with its number. Then "
+              "judge fairly: vote SKIP only if a flaw makes a LOSS MORE LIKELY THAN A WIN; flaws every trade has "
+              "(it could reverse, news may come) are not enough - then vote TAKE with a lower score."},
 ]
 
 for _a in ANALYSTS:
@@ -220,6 +223,7 @@ STRICT RULES:
    SKIP    - your data clearly argues AGAINST the {direction} or shows a concrete danger (score 40 or less).
              Name the exact number that argues against it.
    Never SKIP only because your data is quiet or incomplete - that is NEUTRAL.
+   If your data LEANS either way, say so: TAKE with 55-65 or SKIP with 35-45. Use NEUTRAL only when it is flat.
 4. Your report goes to the {lead}, who checks your evidence and challenges you if it is wrong.
 
 Setup proposed by the engine:
@@ -257,6 +261,7 @@ Data your desk used:
 Your members' reports:
 {reports}
 
+score = how strongly the evidence supports TAKING this trade: 0 = strongly against, 50 = no edge, 100 = strongly for.
 Reply with JSON only:
 {{"vote": "TAKE" or "SKIP", "score": 0-100, "summary": "one sentence: the desk's finding",
   "points": ["up to 3 key findings with exact numbers"],
@@ -304,8 +309,9 @@ The three desk leads report (after checking their analysts):
 All 18 analysts (one line each):
 {reports}
 
-Check the desks' claims against the data above and call out anything unsupported. Judge only from your own role.
-Be strict. Reply with JSON only:
+Check the desks' claims against the data above and call out anything unsupported. Judge only from your own role,
+strictly but fairly: a trade needs a good edge, not perfection. score = how strongly the evidence supports TAKING this trade: 0 = strongly against, 50 = no edge, 100 = strongly for.
+Reply with JSON only:
 {{"vote": "TAKE" or "SKIP", "score": 0-100, "summary": "one short sentence", "points": ["up to 3 short points"]}}
 """
 
@@ -322,6 +328,8 @@ Strategy board: {board_summary}
 
 Analyst tally: {tally}
 
+Desk conviction (weighted average of every agent's score, 0-100): {conviction}
+
 Desk verdicts (each desk lead checked its analysts):
 {desks}
 
@@ -332,8 +340,9 @@ Desk track record for this trading style (learn from it): {history}
 
 Each agent's own record on past signals (trust the reliable ones more): {records}
 
-Make the final call. Only TAKE a trade when technicals, strategies and macro line up and the risk is clean;
-SKIP otherwise - a missed trade costs nothing, a bad one costs money.
+Make the final call. Your job is to take GOOD trades, not to avoid every trade: when the desk conviction is
+60 or more and no concrete objection (with a number) stands, TAKE. SKIP when conviction is low or when a concrete,
+unanswered objection makes a loss more likely than a win.
 Before deciding, weigh the evidence: name the two strongest findings FOR the trade and the strongest AGAINST it,
 each with the exact number from the desks. If the strongest AGAINST point is concrete and unanswered, SKIP.
 You may fine-tune entry / stop loss / targets (keep the same direction; TP1 must be at least 1:{min_rr}),
@@ -522,7 +531,7 @@ def records_text(records: dict, agents: list[dict], min_n: int = 3) -> str:
 
 def setup_brief(setup: dict) -> str:
     keep = ("style_label", "direction", "entry_type", "entry", "stop_loss", "tps", "price", "atr",
-            "score", "confluences", "poi", "timeframes", "expiry_min")
+            "score", "confluences", "poi", "timeframes", "expiry_min", "smc_grade", "smc_checklist")
     return json.dumps({k: setup[k] for k in keep if k in setup}, separators=(",", ":"))
 
 
@@ -1131,6 +1140,52 @@ class TradingDesk:
 
         await asyncio.gather(*(answer(lead, r) for lead, r in jobs))
 
+    @staticmethod
+    def support(r: dict) -> float:
+        """0-100 support for taking the trade, consistent with the vote (models sometimes score their
+        certainty instead: a 'SKIP 80' means strongly against = 20)."""
+        s, v = float(r.get("score") or 0), r.get("vote")
+        if v == "TAKE":
+            return s if s >= 50 else 100 - s
+        if v == "SKIP":
+            return s if s <= 50 else 100 - s
+        return min(max(s, 40.0), 60.0)
+
+    def _conviction(self, analysts: list, leads: list, verifiers: list, board: dict, records: dict) -> int:
+        """Weighted average of every agent's support (analysts 40 %, desk leads 25 %, verifiers 25 %,
+        strategy board 10 %); analysts are weighted by their track record, the devil's advocate counts less."""
+        def wavg(items):
+            items = [(v, w) for v, w in items if w > 0 and v is not None]
+            tot = sum(w for _, w in items)
+            return sum(v * w for v, w in items) / tot if tot else None
+        ok = lambda rs: [r for r in rs if r["vote"] != "ERROR"]  # noqa: E731
+        a = wavg([(self.support(r), records.get(r["key"], {}).get("weight", 1.0)) for r in ok(analysts)])
+        lds = wavg([(self.support(r), 1.0) for r in ok(leads)])
+        ver = wavg([(self.support(r), 0.6 if r["key"] == "devil" else 1.0) for r in ok(verifiers)])
+        brd = board.get("score") if board.get("agrees", 0) + board.get("against", 0) else None
+        total = wavg([(a, 0.40), (lds, 0.25), (ver, 0.25), (brd, 0.10)])
+        return round(total) if total is not None else 0
+
+    def _min_conviction(self) -> int:
+        return int(getattr(self, "min_conviction", None) or 58)
+
+    def _vetoes(self, analysts: list, verifiers: list, board: dict) -> list[str]:
+        """Only concrete dangers block a trade on their own."""
+        out = []
+        takes = sum(r["vote"] == "TAKE" for r in analysts)
+        skips = sum(r["vote"] == "SKIP" for r in analysts)
+        answered = sum(r["vote"] != "ERROR" for r in analysts)
+        if skips * 1.5 > takes:
+            out.append(f"analysts split ({takes} TAKE vs {skips} SKIP)")
+        elif takes < max(3, math.ceil(0.25 * answered - 1e-9)):
+            out.append(f"too few analysts see an edge ({takes} TAKE of {answered})")
+        risk = next((r for r in verifiers if r["key"] == "risk" and r["vote"] == "SKIP"), None)
+        if risk and self.support(risk) <= 25:
+            out.append(f"Risk Manager veto: {risk.get('summary', '')}")
+        if board.get("against", 0) > board.get("agrees", 0) + 2:
+            out.append(f"strategy board clearly against ({board['against']} vs {board['agrees']})")
+        return out
+
     def _need(self, answered: int) -> int:
         """Analysts that must agree: MIN_AGREE_PCT of those that answered (default: MIN_AGENT_VOTES out of 8)."""
         pct = getattr(self, "min_agree_pct", None) or self.min_votes / 8
@@ -1164,13 +1219,16 @@ class TradingDesk:
                   + f"{setup.get('symbol_name', 'XAU/USD')} {setup['style_label']} {setup['direction']} @ {setup['entry']} (engine score {setup['score']})")
         mon.event(f"Strategy board ({board['regime']} market): {board['agrees']} agree · {board['against']} against · {board['neutral']} neutral")
         mon.review_start(f"{setup.get('symbol_name', 'XAU/USD')} {setup['style_label']} {setup['direction']} @ {setup['entry']}"
+                         + (f" · SMC grade {setup['smc_grade']}" if setup.get("smc_grade") else "")
                          + (" – PROBE (no real engine setup right now)" if setup.get("probe") else ""),
                          practice)
         verdict = await self._review(setup, ctx, mon)
         mon.review_end(verdict["approved"])
         if mon.current:
+            mon.current["checklist"] = setup.get("smc_checklist")
             mon.current.update({k: verdict.get(k) for k in ("explain", "invalidation", "management", "risks", "for",
-                                                            "against", "reason", "reject_reason", "confidence")})
+                                                            "against", "reason", "reject_reason", "confidence",
+                                                            "conviction")})
         mon.agent("head", "done" if not verdict.get("ai_down") else "error",
                   vote="TAKE" if verdict["approved"] else "SKIP", score=verdict["confidence"],
                   summary=verdict.get("explain") or verdict.get("reason") or verdict.get("reject_reason") or "",
@@ -1264,6 +1322,8 @@ class TradingDesk:
         verdict.update(reports=reports, votes=a_votes + l_votes + v_votes, analyst_votes=a_votes, lead_votes=l_votes,
                        verifier_votes=v_votes, errors=sum(r["vote"] == "ERROR" for r in reports), need=need,
                        per_desk=per_desk, weighted_agreement=weighted, neutral=neutral)
+        conviction = self._conviction(analysts, leads, verifiers, board, records)
+        verdict["conviction"] = conviction
         tally = (f"{a_votes} TAKE, {len(decisive) - a_votes} SKIP, {neutral} NEUTRAL of {len(answered)} analysts "
                  f"(need {need} TAKE), reliability-weighted agreement "
                  f"{weighted}% – technical {per_desk['tech']}, strategy {per_desk['strategy']}, macro {per_desk['macro']}")
@@ -1277,7 +1337,7 @@ class TradingDesk:
         try:
             text, _ = await self._ask(HEAD_PROMPT.format(
                 instrument=ctx["instrument"], setup=ctx["setup"], market=ctx["market"], session=ctx["session_news"],
-                board_summary=board_summary, tally=tally, desks=_reports_text(leads),
+                board_summary=board_summary, tally=tally, conviction=conviction, desks=_reports_text(leads),
                 verifiers=_reports_text(verifiers), history=ctx.get("history") or "no closed trades yet",
                 records=records_text(records, ANALYSTS + LEADS + VERIFIERS),
                 language=getattr(self, "language", None) or "simple English",
@@ -1290,12 +1350,12 @@ class TradingDesk:
             verdict["confidence"] = round(sum(takers) / len(takers)) if takers else 0
             kind, friendly, _ = classify_error(e)
             verdict["reason"] = f"Head trader unavailable ({friendly}) – decided by the desk's votes."
-            strict_need = max(need, math.ceil(len(decisive) * 0.75))
-            verdict["approved"] = (a_votes >= strict_need and l_votes >= 2 and v_votes >= 2
-                                   and board["against"] <= board["agrees"]
-                                   and verdict["confidence"] >= self.min_confidence)
+            verdict["confidence"] = conviction
+            vetoes = self._vetoes(analysts, verifiers, board)
+            verdict["approved"] = conviction >= self._min_conviction() + 7 and not vetoes
             if not verdict["approved"]:
-                verdict["reject_reason"] = f"head trader offline and only {a_votes}/{len(answered)} analysts agree"
+                verdict["reject_reason"] = "head trader offline; " + ("; ".join(vetoes) or
+                                                                      f"conviction {conviction} not high enough")
             mon.agent("auditor", "skipped", summary="Not needed – head trader unavailable")
             return verdict
 
@@ -1328,7 +1388,8 @@ class TradingDesk:
         except (KeyError, TypeError, ValueError):
             pass
 
-        # Confirmation rules: every layer of the desk must agree.
+        # Decision rules: the Head Trader decides, the desk's weighted conviction must back it, and only
+        # concrete dangers can veto (not every cautious opinion).
         reasons = []
         if not take:
             reasons.append("head trader said SKIP")
@@ -1336,16 +1397,9 @@ class TradingDesk:
             reasons.append(f"confidence {verdict['confidence']} < {self.min_confidence}")
         if len(answered) < math.ceil(len(ANALYSTS) * 2 / 3):
             reasons.append(f"only {len(answered)}/{len(ANALYSTS)} analysts answered")
-        if a_votes < need:
-            reasons.append(f"only {a_votes} analysts say TAKE (need {need}; {neutral} neutral)")
-        elif records and decisive and weighted < 100 * self._need(len(decisive)) / len(decisive) - 1e-9:
-            reasons.append(f"the most reliable analysts disagree (weighted agreement {weighted}%)")
-        if l_votes < 2:
-            reasons.append(f"only {l_votes}/{len(LEADS)} desks agree")
-        if v_votes < 2:
-            reasons.append(f"only {v_votes}/{len(VERIFIERS)} verifiers agree")
-        if board["against"] > board["agrees"]:
-            reasons.append(f"strategy board against ({board['against']} vs {board['agrees']})")
+        if conviction < self._min_conviction():
+            reasons.append(f"desk conviction {conviction} < {self._min_conviction()}")
+        reasons += self._vetoes(analysts, verifiers, board)
         if reasons:
             verdict["reject_reason"] = "; ".join(reasons)
             mon.agent("auditor", "skipped", summary="Not needed – the desk did not approve this trade")

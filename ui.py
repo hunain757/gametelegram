@@ -77,6 +77,11 @@ def _desk_block(t: dict) -> str:
     if t.get("engine_only"):
         return f"<pre>ENGINE SCORE  {t['score']:>3}%  {bar(t['score'])}\nAI DESK       offline</pre>"
     rows = [f"CONFIDENCE  {t['confidence']:>4}%  {bar(t['confidence'])}"]
+    if t.get("conviction") is not None:
+        rows.append(f"CONVICTION  {t['conviction']:>4}%  {bar(t['conviction'])}")
+    if t.get("smc_grade"):
+        ck = t.get("smc_checklist") or {}
+        rows.append(f"SMC GRADE   {t['smc_grade']:>5}  {sum(ck.values())}/{len(ck)} checks")
     d, v, b = t.get("per_desk"), t.get("desk_votes") or {}, t.get("board") or {}
     if d:
         rows += [f"TECHNICAL   {str(d.get('tech')):>5}", f"STRATEGY    {str(d.get('strategy')):>5}",
@@ -119,6 +124,9 @@ def signal_card(t: dict) -> str:
         lines += ["<b>MANAGEMENT</b>", escape(t["management"])]
     if t.get("risks"):
         lines += ["<b>RISKS</b>"] + [f"– {escape(x)}" for x in t["risks"]]
+    if t.get("smc_checklist"):
+        ck = t["smc_checklist"]
+        lines += ["<b>SMC CHECKLIST</b>", "<pre>" + "\n".join(f"[{'x' if v else ' '}] {k}" for k, v in ck.items()) + "</pre>"]
     lines.append("<b>CONFLUENCE</b>")
     lines += [f"– {escape(plain(c))}" for c in t["confluences"][:7]]
     lines += ["", f"Timeframes  {TF_LABEL[tfs['bias']]} › {TF_LABEL[tfs['confirm']]} › {TF_LABEL[tfs['entry']]}",

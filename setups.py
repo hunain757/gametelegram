@@ -331,6 +331,60 @@ def find_setup(style: str, market: dict, session: dict, min_rr: float, tp1_max_r
     if vw and ((bull and price >= vw) or (not bull and price <= vw)):
         score += 3
 
+    # ---- Advanced SMC quality: what separates an A+ setup from an average one ----
+    def overlaps(z, lo, hi):
+        return z["bottom"] <= hi and z["top"] >= lo
+    lo, hi = poi["bottom"], poi["top"]
+    ob_fvg = poi["kind"] in ("Order Block", "Breaker Block") and any(
+        overlaps(f, lo, hi) for f in es["fvgs"] if f["direction"] == want)
+    if ob_fvg:
+        score += 5
+        conf.append("Order block with an FVG inside it (institutional footprint)")
+    fresh = not poi.get("touched")
+    if poi["kind"] == "Order Block":
+        score += 3 if fresh else -3
+        if fresh:
+            conf.append("Fresh, untested order block")
+    nested = None  # the entry zone sits inside a higher-timeframe zone in the same direction
+    for tf in (st["bias"], st["confirm"]):
+        hs = market[tf]["smc"]
+        for kind, zs in (("OB", hs["order_blocks"]), ("FVG", hs["fvgs"]), ("Breaker", hs.get("breakers", []))):
+            z = next((z for z in reversed(zs) if z["direction"] == want and overlaps(z, lo, hi)), None)
+            if z:
+                nested = f"{TF_LABEL[tf]} {kind} {z['bottom']:.2f}-{z['top']:.2f}"
+                break
+        if nested:
+            break
+    if nested:
+        score += 10
+        conf.append(f"Entry zone nested inside the {nested}")
+    rng = es["range"]
+    span = (rng["high"] - rng["low"]) or 1
+    retr = (rng["high"] - entry) / span if bull else (entry - rng["low"]) / span
+    ote = 0.62 <= retr <= 0.79
+    if ote:
+        score += 5
+        conf.append(f"Entry in the OTE zone ({retr * 100:.0f}% retracement)")
+    judas = bool(key_sweep and key_sweep["name"].startswith("Asia") and session.get("killzone"))
+    if judas:
+        score += 5
+        conf.append(f"Judas swing: {key_sweep['name']} swept in the {session['killzone']} killzone")
+    tp_liq = tps[0].get("source") not in (None, "R-multiple")
+    checklist = {
+        "HTF bias": True,
+        "Confirm TF agrees": cs["trend"] == want,
+        "Liquidity sweep": bool(sweep or key_sweep),
+        "Structure shift (BOS/CHoCH)": bool(struct_trigger),
+        "Displacement": bool(struct_trigger and ev.get("body", 0) >= a),
+        "Quality POI (OB+FVG / fresh / nested)": bool(ob_fvg or nested or (fresh and poi["kind"] == "Order Block")),
+        "Discount / premium": (bull and rng["zone"] == "discount") or (not bull and rng["zone"] == "premium"),
+        "OTE entry": ote,
+        "Killzone timing": bool(session.get("killzone")),
+        "Clear path to TP1 / liquidity target": not edges or tp_liq,
+    }
+    hits = sum(checklist.values())
+    grade = "A+" if hits >= 8 else "A" if hits >= 7 else "B" if hits >= 5 else "C"
+
     # Strict mode: every major filter must agree (fewer but cleaner trades).
     if strict:
         displaced = bool(struct_trigger and ev.get("body", 0) >= a)
@@ -370,4 +424,6 @@ def find_setup(style: str, market: dict, session: dict, min_rr: float, tp1_max_r
         "key": f"{style}:{'BUY' if bull else 'SELL'}:{poi['kind']}:{poi['time']}",
         "expiry_min": st["expiry_min"],
         "timeframes": {"entry": st["entry"], "confirm": st["confirm"], "bias": st["bias"]},
+        "smc_grade": grade,
+        "smc_checklist": checklist,
     }
