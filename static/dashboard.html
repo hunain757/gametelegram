@@ -7,247 +7,356 @@
 <link rel="icon" href="data:,">
 <script src="/static/lightweight-charts.js"></script>
 <style>
-:root{--bg:#070a10;--panel:#0f141e;--panel2:#141b28;--line:#1f2838;--text:#dde3ee;--mut:#8792a8;
---gold:#f5c542;--gold2:#ffdd7a;--green:#22c77a;--red:#f04f5a;--amber:#ffab1a;--blue:#3d9bff;--violet:#b36bff}
-*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 Inter,system-ui,Segoe UI,Roboto,sans-serif}
+:root{--bg:#06080d;--panel:rgba(17,23,34,.78);--panel2:#141b28;--line:#1e2738;--line2:#2a3549;--text:#e2e7f0;--mut:#8792a8;
+--gold:#f5c542;--gold2:#ffdd7a;--green:#22c77a;--red:#f04f5a;--amber:#ffab1a;--blue:#3d9bff;--violet:#b36bff;
+--r:16px;--ease:cubic-bezier(.2,.8,.2,1);--side:232px}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 Inter,system-ui,Segoe UI,Roboto,sans-serif;overflow-x:hidden}
 a{color:var(--gold2)}
-header{position:sticky;top:0;z-index:20;display:flex;flex-wrap:wrap;gap:14px;align-items:center;padding:12px 20px;
-background:rgba(7,10,16,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
-.brand{display:flex;align-items:center;gap:10px}.brand b{font-size:19px;color:var(--gold);letter-spacing:.4px}
-.brand small{color:var(--mut)}
-.ticker{display:flex;align-items:baseline;gap:8px;padding:6px 14px;border-radius:10px;background:var(--panel2);border:1px solid var(--line)}
-.ticker .px{font:700 22px/1 ui-monospace,Consolas,monospace;transition:color .3s}.ticker .src{font-size:11px;color:var(--mut)}
-.up{color:var(--green)!important}.down{color:var(--red)!important}
+/* animated backdrop */
+body::before{content:"";position:fixed;inset:-20%;z-index:-1;pointer-events:none;
+  background:radial-gradient(40% 35% at 15% 10%,rgba(245,197,66,.10),transparent 70%),
+             radial-gradient(35% 30% at 85% 20%,rgba(61,155,255,.08),transparent 70%),
+             radial-gradient(40% 35% at 60% 95%,rgba(179,107,255,.07),transparent 70%);
+  animation:drift 26s ease-in-out infinite alternate}
+@keyframes drift{0%{transform:translate3d(0,0,0) rotate(0)}50%{transform:translate3d(3%,-2%,0) rotate(4deg)}100%{transform:translate3d(-3%,2%,0) rotate(-3deg)}}
+/* ---------- shell ---------- */
+aside{position:fixed;inset:0 auto 0 0;width:var(--side);z-index:30;display:flex;flex-direction:column;gap:6px;padding:18px 14px;
+  background:rgba(9,12,19,.86);backdrop-filter:blur(14px);border-right:1px solid var(--line)}
+.brand{display:flex;align-items:center;gap:11px;padding:0 6px 16px}
+.brand b{display:block;font-size:16px;color:var(--gold);letter-spacing:.3px}.brand small{color:var(--mut);font-size:11.5px}
+.logo{display:inline-grid;place-items:center;width:40px;height:40px;border-radius:12px;font:800 14px/1 ui-monospace,Consolas,monospace;color:#161100;
+  background:linear-gradient(135deg,var(--gold2),var(--gold));box-shadow:0 0 0 0 rgba(245,197,66,.5);animation:logo 3.2s ease-in-out infinite}
+@keyframes logo{50%{box-shadow:0 0 22px 2px rgba(245,197,66,.35)}}
+nav{display:flex;flex-direction:column;gap:3px;position:relative}
+nav button{all:unset;cursor:pointer;display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:11px;color:var(--mut);font-weight:600;
+  position:relative;z-index:1;transition:color .25s,background .25s}
+nav button:hover{color:var(--text);background:rgba(255,255,255,.035)}
+nav button.on{color:#161100}
+nav .ic{display:inline-grid;place-items:center;width:30px;height:22px;border-radius:6px;font:800 10px ui-monospace,Consolas,monospace;background:#1b2436;color:#b8c3d8;transition:background .25s,color .25s}
+nav button.on .ic{background:rgba(0,0,0,.18);color:#161100}
+nav .cnt{margin-left:auto;min-width:20px;padding:0 6px;border-radius:99px;font:800 11px/18px ui-monospace,Consolas,monospace;text-align:center;background:var(--gold);color:#161100}
+nav button.on .cnt{background:#161100;color:var(--gold)}
+nav .cnt:empty{display:none}
+nav .busy{margin-left:auto;width:8px;height:8px;border-radius:50%;background:var(--amber);box-shadow:0 0 10px var(--amber);animation:blink 1s infinite}
+#navInk{position:absolute;left:0;right:0;top:0;height:42px;border-radius:11px;z-index:0;background:linear-gradient(135deg,var(--gold2),var(--gold));
+  box-shadow:0 6px 24px rgba(245,197,66,.25);transition:transform .45s var(--ease),height .3s}
+.sidefoot{margin-top:auto;padding:12px;border-radius:12px;background:var(--panel2);border:1px solid var(--line);font-size:12px;color:var(--mut)}
+.sidefoot b{color:var(--text)}
+.content{margin-left:var(--side);min-height:100vh}
+header{position:sticky;top:0;z-index:20;display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:12px 24px;
+  background:rgba(6,8,13,.8);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
 .symtabs{display:flex;gap:6px}.symtabs button{padding:7px 12px;font-size:13px}
-.pills{display:flex;flex-wrap:wrap;gap:6px;flex:1;min-width:0}.pill{padding:4px 10px;border-radius:99px;background:var(--panel2);border:1px solid var(--line);font-size:12px}
+.ticker{display:flex;align-items:baseline;gap:8px;padding:6px 14px;border-radius:12px;background:var(--panel2);border:1px solid var(--line);transition:box-shadow .5s,border-color .5s}
+.ticker .px{font:700 22px/1 ui-monospace,Consolas,monospace;transition:color .4s}.ticker .src{font-size:11px;color:var(--mut)}
+.ticker.fu{border-color:var(--green);box-shadow:0 0 18px rgba(34,199,122,.25)}.ticker.fd{border-color:var(--red);box-shadow:0 0 18px rgba(240,79,90,.25)}
+.pills{display:flex;flex-wrap:wrap;gap:6px;flex:1;min-width:0}
+.pill{padding:4px 10px;border-radius:99px;background:var(--panel2);border:1px solid var(--line);font-size:12px;animation:pop .35s var(--ease)}
+.acts{display:flex;gap:8px}
+main{padding:20px 24px 40px}
+.view{display:none;gap:18px}
+.view.on{display:grid;animation:viewIn .45s var(--ease)}
+@keyframes viewIn{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+.vtitle{display:flex;align-items:end;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.vtitle h1{margin:0;font-size:22px;letter-spacing:.2px}.vtitle p{margin:2px 0 0;color:var(--mut);font-size:13px}
+.row{display:grid;gap:18px;grid-template-columns:minmax(0,1fr) 380px}
+.grid2{display:grid;gap:18px;grid-template-columns:repeat(auto-fit,minmax(340px,1fr))}
+@media(max-width:1250px){.row{grid-template-columns:minmax(0,1fr)}}
+section{background:var(--panel);backdrop-filter:blur(6px);border:1px solid var(--line);border-radius:var(--r);padding:16px;min-width:0;overflow:hidden;
+  transition:border-color .3s,transform .3s var(--ease),box-shadow .3s}
+section:hover{border-color:var(--line2);box-shadow:0 10px 40px rgba(0,0,0,.25)}
+.view.on section{animation:rise .55s var(--ease) both}
+.view.on section:nth-of-type(2){animation-delay:.05s}.view.on section:nth-of-type(3){animation-delay:.1s}.view.on section:nth-of-type(4){animation-delay:.15s}
+@keyframes rise{from{opacity:0;transform:translateY(18px) scale(.99)}to{opacity:1;transform:none}}
+@keyframes pop{from{opacity:0;transform:scale(.9)}to{opacity:1;transform:none}}
+section h2{margin:0 0 12px;font-size:12px;text-transform:uppercase;letter-spacing:1.2px;color:var(--mut);display:flex;justify-content:space-between;align-items:center;gap:8px;
+  border-left:3px solid var(--gold);padding-left:9px}
+button{background:linear-gradient(180deg,var(--gold2),var(--gold));color:#161100;border:0;border-radius:10px;padding:8px 14px;font-weight:800;cursor:pointer;
+  transition:transform .18s var(--ease),box-shadow .25s,filter .2s}
+button:hover{transform:translateY(-1px);box-shadow:0 6px 18px rgba(245,197,66,.25)}button:active{transform:translateY(1px) scale(.98)}
+button.alt{background:var(--panel2);color:var(--text);border:1px solid var(--line);font-weight:600}button.alt:hover{box-shadow:0 6px 18px rgba(0,0,0,.35);border-color:var(--line2)}
+button:disabled{opacity:.5;cursor:wait;transform:none}
+.mini-btn{padding:3px 10px;font-size:11.5px}
 .ok{color:var(--green)}.bad{color:var(--red)}.warn{color:var(--amber)}
+.up{color:var(--green)!important}.down{color:var(--red)!important}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);margin-right:5px;box-shadow:0 0 8px var(--green);animation:blink 1.6s infinite}
 @keyframes blink{50%{opacity:.35}}
-button{background:linear-gradient(180deg,var(--gold2),var(--gold));color:#161100;border:0;border-radius:9px;padding:8px 14px;font-weight:800;cursor:pointer}
-button.alt{background:var(--panel2);color:var(--text);border:1px solid var(--line);font-weight:600}button:disabled{opacity:.5;cursor:wait}
-main{padding:16px 20px;display:grid;gap:16px}
-.row{display:grid;gap:16px;grid-template-columns:minmax(0,1fr) 380px}
-@media(max-width:1200px){.row{grid-template-columns:minmax(0,1fr)}}
-section{background:linear-gradient(180deg,var(--panel),#0c1119);border:1px solid var(--line);border-radius:14px;padding:14px;min-width:0;overflow:hidden}
-section h2{margin:0 0 10px;font-size:12px;text-transform:uppercase;letter-spacing:1.2px;color:var(--mut);display:flex;justify-content:space-between;align-items:center;gap:8px}
-.grid3{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+.spin{display:inline-block;width:11px;height:11px;border:2px solid rgba(255,171,26,.3);border-top-color:var(--amber);border-radius:50%;animation:spin .8s linear infinite;vertical-align:-1px;margin-right:6px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.role{color:var(--mut);font-size:12px}
+.empty{color:var(--mut);font-style:italic}
+.skel{height:14px;border-radius:6px;margin:8px 0;background:linear-gradient(90deg,#141b28 0%,#1e2738 50%,#141b28 100%);background-size:200% 100%;animation:shim 1.3s linear infinite}
+@keyframes shim{to{background-position:-200% 0}}
+table{width:100%;border-collapse:collapse;font-size:12.5px}td,th{padding:7px 6px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{color:var(--mut);font-weight:600}
+tr{transition:background .2s}tbody tr:hover td,table tr:hover td{background:rgba(255,255,255,.02)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:13px}.kv span:nth-child(odd){color:var(--mut)}
+.banner{padding:12px 16px;border-radius:12px;border:1px solid #6b2a2f;background:#2a1216;color:#ffd0d4;font-size:14px;animation:rise .5s var(--ease)}
+.banner b{color:#fff}.banner.warnb{border-color:#6b5a1a;background:#241d0c;color:#ffe3a3}
+/* KPIs */
+.kpis{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(160px,1fr))}
+.kpi{position:relative;overflow:hidden;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 15px;animation:rise .5s var(--ease) both;transition:transform .25s var(--ease),border-color .25s}
+.kpi:hover{transform:translateY(-3px);border-color:var(--line2)}
+.kpi::after{content:"";position:absolute;inset:0;background:linear-gradient(110deg,transparent 30%,rgba(255,255,255,.05) 50%,transparent 70%);transform:translateX(-100%);animation:sheen 6s ease-in-out infinite}
+@keyframes sheen{0%,70%{transform:translateX(-100%)}100%{transform:translateX(100%)}}
+.kpi:nth-child(2){animation-delay:.04s}.kpi:nth-child(3){animation-delay:.08s}.kpi:nth-child(4){animation-delay:.12s}.kpi:nth-child(5){animation-delay:.16s}.kpi:nth-child(6){animation-delay:.2s}
+.kl{font-size:10.5px;text-transform:uppercase;letter-spacing:1.2px;color:var(--mut)}.kv2{font:700 21px/1.3 ui-monospace,Consolas,monospace;margin-top:2px;text-transform:capitalize}.ks{font-size:11.5px;color:var(--mut)}
 /* network */
 #net{width:100%;height:auto;display:block}
-.node rect{fill:#141b28;stroke:#2a3447;stroke-width:1.2;rx:10;transition:fill .3s,stroke .3s}
+.node rect{fill:#141b28;stroke:#2a3447;stroke-width:1.2;transition:fill .4s,stroke .4s}
 .node text{fill:var(--text);font-size:12px}.node .sub{fill:var(--mut);font-size:10px}
 .node.thinking rect{stroke:var(--amber);fill:#2a2110;animation:glow 1s infinite}
 .node.waiting rect{stroke:var(--blue);fill:#101e33}
 .node.TAKE rect{stroke:var(--green);fill:#0f2a1f}.node.NEUTRAL rect{stroke:#6b7894;fill:#161d2b}.node.skipped rect{stroke:#2a3447;fill:#10151f;opacity:.7}.node.SKIP rect{stroke:var(--red);fill:#2b1217}.node.error rect{stroke:var(--red);fill:#3a0f14}
 .node.sel rect{stroke:var(--gold);stroke-width:2.4}
-.node{cursor:pointer}
+.node{cursor:pointer;transition:opacity .3s}.node:hover rect{stroke:var(--gold2)}
 @keyframes glow{50%{fill:#3a2c10}}
-.edge{stroke:#1d2636;stroke-width:1.1;fill:none}.edge.used{stroke-width:1.8;opacity:.85}.edge.u-take{stroke:#1f9e62}.edge.u-skip{stroke:#b8404b}.edge.u-neutral,.edge.u-sent{stroke:#5d6882}.edge.u-challenge,.edge.u-reply{stroke:#c98a1a;stroke-dasharray:5 4}.edge.hot{stroke:var(--gold);stroke-width:2;opacity:.9;transition:stroke .6s}
+.edge{stroke:#1d2636;stroke-width:1.1;fill:none;transition:stroke .5s,stroke-width .3s}.edge.used{stroke-width:1.8;opacity:.9;stroke-dasharray:6 5;animation:flow 1.2s linear infinite}
+.edge.u-take{stroke:#1f9e62}.edge.u-skip{stroke:#b8404b}.edge.u-neutral,.edge.u-sent{stroke:#5d6882}.edge.u-challenge,.edge.u-reply{stroke:#c98a1a}.edge.hot{stroke:var(--gold);stroke-width:2.2;opacity:1}
+@keyframes flow{to{stroke-dashoffset:-22}}
 .pulse{fill:var(--gold2);filter:drop-shadow(0 0 6px var(--gold))}.pulse.back{fill:#ff8a96;filter:drop-shadow(0 0 6px #f04f5a)}
 .stage{fill:var(--mut);font-size:11px;letter-spacing:1px;text-transform:uppercase}
 .desklabel{fill:#aab4c8;font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase}.kbadge{font-size:9px;font-weight:800}
-#detail .nm{font-size:16px;font-weight:800}#detail .role{color:var(--mut);font-size:12px;margin:2px 0 8px}
+.flabel{font-size:11px;fill:#fff3c4;paint-order:stroke;stroke:#070a10;stroke-width:4px;pointer-events:none}
+.codet{fill:#e8eefc;font:700 9.5px ui-monospace,Consolas,monospace;letter-spacing:.3px}
+.legend2{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;font-size:11.5px;color:var(--mut);margin:-4px 0 6px}
+.lg{display:inline-block;width:18px;height:3px;border-radius:2px;margin-right:-6px}.lg.u-take{background:#1f9e62}.lg.u-skip{background:#b8404b}.lg.u-neutral{background:#5d6882}.lg.u-challenge{background:#c98a1a}
+#detail .nm{font-size:17px;font-weight:800}#detail .role{margin:2px 0 8px}
+#detailBody{animation:rise .4s var(--ease)}
 .badge{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;background:#263045;color:var(--mut);font-weight:800;text-transform:uppercase}
 .b-TAKE{background:var(--green);color:#03170d}.b-NEUTRAL{background:#39445c;color:#dde3ee}.b-skipped{background:#1e2533;color:var(--mut)}.b-SKIP{background:#5a1f29;color:#ffc0c8}.b-thinking{background:var(--amber);color:#1a1000}.b-waiting{background:var(--blue);color:#fff}.b-error{background:var(--red);color:#fff}
-.bar{height:6px;background:#222b3c;border-radius:4px;overflow:hidden;margin:8px 0}.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--gold),var(--gold2))}
+.bar{height:6px;background:#222b3c;border-radius:4px;overflow:hidden;margin:8px 0}.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--gold),var(--gold2));transform-origin:left;animation:grow .8s var(--ease)}
+@keyframes grow{from{transform:scaleX(0)}}
 ul.pts{margin:6px 0 0;padding-left:18px;color:var(--mut)}
-.mini{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;margin-top:12px}
-.mini div{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:12px;cursor:pointer}
-/* chart */
-.tabs{display:flex;flex-wrap:wrap;gap:6px}.tabs button{padding:5px 10px;font-size:12px}
-.toggles{display:flex;flex-wrap:wrap;gap:10px;font-size:12px;color:var(--mut)}.toggles label{cursor:pointer}
-#chartWrap{position:relative;height:520px;margin-top:10px;border-radius:10px;overflow:hidden;border:1px solid var(--line)}
-#chart{position:absolute;inset:0}#overlay{position:absolute;inset:0;pointer-events:none;z-index:3}
-.legend{position:absolute;left:10px;top:8px;z-index:4;font-size:12px;color:var(--mut);background:rgba(7,10,16,.7);padding:4px 8px;border-radius:6px}
-/* feed */
-.log{height:600px;overflow:auto;font:12px/1.55 ui-monospace,Consolas,monospace}
-.log div{padding:3px 2px;border-bottom:1px dashed #19212f;animation:fade .5s}@keyframes fade{from{background:#2a2410}to{background:transparent}}
-.log .t{color:#5d6882;margin-right:6px}.k-take{color:var(--green)}.k-skip{color:#ff9aa8}.k-error{color:var(--red)}.k-signal{color:var(--gold);font-weight:700}
-table{width:100%;border-collapse:collapse;font-size:12.5px}td,th{padding:6px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}th{color:var(--mut);font-weight:600}
-.kv{display:grid;grid-template-columns:auto 1fr;gap:5px 12px;font-size:13px}.kv span:nth-child(odd){color:var(--mut)}
-.empty{color:var(--mut);font-style:italic}
-.chat{max-height:620px;overflow:auto;display:flex;flex-direction:column;gap:6px}
-.msg{display:grid;grid-template-columns:78px 250px 1fr;gap:10px;align-items:start;padding:7px 10px;border-radius:10px;
-background:var(--panel2);border:1px solid var(--line);font-size:13px;animation:fade .6s}
-.msg .who{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.msg .t{color:#5d6882;font:12px ui-monospace,Consolas,monospace}
-.msg.challenge{border-color:#7a3340;background:#1f1116}.msg.reply{border-color:#2d5a7a;background:#0f1a24}.msg.decision{border-color:#6b5a1a;background:#1d190d}
-.kind{font-size:10px;padding:1px 6px;border-radius:99px;margin-left:6px;background:#263045;color:var(--mut);text-transform:uppercase}
-.flabel{font-size:11px;fill:#fff3c4;paint-order:stroke;stroke:#070a10;stroke-width:4px;pointer-events:none}
-@media(max-width:800px){.msg{grid-template-columns:1fr}}
-.banner{padding:12px 16px;border-radius:12px;border:1px solid #6b2a2f;background:#2a1216;color:#ffd0d4;font-size:14px}
-.banner b{color:#fff}.banner.warnb{border-color:#6b5a1a;background:#241d0c;color:#ffe3a3}.news div{padding:5px 0;border-bottom:1px dashed #19212f;font-size:13px}
-/* brand, kpis, code badges */
-.logo{display:inline-grid;place-items:center;width:38px;height:38px;border-radius:10px;font:800 14px/1 ui-monospace,Consolas,monospace;color:#161100;background:linear-gradient(135deg,var(--gold2),var(--gold));letter-spacing:.5px}
-.tk{font:700 11px ui-monospace,Consolas,monospace;padding:1px 5px;border-radius:4px;background:rgba(0,0,0,.18)}
-.kpis{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
-.kpi{background:linear-gradient(180deg,var(--panel),#0c1119);border:1px solid var(--line);border-radius:12px;padding:10px 14px}
-.kl{font-size:10.5px;text-transform:uppercase;letter-spacing:1.2px;color:var(--mut)}.kv2{font:700 20px/1.3 ui-monospace,Consolas,monospace;margin-top:2px;text-transform:capitalize}.ks{font-size:11.5px;color:var(--mut)}
-.code{fill:#223049;stroke:none}.code.tech{fill:#16335a}.code.strategy{fill:#4a3a10}.code.macro{fill:#133d2b}
-.codet{fill:#e8eefc;font:700 9.5px ui-monospace,Consolas,monospace;letter-spacing:.3px}
 .codeb{display:inline-block;min-width:30px;text-align:center;font:700 10px/16px ui-monospace,Consolas,monospace;padding:0 5px;border-radius:4px;background:#223049;color:#e8eefc;vertical-align:1px}
 .codeb.tech{background:#16335a}.codeb.strategy{background:#4a3a10}.codeb.macro{background:#133d2b}
+.tk{font:700 11px ui-monospace,Consolas,monospace;padding:1px 5px;border-radius:4px;background:rgba(0,0,0,.18)}
 .sd{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:var(--mut)}.sd.ok{background:var(--green)}.sd.bad{background:var(--red)}
 .fl{display:inline-block;min-width:32px;font:700 10px ui-monospace,Consolas,monospace;color:var(--gold)}
-.imp{display:inline-block;font:700 9.5px/15px ui-monospace,Consolas,monospace;padding:0 5px;border-radius:4px;margin-right:4px}.imp.hi{background:#5a1f29;color:#ffc0c8}.imp.md{background:#4a3410;color:#ffd699}
-.vchip{display:inline-block;min-width:58px;font:700 9.5px/15px ui-monospace,Consolas,monospace;text-align:center;border-radius:4px;margin-right:6px}
-.v-agrees{background:#0f3a26;color:#6ff0ae}.v-against{background:#4a1a22;color:#ff9aa8}.v-neutral{background:#263045;color:var(--mut)}
-.bgroup.off{opacity:.55}
-section h2{border-left:3px solid var(--gold);padding-left:9px}
-/* detail / directory / board */
 .job{font-size:13px;margin:6px 0}.chips{font-size:12px;margin:6px 0;line-height:1.9}.chip{display:inline-block;background:#1b2436;border:1px solid var(--line);border-radius:99px;padding:0 8px;margin:0 4px 0 0;font-size:11px;color:#b8c3d8}
 .flowline{font-size:12px;color:var(--mut);margin:6px 0 8px;line-height:1.6}.lnk{color:var(--gold2);text-decoration:none}
-.dirwrap{max-height:560px;overflow:auto}.dir td{font-size:12px}.dir tr{cursor:pointer}.dir tr:hover td{background:#131a27}.selrow td{background:#1d190d!important}
-.jobc{max-width:280px;color:#b8c3d8}.dir th{position:sticky;top:0;background:var(--panel);z-index:1}
-.boardwrap{max-height:560px;overflow:auto}.bgroup{margin-bottom:10px}.bgt{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--gold);margin:4px 0}
-.brow{padding:5px 0;border-bottom:1px dashed #19212f;font-size:12.5px}.vchip{margin-right:4px}
+details.fold>summary{cursor:pointer;list-style:none;display:flex;justify-content:space-between;align-items:center;font-size:12px;text-transform:uppercase;letter-spacing:1.2px;color:var(--mut);border-left:3px solid var(--gold);padding-left:9px}
+details.fold>summary::after{content:"+";font:700 16px ui-monospace,monospace;color:var(--gold);transition:transform .3s}details.fold[open]>summary::after{transform:rotate(45deg)}
+details.fold[open]>div{animation:rise .4s var(--ease);margin-top:12px}
+.dirwrap{max-height:560px;overflow:auto}.agtable td{font-size:12px}.agtable tr{cursor:pointer}.selrow td{background:#1d190d!important}
+.jobc{max-width:280px;color:#b8c3d8}.agtable th{position:sticky;top:0;background:#111722;z-index:1}
+/* strategy board */
+.boardwrap{max-height:620px;overflow:auto}.bgroup{margin-bottom:10px}.bgroup.off{opacity:.55}.bgt{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--gold);margin:4px 0}
+.brow{padding:6px 0;border-bottom:1px dashed #19212f;font-size:12.5px}
+.vchip{display:inline-block;min-width:58px;font:700 9.5px/15px ui-monospace,Consolas,monospace;text-align:center;border-radius:4px;margin-right:6px}
+.v-agrees{background:#0f3a26;color:#6ff0ae}.v-against{background:#4a1a22;color:#ff9aa8}.v-neutral{background:#263045;color:var(--mut)}
+/* chart */
+.tabs{display:flex;flex-wrap:wrap;gap:6px}.tabs button{padding:5px 11px;font-size:12px}
+.toggles{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;color:var(--mut);align-items:center}.toggles label{cursor:pointer}
+#chartWrap{position:relative;height:clamp(420px,68vh,760px);margin-top:10px;border-radius:12px;overflow:hidden;border:1px solid var(--line)}
+#chart{position:absolute;inset:0}#overlay{position:absolute;inset:0;pointer-events:none;z-index:3}
+.legend{position:absolute;left:10px;top:8px;z-index:4;font-size:12px;color:var(--mut);background:rgba(7,10,16,.7);padding:4px 8px;border-radius:6px}
+/* feeds */
+.log{height:600px;overflow:auto;font:12px/1.55 ui-monospace,Consolas,monospace}
+.log div{padding:3px 2px;border-bottom:1px dashed #19212f;animation:fade .6s}@keyframes fade{from{background:#2a2410}to{background:transparent}}
+.log .t{color:#5d6882;margin-right:6px}.k-take{color:var(--green)}.k-skip{color:#ff9aa8}.k-error{color:var(--red)}.k-signal{color:var(--gold);font-weight:700}
+.news div{padding:6px 0;border-bottom:1px dashed #19212f;font-size:13px}
+.imp{display:inline-block;font:700 9.5px/15px ui-monospace,Consolas,monospace;padding:0 5px;border-radius:4px;margin-right:4px}.imp.hi{background:#5a1f29;color:#ffc0c8}.imp.md{background:#4a3410;color:#ffd699}
 .ncat{font-size:10px;padding:0 6px;border-radius:99px;background:#263045;color:var(--mut);margin-right:4px;text-transform:uppercase}
 .ncat.world{background:#3a1f12;color:#ffb38a}.ncat.macro{background:#12283a;color:#8cc8ff}.ncat.gold{background:#3a2c10;color:var(--gold2)}.ncat.crypto{background:#2a1a3a;color:#d9b3ff}
 /* signals */
-.sigwrap{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:14px}@media(max-width:1100px){.sigwrap{grid-template-columns:1fr}}
-.siggrid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(340px,1fr))}
-.sig{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:#0d1320;border-left:4px solid var(--mut)}
+.sigwrap{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:18px}@media(max-width:1150px){.sigwrap{grid-template-columns:1fr}}
+.siggrid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));align-content:start}
+.sig{position:relative;border:1px solid var(--line);border-radius:14px;padding:14px 16px;background:linear-gradient(180deg,#0f1624,#0b111c);border-left:4px solid var(--mut);
+  transition:transform .3s var(--ease),box-shadow .3s}
+.sig:hover{transform:translateY(-3px);box-shadow:0 14px 40px rgba(0,0,0,.4)}
+.sig.enter{animation:sigIn .8s var(--ease)}
+@keyframes sigIn{0%{opacity:0;transform:translateY(24px) scale(.96);box-shadow:0 0 0 0 rgba(245,197,66,.6)}60%{opacity:1;box-shadow:0 0 0 10px rgba(245,197,66,0)}100%{transform:none}}
 .sig.buy{border-left-color:var(--green)}.sig.sell{border-left-color:var(--red)}
 .sh{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.sh b{font-size:15px}
-.dir{font:800 11px ui-monospace,Consolas,monospace;padding:2px 8px;border-radius:5px}.buy .dir{background:#0f3a26;color:#6ff0ae}.sell .dir{background:#4a1a22;color:#ff9aa8}
+.dirb{font:800 11px ui-monospace,Consolas,monospace;padding:2px 8px;border-radius:5px}.buy .dirb{background:#0f3a26;color:#6ff0ae}.sell .dirb{background:#4a1a22;color:#ff9aa8}
 .grade{font:800 11px ui-monospace,Consolas,monospace;padding:2px 7px;border-radius:5px;background:#3a2c10;color:var(--gold2)}
 .stt{margin-left:auto;font:800 10.5px ui-monospace,Consolas,monospace;color:var(--gold)}
+.stt.live::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);margin-right:5px;box-shadow:0 0 8px var(--green);animation:blink 1.4s infinite}
 .hl{color:#c7cfdd;margin:4px 0 6px;font-style:italic}
 .lv{font:13px ui-monospace,Consolas,monospace;margin:4px 0}.lv td{padding:2px 6px;border:0}
-.track{position:relative;height:30px;margin:6px 4px 2px;border-top:2px solid #222b3c}
+.track{position:relative;height:30px;margin:8px 4px 2px;border-top:2px solid #222b3c}
 .mk{position:absolute;top:-6px;width:2px;height:10px;background:var(--mut);font-style:normal}.mk b{position:absolute;top:10px;left:-10px;font:700 9.5px ui-monospace,Consolas,monospace;color:var(--mut)}
 .mk.sl{background:var(--red)}.mk.sl b{color:var(--red)}.mk.tp{background:var(--green)}.mk.tp b{color:var(--green)}.mk.en{background:var(--blue)}.mk.en b{color:var(--blue)}
-.mk.px{background:var(--gold);height:14px;top:-8px}.mk.px b{color:var(--gold);top:-14px}
+.mk.px{background:var(--gold);height:14px;top:-8px;transition:left .8s var(--ease)}.mk.px b{color:var(--gold);top:-14px}
+.mk.px::after{content:"";position:absolute;left:-4px;top:3px;width:10px;height:10px;border-radius:50%;background:rgba(245,197,66,.35);animation:ping 1.6s infinite}
+@keyframes ping{from{transform:scale(.6);opacity:1}to{transform:scale(2.2);opacity:0}}
 .now{font-size:12.5px;margin:2px 0 6px}.sbar{display:grid;grid-template-columns:80px 1fr 40px;gap:8px;align-items:center;font-size:12px}.sbar .bar{margin:4px 0}
 .sig details{margin:6px 0;font-size:12.5px}.sig summary{cursor:pointer;color:var(--gold2)}
 .subh{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--mut);margin-bottom:6px}
-.sigfeed{max-height:260px;overflow:auto;font-size:12.5px}.fd{padding:4px 0;border-bottom:1px dashed #19212f}.fd .t{color:#5d6882;font:11px ui-monospace,Consolas,monospace}
-.fd.k-new b{color:var(--gold)}.fd.k-tp b{color:var(--green)}.fd.k-sl b{color:var(--red)}
+.sigfeed{max-height:320px;overflow:auto;font-size:12.5px}.fd{padding:5px 0;border-bottom:1px dashed #19212f;animation:slideIn .5s var(--ease)}.fd .t{color:#5d6882;font:11px ui-monospace,Consolas,monospace}
+@keyframes slideIn{from{opacity:0;transform:translateX(12px)}to{opacity:1;transform:none}}
+.fd.k-new b{color:var(--gold)}.fd.k-tp b{color:var(--green)}.fd.k-sl b{color:var(--red)}.fd.k-alert b,.fd.k-news b{color:var(--amber)}
+.lotline{margin:4px 0;font-size:12.5px;padding:5px 8px;border-radius:8px;background:#101a2a;border:1px solid #1d2c44}.lotline b{color:var(--gold2);font-family:ui-monospace,Consolas,monospace}
+.hero{display:grid;place-items:center;text-align:center;padding:36px 16px;border:1px dashed var(--line2);border-radius:14px;color:var(--mut)}
+.radar{position:relative;width:86px;height:86px;border-radius:50%;border:1px solid var(--line2);margin-bottom:14px;
+  background:repeating-radial-gradient(circle,transparent 0 14px,rgba(245,197,66,.07) 14px 15px)}
+.radar::before{content:"";position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 0deg,rgba(245,197,66,.45),transparent 30%);animation:spin 2.6s linear infinite}
 #toast{position:fixed;right:18px;bottom:18px;z-index:50;display:flex;flex-direction:column;gap:8px;max-width:420px}
-.toastmsg{background:#141b28;border:1px solid var(--gold);border-radius:10px;padding:10px 14px;font-size:13px;box-shadow:0 8px 30px rgba(0,0,0,.5);animation:fade .4s}
+.toastmsg{background:#141b28;border:1px solid var(--gold);border-radius:12px;padding:11px 15px;font-size:13px;box-shadow:0 12px 40px rgba(0,0,0,.55);animation:toastIn .5s var(--ease)}
+@keyframes toastIn{from{opacity:0;transform:translateX(40px)}to{opacity:1;transform:none}}
 .toastmsg.k-sl{border-color:var(--red)}.toastmsg.k-tp{border-color:var(--green)}
-/* workflow timeline */
-.phase{border:1px solid var(--line);border-radius:10px;overflow:hidden;flex-shrink:0}.chat>*{flex-shrink:0}
-.ph{display:flex;align-items:center;gap:10px;padding:7px 10px;background:#121a28;font-weight:700;font-size:13px}
+/* workflow */
+.chat{max-height:680px;overflow:auto;display:flex;flex-direction:column;gap:8px}.chat>*{flex-shrink:0}
+.phase{border:1px solid var(--line);border-radius:12px;overflow:hidden;animation:rise .45s var(--ease) both}
+.ph{display:flex;align-items:center;gap:10px;padding:8px 11px;background:#121a28;font-weight:700;font-size:13px}
 .pn{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--gold);color:#161100;font:800 12px ui-monospace,Consolas,monospace}
 .pt{margin-left:auto;font-weight:400;display:flex;gap:6px;align-items:center}
-.trow{display:grid;grid-template-columns:70px 330px 70px 1fr;gap:10px;align-items:start;padding:6px 10px;border-top:1px solid #172030;font-size:12.5px}
+.trow{display:grid;grid-template-columns:70px 330px 70px 1fr;gap:10px;align-items:start;padding:6px 11px;border-top:1px solid #172030;font-size:12.5px}
 .trow.sel{background:#1d190d}.trow .t{color:#5d6882;font:12px ui-monospace,Consolas,monospace}.trow .who{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .trow.wide .txt{grid-column:2/-1}.trow .arr{color:var(--gold)}.trow .txt{color:#c7cfdd}
 @media(max-width:900px){.trow{grid-template-columns:1fr}}
-.legend2{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;font-size:11.5px;color:var(--mut);margin:-4px 0 6px}
-.lg{display:inline-block;width:18px;height:3px;border-radius:2px;margin-right:-6px}.lg.u-take{background:#1f9e62}.lg.u-skip{background:#b8404b}.lg.u-neutral{background:#5d6882}.lg.u-challenge{background:#c98a1a}
-.mini-btn{padding:3px 10px;font-size:11.5px}
-/* explanation */
+/* explanation / live review */
 .explain{margin-top:10px;padding:10px 12px;border-radius:10px;background:#0d1320;border:1px solid var(--line);font-size:13px;line-height:1.5}
 .exp{margin-bottom:6px}.evid{margin:4px 0 6px;padding-left:18px}.evid .pro{color:#8ff0bf}.evid .con{color:#ffb0ba}
 .kvx{margin-top:4px;color:#b8c3d8}.kvx b{color:var(--gold);font-size:11px;text-transform:uppercase;letter-spacing:.8px;margin-right:6px}
-/* live review + model health */
-.stages{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin:10px 0}
-.stg{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px}
+.stages{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin:10px 0}
+.stg{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:9px;transition:border-color .3s,box-shadow .3s}
 .stg .n{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.8px}.stg .c{font:700 18px ui-monospace,Consolas,monospace}
-.stg.run{border-color:var(--amber);box-shadow:0 0 12px rgba(255,171,26,.25)}.stg.ok{border-color:var(--green)}.stg.err{border-color:var(--red)}
+.stg.run{border-color:var(--amber);box-shadow:0 0 16px rgba(255,171,26,.28);animation:breathe 1.4s ease-in-out infinite}.stg.ok{border-color:var(--green)}.stg.err{border-color:var(--red)}
+@keyframes breathe{50%{box-shadow:0 0 4px rgba(255,171,26,.1)}}
 .tally{display:flex;gap:14px;font-size:13px;flex-wrap:wrap}.tally b{font:700 16px ui-monospace,Consolas,monospace}
-.verdict{margin-top:10px;padding:10px;border-radius:10px;font-weight:800;text-align:center}
+.verdict{margin-top:10px;padding:11px;border-radius:12px;font-weight:800;text-align:center;animation:pop .45s var(--ease)}
 .verdict.take{background:#0f2a1f;border:1px solid var(--green);color:var(--green)}.verdict.skip{background:#2b1217;border:1px solid var(--red);color:#ff9aa8}
-.verdict.run{background:#2a2110;border:1px solid var(--amber);color:var(--amber)}
+.verdict.run{background:#2a2110;border:1px solid var(--amber);color:var(--amber);animation:breathe 1.4s ease-in-out infinite}
 .hb{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px}.hb.g{background:var(--green);box-shadow:0 0 6px var(--green)}.hb.r{background:var(--red)}
 .tag{font-size:10px;padding:1px 6px;border-radius:99px;background:#263045;color:var(--mut);text-transform:uppercase}.tag.lite{background:#123049;color:#8cc8ff}.tag.strong{background:#3a2c10;color:var(--gold2)}
-/* control center */
+/* settings */
 .form{display:flex;flex-wrap:wrap;gap:8px;align-items:end}.form label{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.8px}
-input[type=number],select{background:#0b111b;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:7px 9px;font:13px ui-monospace,Consolas,monospace;width:130px}
+input[type=number],select{background:#0b111b;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:8px 10px;font:13px ui-monospace,Consolas,monospace;width:140px;transition:border-color .2s,box-shadow .2s}
+input:focus,select:focus{outline:0;border-color:var(--gold);box-shadow:0 0 0 3px rgba(245,197,66,.15)}
 select{width:auto}.msgline{font-size:12px;margin-top:6px;min-height:16px}
 .onoff{font:800 10px ui-monospace,Consolas,monospace;padding:2px 7px;border-radius:5px}.onoff.on{background:#0f3a26;color:#6ff0ae}.onoff.off{background:#4a1a22;color:#ff9aa8}
-.eq{width:100%;height:150px;display:block;margin:6px 0 4px;background:#0a0e16;border:1px solid var(--line);border-radius:10px}
-.aiview{white-space:pre-wrap;font-size:13.5px;line-height:1.55;margin-top:8px;padding:10px 12px;border-radius:10px;background:#0d1320;border:1px solid var(--line);min-height:60px}
-.lotline{margin:4px 0;font-size:12.5px;padding:5px 8px;border-radius:8px;background:#101a2a;border:1px solid #1d2c44}.lotline b{color:var(--gold2);font-family:ui-monospace,Consolas,monospace}
+.eq{width:100%;height:190px;display:block;margin:6px 0 10px;background:#0a0e16;border:1px solid var(--line);border-radius:12px}
+.eq polyline{stroke-dasharray:2000;stroke-dashoffset:2000;animation:draw 1.6s var(--ease) forwards}
+@keyframes draw{to{stroke-dashoffset:0}}
+.aiview{white-space:pre-wrap;font-size:14px;line-height:1.6;margin-top:8px;padding:12px 14px;border-radius:12px;background:#0d1320;border:1px solid var(--line);min-height:70px}
+/* mobile */
+@media(max-width:900px){
+  aside{inset:auto 0 0 0;width:auto;flex-direction:row;padding:6px;border-right:0;border-top:1px solid var(--line)}
+  .brand,.sidefoot,#navInk{display:none}
+  nav{flex-direction:row;overflow-x:auto;width:100%}nav button{padding:8px 10px;font-size:12px;flex-direction:column;gap:3px}
+  nav button.on{background:var(--gold)}
+  .content{margin-left:0;padding-bottom:70px}header,main{padding-left:16px;padding-right:16px}
+  header{gap:8px;padding-top:10px;padding-bottom:10px}.ticker{flex:1}.ticker .px{font-size:19px}
+  .pills{order:3;flex-basis:100%;flex-wrap:nowrap;overflow-x:auto}.pill{white-space:nowrap}
+  .acts{order:2;width:100%}.acts button{flex:1}
+  .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.stages{grid-template-columns:repeat(3,1fr)}
+  .siggrid{grid-template-columns:1fr}nav .ic{display:none}
+}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 </style>
 </head>
 <body>
+<aside>
+  <div class="brand"><span class="logo">AU</span><div><b>AI Control Room</b><small>Gold &amp; Bitcoin · 26 agents</small></div></div>
+  <nav id="nav">
+    <div id="navInk"></div>
+    <button data-v="signals"><span class="ic">SIG</span>Signals<span class="cnt" id="navSig"></span></button>
+    <button data-v="chart"><span class="ic">CH</span>Live chart</button>
+    <button data-v="desk"><span class="ic">AI</span>AI desk<span id="navDesk"></span></button>
+    <button data-v="lab"><span class="ic">LAB</span>Strategy lab</button>
+    <button data-v="perf"><span class="ic">PNL</span>Performance</button>
+    <button data-v="market"><span class="ic">MKT</span>Market &amp; news</button>
+    <button data-v="settings"><span class="ic">SET</span>Settings</button>
+  </nav>
+  <div class="sidefoot" id="sideStatus"><div class="skel"></div><div class="skel" style="width:60%"></div></div>
+</aside>
+<div class="content">
 <header>
-  <div class="brand"><span class="logo">AU</span><div><b>AI Control Room</b><br><small>Gold &amp; Bitcoin · 26-agent desk · local only</small></div></div>
   <div class="symtabs" id="symtabs"></div>
-  <div class="ticker"><span class="px" id="px">—</span><span class="src" id="pxsrc">waiting for data</span></div>
+  <div class="ticker" id="ticker"><span class="px" id="px">—</span><span class="src" id="pxsrc">waiting for data</span></div>
   <div class="pills" id="pills"></div>
-  <div style="display:flex;gap:8px">
+  <div class="acts">
     <button id="scanBtn" onclick="act('scan')">Scan now</button>
-    <button id="practiceBtn" onclick="act('practice')" title="Run the whole 26-agent desk on live data now – no signal is sent">Practice AI review</button>
-    <button class="alt" id="pingBtn" onclick="act('ping')">Test agents</button>
+    <button class="alt" id="practiceBtn" onclick="act('practice')" title="Run the whole 26-agent desk on live data now – nothing is published">Practice AI review</button>
   </div>
 </header>
 <main>
   <div id="banner"></div>
-  <div class="kpis" id="kpis"></div>
-  <section id="signalsSec"><h2><span>Signals – live trade ideas from the AI desk</span>
-      <span><span id="sigCount" class="role"></span> <button class="alt mini-btn" id="alertBtn" onclick="enableAlerts()">Enable alerts + sound</button></span></h2>
-    <div id="toast"></div>
-    <div class="sigwrap"><div id="sigOpen" class="siggrid"></div>
-      <div class="sigside"><div class="subh">Updates</div><div id="sigFeed" class="sigfeed"></div>
-        <div class="subh" style="margin-top:12px">Finished</div><div id="sigClosed"></div></div></div>
-  </section>
-  <div class="row">
-    <section><h2><span>Agent network – how information flows</span><span><span id="phase"></span> <button class="alt mini-btn" id="replayBtn" onclick="replay()">Replay last review</button></span></h2>
-      <div class="legend2"><span class="lg u-take"></span>TAKE <span class="lg u-skip"></span>SKIP <span class="lg u-neutral"></span>NEUTRAL <span class="lg u-challenge"></span>challenge / reply <span class="role">– hover a line to read the message</span></div>
-      <svg id="net" viewBox="0 0 1400 940"></svg>
+  <div id="toast"></div>
+
+  <div class="view" data-view="signals">
+    <div class="kpis" id="kpis"></div>
+    <section id="signalsSec"><h2><span>Signals – live trade ideas from the AI desk</span>
+        <span><span id="sigCount" class="role"></span> <button class="alt mini-btn" id="alertBtn" onclick="enableAlerts()">Enable alerts + sound</button></span></h2>
+      <div class="sigwrap"><div id="sigOpen" class="siggrid"></div>
+        <div><div class="subh">Updates</div><div id="sigFeed" class="sigfeed"></div>
+          <div class="subh" style="margin-top:14px">Finished</div><div id="sigClosed"></div></div></div>
     </section>
-    <section id="detail"><h2>Agent details</h2><div id="detailBody" class="empty">Click any agent in the network.</div>
-      <div class="mini" id="mini"></div></section>
   </div>
-  <section><h2><span>Workflow – every hand-over of the last review, step by step</span>
-      <span class="toggles"><label><input type="checkbox" id="onlySel"> only the selected agent</label></span></h2>
-    <div id="chat" class="chat"></div></section>
-  <div class="row">
-    <section><h2><span>Agent directory – every agent, its only job, its data, who it talks to</span><span class="role">click a row</span></h2>
-      <div class="dirwrap" id="directory"></div></section>
-    <section><h2><span>Strategy board</span><span id="boardSum"></span></h2><div class="boardwrap" id="board"></div></section>
-  </div>
-  <div class="row">
-    <section><h2><span>Live chart</span>
-        <span class="tabs" id="tabs"></span></h2>
+
+  <div class="view" data-view="chart">
+    <section><h2><span>Live chart</span><span class="tabs" id="tabs"></span></h2>
       <div class="toggles">
-        <button class="alt" style="padding:3px 10px;font-size:12px" onclick="resetView()">Reset view</button>
+        <button class="alt mini-btn" onclick="resetView()">Reset view</button>
         <label><input type="checkbox" data-o="zones" checked> OB / Breaker / FVG</label>
         <label><input type="checkbox" data-o="levels" checked> Key levels</label>
         <label><input type="checkbox" data-o="liq" checked> Liquidity</label>
         <label><input type="checkbox" data-o="bubbles" checked> Volume bubbles</label>
         <label><input type="checkbox" data-o="profile" checked> Volume profile</label>
-        <label><input type="checkbox" data-o="trades" checked> Open trades</label>
+        <label><input type="checkbox" data-o="trades" checked> Signals</label>
       </div>
       <div id="chartWrap"><div id="chart"></div><canvas id="overlay"></canvas><div class="legend" id="legend"></div></div>
     </section>
-    <section><h2>Live activity</h2><div class="log" id="log"></div></section>
+    <section><h2><span>Live activity</span><span class="role">engine, agents, trades</span></h2><div class="log" id="log" style="height:320px"></div></section>
   </div>
-  <div class="grid3">
-    <section><h2><span>Account &amp; lot size</span><span class="role">saved on this PC</span></h2>
-      <div class="form"><label>Balance (USD)<input type="number" id="accBal" min="0" step="100" placeholder="e.g. 1000"></label>
-        <label>Risk per trade %<input type="number" id="accRisk" min="0.1" max="10" step="0.1" value="1"></label>
-        <button id="accSave" onclick="saveAccount()">Save</button></div>
-      <div class="msgline" id="accMsg"></div>
-      <div class="role">Every open signal then shows the exact lot size for this balance and risk (gold: 1 lot = 100 oz, bitcoin: 1 lot = 1 BTC).</div></section>
-    <section><h2><span>Signal styles</span><span class="role">switch on / off without restarting</span></h2><div id="styles"></div></section>
-    <section><h2><span>AI market view</span><button class="alt mini-btn" id="viewBtn" onclick="marketView()">Ask the AI now</button></h2>
-      <div class="role" id="viewMeta">A plain-language read of the current chart by the AI analyst (in your language). Updates at most every 10 minutes.</div>
-      <div class="aiview" id="aiview"><span class="empty">Press "Ask the AI now".</span></div></section>
+
+  <div class="view" data-view="desk">
+    <div class="row">
+      <section><h2><span>Live review – stage by stage</span><span id="rvTimer"></span></h2><div id="live_review"></div></section>
+      <section id="detail"><h2>Agent details</h2><div id="detailBody">Click any agent in the network.</div></section>
+    </div>
+    <section><h2><span>Agent network – how information flows</span><span><span id="phase"></span> <button class="alt mini-btn" id="replayBtn" onclick="replay()">Replay last review</button></span></h2>
+      <div class="legend2"><span class="lg u-take"></span>TAKE <span class="lg u-skip"></span>SKIP <span class="lg u-neutral"></span>NEUTRAL <span class="lg u-challenge"></span>challenge / reply <span class="role">– hover a line to read the message</span></div>
+      <svg id="net" viewBox="0 0 1400 940"></svg>
+    </section>
+    <section><h2><span>Workflow – every hand-over of the last review</span>
+        <span class="toggles"><label><input type="checkbox" id="onlySel"> only the selected agent</label></span></h2>
+      <div id="chat" class="chat"></div></section>
+    <section><h2>Last AI decisions</h2><div id="reviews"></div></section>
+    <section><details class="fold"><summary>Agent directory – all 26 agents, their job, data, key and record</summary>
+      <div class="dirwrap" id="directory"></div></details></section>
   </div>
-  <div class="row">
+
+  <div class="view" data-view="lab">
     <section><h2><span>Strategy lab – backtest &amp; optimizer on real history</span><span id="labState"></span></h2>
       <div class="form"><label>Style<select id="labStyle"><option value="scalp">Scalp</option><option value="intraday" selected>Intraday</option><option value="swing">Swing</option></select></label>
-        <button id="btBtn" onclick="lab('backtest')">Backtest</button><button class="alt" id="optBtn" onclick="lab('optimize')">Optimize settings</button>
-        <span class="role">Runs the SMC engine candle by candle on the selected market's history (no look-ahead). Takes 1–6 minutes and uses Twelve Data credits for gold.</span></div>
-      <div id="labOut" style="margin-top:10px"></div></section>
-    <section><h2><span>Performance</span><span id="perfSum"></span></h2>
+        <button id="btBtn" onclick="lab('backtest')">Backtest</button><button class="alt" id="optBtn" onclick="lab('optimize')">Optimize settings</button></div>
+      <div class="role" style="margin-top:6px">Runs the SMC engine candle by candle on the selected market's history (no look-ahead). Takes 1–6 minutes and uses Twelve Data credits for gold.</div>
+      <div id="labOut" style="margin-top:12px"></div></section>
+    <section><h2><span>Strategy board – 17 strategies on the last setup</span><span id="boardSum"></span></h2><div class="boardwrap" id="board"></div></section>
+  </div>
+
+  <div class="view" data-view="perf">
+    <section><h2><span>Equity curve (R)</span><span id="perfSum"></span></h2>
       <svg class="eq" id="equity" viewBox="0 0 400 150" preserveAspectRatio="none"></svg>
-      <div class="kv" id="perf"></div><div id="perfBy" style="margin-top:8px"></div></section>
+      <div class="grid2"><div class="kv" id="perf"></div><div id="perfBy"></div></div></section>
   </div>
-  <div class="grid3">
-    <section><h2><span>Live review – stage by stage</span><span id="rvTimer"></span></h2><div id="live_review"></div></section>
-    <section style="grid-column:span 2"><h2><span>API keys &amp; AI models</span><span id="keysSum"></span></h2><div id="keys"></div></section>
-  </div>
-  <div class="grid3">
-    <section><h2>Last AI decisions</h2><div id="reviews"></div></section>
+
+  <div class="view" data-view="market">
+    <div class="grid2">
+      <section><h2>Market structure</h2><div id="market"></div></section>
+      <section><h2><span>AI market view</span><button class="alt mini-btn" id="viewBtn" onclick="marketView()">Ask the AI now</button></h2>
+        <div class="role" id="viewMeta"></div><div class="aiview" id="aiview"></div></section>
+    </div>
     <section><h2>News &amp; calendar</h2><div id="news" class="news"></div></section>
-    <section><h2>Market structure</h2><div id="market"></div></section>
+  </div>
+
+  <div class="view" data-view="settings">
+    <div class="grid2">
+      <section><h2><span>Account &amp; lot size</span><span class="role">saved on this PC</span></h2>
+        <div class="form"><label>Balance (USD)<input type="number" id="accBal" min="0" step="100" placeholder="e.g. 1000"></label>
+          <label>Risk per trade %<input type="number" id="accRisk" min="0.1" max="10" step="0.1" value="1"></label>
+          <button id="accSave" onclick="saveAccount()">Save</button></div>
+        <div class="msgline" id="accMsg"></div>
+        <div class="role">Every open signal then shows the exact lot size (gold: 1 lot = 100 oz, bitcoin: 1 lot = 1 BTC).</div></section>
+      <section><h2><span>Signal styles</span><span class="role">no restart needed</span></h2><div id="styles"></div></section>
+    </div>
+    <section><h2><span>API keys &amp; AI models</span><span><span id="keysSum"></span> <button class="alt mini-btn" id="pingBtn" onclick="act('ping')">Test agents</button></span></h2><div id="keys"></div></section>
     <section><h2>System &amp; data</h2><div class="kv" id="system"></div></section>
   </div>
 </main>
+</div>
 <script>
 const $ = id => document.getElementById(id);
 // Only touch the DOM when a panel really changed: no flicker, scroll position and text selection survive.
@@ -362,6 +471,7 @@ function edgeFor(f){
   return e ? [e, back] : [null, false];
 }
 function flyOne(f, dur){
+  if (!net.getBoundingClientRect().width) return;  // AI desk page not open
   const [e, back] = edgeFor(f); if (!e) return;
   e.path.classList.add("hot"); setTimeout(() => e.path.classList.remove("hot"), dur + 300);
   const len = e.path.getTotalLength(), dot = el("circle", {r: 5, class: "pulse" + (back ? " back" : "")}); const t0 = performance.now();
@@ -463,8 +573,6 @@ function renderDetail(agents){
       ${(a.points||[]).length ? `<ul class="pts">${a.points.map(p => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
       <div class="role" style="margin-top:8px">${[a.model || a.slot, a.seconds != null ? a.seconds + "s" : "", a.at ? a.at + " UTC" : ""].filter(Boolean).map(esc).join(" · ")}</div>`;
   }
-  H.mini = agents.map(x => `<div onclick="selected='${x.key}';render()"><span class="codeb ${x.desk || ""}">${esc(x.icon)}</span> ${esc(x.name.split(" ")[0])}
-     <span class="badge b-${x.status === "done" && x.vote ? x.vote : x.status}" style="float:right">${x.status === "done" && x.vote ? x.vote : x.status}</span></div>`).join("");
 }
 function renderDirectory(s){
   const desks = s.desks || {};
@@ -477,7 +585,7 @@ function renderDirectory(s){
       <td><span style="color:${KEYCOL[(a.home_key - 1) % 4]};font-weight:800">${esc(keyName(a.home_key))}</span><br><span class="role">${esc(a.model || a.slot || "")}</span></td>
       <td>${a.record && a.record.n ? `<b>${a.record.accuracy}%</b><br><span class="role">${a.record.n} signals · w ${a.record.weight.toFixed(2)}</span>` : '<span class="role">–</span>'}</td>
       <td><span class="badge b-${esc(badge)}">${esc(badge)}${a.score != null && a.status === "done" ? " " + a.score : ""}</span><br><span class="role">${a.seconds != null ? a.seconds + "s" : ""}</span></td></tr>`; }).join("");
-  H.directory = `<table class="dir"><tr><th>#</th><th>Agent</th><th>Only job</th><th>Data it receives</th><th>Sends to</th><th>Key · model</th><th>Record</th><th>Now</th></tr>${rows}</table>`;
+  H.directory = `<table class="agtable"><tr><th>#</th><th>Agent</th><th>Only job</th><th>Data it receives</th><th>Sends to</th><th>Key · model</th><th>Record</th><th>Now</th></tr>${rows}</table>`;
 }
 function renderBoard(b){
   if (!b) { H.board = '<div class="empty">The strategy board runs with every AI review (17 classic strategies vote on the setup).</div>'; H.boardSum = ""; return; }
@@ -499,7 +607,7 @@ const chart = LightweightCharts.createChart($("chart"), {autoSize: true,
   crosshair: {mode: 0}});
 const series = chart.addCandlestickSeries({upColor: "#22c77a", downColor: "#f04f5a", wickUpColor: "#22c77a",
   wickDownColor: "#f04f5a", borderVisible: false});
-let chartData = null, priceLines = [], liveBar = null;
+let chartShown = false, chartData = null, priceLines = [], liveBar = null;
 function clearLines(){ priceLines.forEach(l => series.removePriceLine(l)); priceLines = []; }
 function line(price, color, title, style, axis){ priceLines.push(series.createPriceLine({price, color, lineWidth: 1,
   lineStyle: style ?? LightweightCharts.LineStyle.Dashed, axisLabelVisible: axis ?? false, title})); }
@@ -517,7 +625,7 @@ async function loadChart(){
   const n = chartData.candles.length;
   // New TF / symbol: jump to the latest candles. Same chart refreshed after a scan: keep the user's zoom & scroll.
   if (keep) chart.timeScale().setVisibleLogicalRange(keep);
-  else chart.timeScale().setVisibleLogicalRange({from: Math.max(n - 140, 0), to: n + 8});
+  else { chart.timeScale().setVisibleLogicalRange({from: Math.max(n - 140, 0), to: n + 8}); chartShown = wrap.clientWidth > 0; }
   viewKey = want;
   $("legend").textContent = `${chartData.symbol} · ${TFS.find(t => t[0] === tf)[1]} · ${chartData.candles.length} real candles` +
     (chartData.market_open ? " · live" : " · market closed (no live updates)") + " · arrows = BOS/CHoCH · ● = sweep";
@@ -588,7 +696,9 @@ async function live(){
   if (!v || want !== sym) return;  // symbol switched while waiting
   const px = v.price, el_ = $("px");
   el_.textContent = px.toFixed(2); el_.classList.remove("up", "down");
-  if (lastPx !== null && px !== lastPx) el_.classList.add(px > lastPx ? "up" : "down");
+  if (lastPx !== null && px !== lastPx) { el_.classList.add(px > lastPx ? "up" : "down");
+    const tk = $("ticker"); tk.classList.remove("fu", "fd"); void tk.offsetWidth; tk.classList.add(px > lastPx ? "fu" : "fd");
+    clearTimeout(live.t); live.t = setTimeout(() => tk.classList.remove("fu", "fd"), 900); }
   lastPx = px; $("pxsrc").textContent = v.source + (v.offset != null ? ` (offset ${v.offset})` : "");
   if (liveBar && chartData && chartData.market_open) {
     const now = Math.floor(Date.now() / 1000), start = Math.floor(now / tfSec) * tfSec;
@@ -612,12 +722,18 @@ function render(){
   H.pills = [
     pill('<span class="dot"></span>Bot running', "ok"),
     pill(age && age.open === false ? '<span class="sd bad"></span>Market closed' : '<span class="sd ok"></span>Market open', age && age.open === false ? "warn" : "ok"),
-    pill(phase, s.phase === "idle" ? "" : "warn"),
+    pill((s.phase === "idle" ? "" : '<span class="spin"></span>') + phase, s.phase === "idle" ? "" : "warn"),
     age ? pill(`Last candle ${age.last_candle} (${age.minutes} min ago)`, age.minutes > 20 && age.open ? "bad" : "") : pill("No data yet", "warn"),
-    s.next_scan_in != null ? pill("Next scan in " + s.next_scan_in + "s") : "",
+
     st.fail_count ? pill(st.fail_count + " failed scans", "bad") : "",
   ].join("");
   $("phase").textContent = phase;
+  const nOpen = ((s.signals || {}).open || []).length;
+  H.navSig = nOpen ? String(nOpen) : "";
+  H.navDesk = s.phase === "ai_review" ? '<span class="busy"></span>' : "";
+  H.sideStatus = `<div><span class="dot"></span><b>Bot running</b></div><div style="margin-top:4px">${esc(phase)}</div>` +
+    `<div>${s.next_scan_in != null ? "Next scan in " + s.next_scan_in + "s" : "Markets closed"}</div>` +
+    `<div>${esc((s.session.sessions || []).join(" / ") || "")}${s.session.killzone ? " · " + esc(s.session.killzone) : ""}</div>`;
   const models = s.ai_models || [], ready = models.filter(m => m.ready).length;
   const dayOut = models.filter(m => m.kind === "quota_day");
   H.banner = models.length && !ready ? `<div class="banner"><b>AI desk paused:</b> all ${models.length} AI model slots are resting` +
@@ -632,7 +748,7 @@ function render(){
     s.reviews.map(r => `<tr><td>${r.t}</td><td>${esc(r.style)} ${r.direction} @ ${r.entry}<br><span class="role">engine ${r.score}</span></td>
       <td>${[1, 2, 3].map(st => { const l = r.reports.filter(x => (x.stage || 1) === st); return l.length ? `${["", "Analysts", "Leads", "Verifiers"][st]} <b>${l.filter(x => x.vote === "TAKE").length}/${l.length}</b>` : ""; }).filter(Boolean).join("<br>")}
         ${r.board ? `<br><span class="role">strategies ${esc(r.board)}</span>` : ""}</td>
-      <td class="${r.approved ? "ok" : "bad"}">${r.approved ? "SENT" : "SKIPPED"}<br><span class="role">${esc(r.reason || "")}</span>${r.explain ? `<div class="role" style="margin-top:4px;color:#b8c3d8">${esc(r.explain.slice(0, 220))}</div>` : ""}</td></tr>`).join("") + "</table>"
+      <td class="${r.approved ? "ok" : "bad"}">${r.approved ? (r.practice ? "APPROVED (practice)" : "PUBLISHED") : "SKIPPED"}<br><span class="role">${esc(r.reason || "")}</span>${r.explain ? `<div class="role" style="margin-top:4px;color:#b8c3d8">${esc(r.explain.slice(0, 220))}</div>` : ""}</td></tr>`).join("") + "</table>"
     : '<div class="empty">No setup reviewed yet. The desk only works when the engine finds a real setup.</div>';
   const cal = (s.calendar || []).map(e => `<div><span class="imp ${e.impact === "High" ? "hi" : "md"}">${e.impact === "High" ? "HIGH" : "MED"}</span> <b>${esc(e.time)}</b> ${esc(e.title)} <span class="role">${esc([e.forecast && "F " + e.forecast, e.previous && "P " + e.previous].filter(Boolean).join(" · "))}</span></div>`).join("");
   const hl = (s.headlines || []).map(h => `<div>${(h.cats || []).map(c => `<span class="ncat ${c}">${c}</span>`).join("")} <span class="role">${esc(h.time)} ${esc(h.source)}</span><br>${h.link ? `<a href="${esc(h.link)}" target="_blank" rel="noopener">${esc(h.title)}</a>` : esc(h.title)}</div>`).join("");
@@ -654,22 +770,33 @@ function render(){
   renderKpis(s, mk, models); renderSignals(s); renderLive(s); renderKeys(models); renderDirectory(s); renderBoard(s.board);
   renderPerf(s.performance || {}); renderControls(s);
 }
+const kpiPrev = {};
+function countUp(){
+  document.querySelectorAll("#kpis .kv2[data-n]").forEach(e => {
+    const key = e.dataset.k, to = parseFloat(e.dataset.n), from = kpiPrev[key] ?? 0, dec = +(e.dataset.d || 0);
+    kpiPrev[key] = to; if (from === to) return;
+    const pre = e.dataset.p || "", suf = e.dataset.s || "", t0 = performance.now();
+    (function step(t){ const k = Math.min((t - t0) / 900, 1), v = from + (to - from) * (1 - Math.pow(1 - k, 3));
+      e.textContent = pre + (to >= 0 && pre === "+" && v < 0 ? "" : "") + v.toFixed(dec) + suf; if (k < 1) requestAnimationFrame(step); })(t0);
+  });
+}
 function renderKpis(s, mk, models){
   const p = s.performance || {}, st = s.status, ses = s.session || {};
   const h1 = mk && mk.tfs ? mk.tfs.find(r => r.label === "H1") : null;
   const ready = models.filter(m => m.ready).length;
   const approved = (s.reviews || []).filter(r => r.approved && !r.practice).length;
-  const k = (label, value, sub, cls) => `<div class="kpi"><div class="kl">${label}</div><div class="kv2 ${cls || ""}">${value}</div><div class="ks">${sub || ""}</div></div>`;
+  const k = (label, value, sub, cls) => { const m = /^([+]?)(-?\d+(?:\.(\d+))?)(%|R)?$/.exec(String(value));
+    const num = m ? ` data-k="${label}" data-n="${m[2]}" data-d="${(m[3] || "").length}" data-p="${m[1]}" data-s="${m[4] || ""}"` : "";
+    return `<div class="kpi"><div class="kl">${label}</div><div class="kv2 ${cls || ""}"${num}>${value}</div><div class="ks">${sub || ""}</div></div>`; };
   H.kpis = [
     k("Session", esc((ses.sessions || ["–"]).join(" / ")), ses.killzone ? esc(ses.killzone) + " killzone" : "no killzone"),
     k("H1 regime", esc(h1 && h1.regime || "–"), h1 ? esc(h1.trend || "ranging") + " · " + esc(h1.zone) : ""),
     k("Open signals", (s.signals || {open: []}).open.length, (s.signals || {open: []}).open.filter(t => t.status === "active").length + " running"),
     k("Win rate", p.trades ? p.win_rate + "%" : "–", p.trades ? p.trades + " finished" + (p.profit_factor != null ? " · PF " + p.profit_factor : "") : "no finished trades", p.trades ? (p.win_rate >= 50 ? "ok" : "bad") : ""),
     k("Total", p.trades ? (p.total_r >= 0 ? "+" : "") + p.total_r + "R" : "–", p.trades ? "TP3 hit " + p.tp3 : "", p.trades ? (p.total_r >= 0 ? "ok" : "bad") : ""),
-    k("Desk reviews", (s.reviews || []).length, approved + " approved"),
-    k("AI requests today", st.ai_calls, st.ai_failures + " retried"),
     k("Model slots", models.length ? ready + "/" + models.length : "–", esc((s.key_names || []).join(" · ") || "1 API key"), models.length && !ready ? "bad" : "ok"),
   ].join("");
+  countUp();
 }
 function explainBox(c){
   if (!c) return "";
@@ -684,7 +811,7 @@ function explainBox(c){
   return parts.length ? `<div class="explain">${parts.join("")}</div>` : "";
 }
 /* ---------------- signals ---------------- */
-let alertsOn = false, lastFeedId = null, audioCtx = null;
+let sigSeen = null, alertsOn = false, lastFeedId = null, audioCtx = null;
 try { alertsOn = localStorage.getItem("alerts") === "1"; } catch (e) {}
 function enableAlerts(){
   alertsOn = true; try { localStorage.setItem("alerts", "1"); } catch (e) {}
@@ -731,9 +858,10 @@ function sigCard(c){
   const bar = (label, v) => v == null ? "" : `<div class="sbar"><span>${label}</span><div class="bar"><i style="width:${Math.max(0, Math.min(100, v))}%"></i></div><b>${v}%</b></div>`;
   const ck = c.smc_checklist ? Object.entries(c.smc_checklist).map(([k, v]) => `<li class="${v ? "pro" : "con"}">${v ? "Yes" : "No"} – ${esc(k)}</li>`).join("") : "";
   const ev = (c.evidence_for || []).map(x => `<li class="pro">${esc(x)}</li>`).join("") + (c.evidence_against || []).map(x => `<li class="con">${esc(x)}</li>`).join("");
-  return `<div class="sig ${bull ? "buy" : "sell"}">
-    <div class="sh"><span class="dir">${c.direction}</span><b>${esc(c.symbol)}</b><span class="role">${esc(c.entry_type)} · ${esc(c.style)}</span>
-      ${c.smc_grade ? `<span class="grade">SMC ${esc(c.smc_grade)}</span>` : ""}<span class="stt">${st}</span></div>
+  const fresh = sigSeen !== null && !sigSeen.has(c.id);
+  return `<div class="sig ${bull ? "buy" : "sell"}${fresh ? " enter" : ""}">
+    <div class="sh"><span class="dirb">${c.direction}</span><b>${esc(c.symbol)}</b><span class="role">${esc(c.entry_type)} · ${esc(c.style)}</span>
+      ${c.smc_grade ? `<span class="grade">SMC ${esc(c.smc_grade)}</span>` : ""}<span class="stt${c.status === "active" ? " live" : ""}">${st}</span></div>
     ${c.headline ? `<div class="hl">${esc(c.headline)}</div>` : ""}
     <table class="lv"><tr><td>Entry</td><td>${p2(c.entry)}</td><td></td></tr><tr><td>Stop</td><td class="bad">${p2(c.stop_loss)}</td><td></td></tr>
       ${c.tps.map((t, i) => `<tr><td>TP${i + 1}</td><td class="ok">${p2(t)}</td><td class="role">1:${(c.rr || [])[i] ?? "–"}${c.stage > i ? " · hit" : ""}</td></tr>`).join("")}</table>
@@ -756,7 +884,10 @@ function renderSignals(s){
   const sg = s.signals || {open: [], closed: []};
   H.sigCount = `${sg.open.length} open · ${sg.closed.length} recent finished`;
   H.sigOpen = sg.open.length ? sg.open.map(sigCard).join("") :
-    '<div class="empty">No open signal right now. The engine scans every few minutes; when the desk approves a trade it appears here instantly, with a sound if alerts are on.</div>';
+    `<div class="hero"><div class="radar"></div><b style="color:var(--text)">Scanning for the next setup</b>
+      <div>No open signal right now. When the desk approves a trade it appears here instantly${alertsOn ? ", with a sound" : ""}.</div>
+      <div class="role" style="margin-top:6px">${s.next_scan_in != null ? "Next scan in " + s.next_scan_in + "s" : "Markets closed – waiting for the open"}</div></div>`;
+  sigSeen = new Set(sg.open.map(c => c.id));
   H.sigFeed = (s.signal_feed || []).slice(0, 14).map(f => `<div class="fd k-${esc(f.kind)}"><span class="t">${esc(f.t)}</span> <b>${esc(f.kind.toUpperCase())}</b> ${esc(f.text)}</div>`).join("")
     || '<div class="empty">No updates yet.</div>';
   H.sigClosed = sg.closed.length ? `<table>${sg.closed.map(c => `<tr><td>${esc((c.closed_at || c.created_at || "").slice(5, 16).replace("T", " "))}</td>
@@ -889,6 +1020,23 @@ async function refresh(){
   if (state.chart_version && state.chart_version + tf + sym !== chartVersion) { chartVersion = state.chart_version + tf + sym; loadChart(); }
 }
 function setSym(k){ if (k === sym) return; sym = k; try { localStorage.setItem("sym", k); } catch (e) {} lastPx = null; chartVersion = ""; liveBar = null; refresh(); live(); }
+/* ---------------- pages ---------------- */
+let view = "signals";
+try { view = localStorage.getItem("view") || "signals"; } catch (e) {}
+function showView(v){
+  if (!document.querySelector(`.view[data-view="${v}"]`)) v = "signals";
+  view = v; try { localStorage.setItem("view", v); } catch (e) {}
+  document.querySelectorAll(".view").forEach(x => x.classList.toggle("on", x.dataset.view === v));
+  document.querySelectorAll("#nav button").forEach(b => b.classList.toggle("on", b.dataset.v === v));
+  const b = document.querySelector(`#nav button[data-v="${v}"]`), ink = $("navInk");
+  if (b && ink) { ink.style.transform = `translateY(${b.offsetTop}px)`; ink.style.height = b.offsetHeight + "px"; }
+  if (v === "chart") requestAnimationFrame(() => { if (!chartShown && chartData) { chartShown = true; resetView(); } lastSig = ""; drawOverlay(); });
+  if (v === "desk" && state) { pathSig = ""; paintPath(); }
+  scrollTo({top: 0, behavior: "smooth"});
+}
+$("nav").onclick = e => { const b = e.target.closest("button[data-v]"); if (b) showView(b.dataset.v); };
+addEventListener("resize", () => showView(view));
+showView(view);
 paintTabs(); paintAlertBtn(); refresh(); live();
 setInterval(refresh, 2000); setInterval(live, 3000);
 </script>

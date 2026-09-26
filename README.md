@@ -120,6 +120,12 @@ From the command line: `python backtest.py intraday` (or scalp / swing).
 
 When the app starts it opens **http://localhost:8080** (it listens on this computer only):
 
+The site has a sidebar with seven pages – **Signals** (home), **Live chart**, **AI desk**, **Strategy lab**,
+**Performance**, **Market & news** and **Settings** – with smooth page transitions, animated signal cards,
+count-up KPIs, a price flash on every tick and a live-flowing agent network. It works on a phone too (bottom
+navigation). Animations switch off automatically if your system asks for reduced motion.
+
+
 - **Agent network**: the engine, 18 analysts grouped in their 3 desks, 3 desk leads, 3 verifiers, Head Trader,
   Signal Auditor and the website output as a live graph. Every time information is passed on, a glowing dot runs along
   the line. Nodes flash while an agent works and turn green/red with its vote; the coloured bar and `KEY 1`/`KEY 2`
