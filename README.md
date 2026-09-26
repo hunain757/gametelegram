@@ -1,17 +1,19 @@
-# Gold & Bitcoin SMC AI Signal Bot (Telegram)
+# Gold & Bitcoin SMC AI Signal Desk (website app)
 
-A Telegram bot that scans **gold (XAU/USD)** and **bitcoin (BTC/USD)** around the clock with a **Smart Money Concepts engine**,
-**volume analysis**, a **regime-aware 17-strategy board** and a **26-agent Gemini AI desk that learns from its own track record**, sends **scalping / intraday / swing** signals
-with entry, SL and 3 TPs, and **tracks every trade live** (entry fill, TP1/TP2/TP3, SL, expiry).
+A local website app that scans **gold (XAU/USD)** and **bitcoin (BTC/USD)** around the clock with a **Smart Money
+Concepts engine**, **volume analysis**, a **regime-aware 17-strategy board** and a **26-agent AI desk (Mistral / Groq /
+Gemini) that learns from its own track record**. It publishes **scalping / intraday / swing** signals with entry, SL and
+3 TPs on the website and **tracks every trade live** (entry fill, TP1/TP2/TP3, SL, expiry). No Telegram, no bot
+token, no server: everything runs on your PC.
 
 ## Where do signals appear?
 
-**On the local website** (http://localhost:8080, opens by itself on Windows). Telegram is switched off by
-default: no bot token is needed. Every approved trade appears in the **Signals** section with the levels, a
-price track (stop · entry · TP1-3 · current price), floating pips and R, confidence, conviction, SMC grade, the
-AI's explanation, invalidation, management plan and risks. Entry fills, TP hits and stops show up in the
-**Updates** feed. Press **Enable alerts + sound** once to get a sound and a desktop notification for every new
-signal and trade update. (Telegram can still be switched back on with `TELEGRAM=on` and `TELEGRAM_BOT_TOKEN`.)
+**On the website** (http://localhost:8080, opens by itself on Windows). Every approved trade appears in the
+**Signals** section with the levels, a price track (stop · entry · TP1-3 · current price), floating pips and R,
+**your lot size**, confidence, conviction, SMC grade, the AI's explanation (in `EXPLAIN_LANGUAGE`, e.g. Roman
+Urdu), invalidation, management plan and risks. Entry fills, TP hits and stops show up in the **Updates** feed.
+Press **Enable alerts + sound** once to get a sound and a desktop notification for every new signal, trade
+update, high-impact news warning and system alert.
 
 ## Markets
 
@@ -79,7 +81,7 @@ every 5 min ─► Twelve Data: XAU/USD M5 · M15 · H1 · H4 · D1   (+ Binance
                   agent's score: analysts 40 %, desk leads 25 %, verifiers 25 %, strategy board 10 %)
                   Hard vetoes only for concrete dangers: analysts split, too few analysts see an edge,
                   Risk Manager finds a broken stop / R:R / news, strategy board clearly against, auditor veto
-        TELEGRAM: chart + signal + your lot size ─► live tracking replies on the signal:
+        WEBSITE: signal card + your lot size + sound/notification ─► live tracking in the Updates feed:
         entry filled · TP1 (SL → breakeven) · TP2 · TP3 · SL · expired
 ```
 
@@ -92,56 +94,38 @@ target. Judas swings (Asia range swept in a killzone) score extra. The grade and
 signal and given to the agents. The engine runs in normal mode by default (`STRICT_MODE=off`) – the desk is the
 quality filter; `MIN_CONVICTION` in `.env` sets how much agreement a signal needs.
 
-## Telegram features
+## Strict agents
 
-- **Clean, professional house style – no emoji anywhere**: capital headers, aligned numbers in monospace
-  blocks, plain-word buttons
-- **Signal with chart**: candles, order blocks, FVGs, key levels, entry / SL / TP1–TP3 lines and risk/reward boxes;
-  levels table with pips and R:R, desk verdict (confidence, technical / strategy / macro tallies, desk leads,
-  verifiers, strategy board), rationale, top confluences and **your personal lot size**
-- Buttons on each signal: **Live status** · **Desk report** (every agent's analysis) · **Full analysis**
-- **Live tracking** replies on the signal: entry filled, TP1/TP2/TP3, stop loss, breakeven, expiry
-- **Menu** (`/start`): Open trades · History · Performance · Market now (trend, regime, zone per timeframe,
-  pivots, + M15/H1/H4 charts) · AI market view · News (calendar + headlines tagged world / macro / gold /
-  crypto) · **AI desk record** (how often each agent was right and its voting weight) · Risk & lot size ·
-  Settings (scalping / intraday / swing, briefings, news alerts) · Alerts on/off
-- **News alerts** 20 minutes before high-impact USD news, and a pause on new signals around it
-- **Session briefings**: AI outlook + chart at the London and New York open
-- **Daily report** (Mon–Fri) with win rate and total R
-- **Owner tools**: Scan now · Status (API usage, errors, feeds) · Backtest · automatic alerts when
-  scans keep failing or the AI is down (the first person to `/start` the bot becomes the owner, or set `ADMIN_IDS`)
-- Optional **channel** posting (`CHANNEL_ID`)
-
-Commands: `/start` `/menu` `/trades` `/history` `/stats` `/market` `/news` `/balance 1000` `/risk 1` `/lot 50`
-`/scan` `/status` `/backtest intraday` `/help` `/stop`
+Every agent must finish its job before its vote counts: a valid vote, a score, a real summary and evidence
+with exact numbers from its data (the macro/news desk needs at least one concrete item). An incomplete answer
+is sent back once with exactly what is missing ("YOUR PREVIOUS ANSWER WAS REJECTED BECAUSE …"); the better of
+the two answers is kept and the dashboard marks the agent "Re-asked once". NEUTRAL votes do not block a signal,
+SKIP votes weigh against it, and the final decision uses the weighted **conviction** score.
 
 **Honest results**: trades are booked as if 1/3 of the position is closed at each TP and the stop moves to
 breakeven after TP1 – not the inflated "max TP reached" many signal channels show.
 
-## Backtest
+## Strategy lab (backtest & optimizer)
 
-```bash
-python backtest.py intraday      # or scalp / swing   (also: /backtest in Telegram, owner only)
-```
+On the website: **Strategy lab → pick a style → Backtest** (or **Optimize settings**). It replays the selected
+market's recent history candle by candle (no look-ahead) through the same engine and tracker and shows win
+rate, total/average R, max drawdown and profit factor. **Optimize** tests 12 settings per style (engine score,
+minimum R:R, TP1 cap) and ranks them; **Apply** uses one for live scans. **Signal styles** switches a style on or
+off (or back to the `.env` defaults) without restarting. Settings are saved in `data.json`. The AI desk and news
+filter are not replayed.
 
-Replays the last weeks of gold data candle by candle (no look-ahead) through the same engine and tracker,
-and prints win rate, total/average R, max drawdown and profit factor.
+From the command line: `python backtest.py intraday` (or scalp / swing).
 
-**Optimize** (Telegram → Backtest → Optimize, owner only) tests 12 settings per style (engine score,
-minimum R:R, TP1 cap) on the same data, ranks them, and lets you **apply** the best one or **switch a style
-off** with one tap. Applied settings are saved in `data.json` and used by live scans. The AI desk and news filter are not
-replayed. Use it to tune `MIN_ENGINE_SCORE`, `MIN_RISK_REWARD` and `STYLES` before trusting a style.
+## The website (only on your PC)
 
-## Live dashboard (only on your PC)
-
-When the bot starts it opens **http://localhost:8080** (it listens on this computer only):
+When the app starts it opens **http://localhost:8080** (it listens on this computer only):
 
 - **Agent network**: the engine, 18 analysts grouped in their 3 desks, 3 desk leads, 3 verifiers, Head Trader,
-  Signal Auditor and Telegram as a live graph. Every time information is passed on, a glowing dot runs along
+  Signal Auditor and the website output as a live graph. Every time information is passed on, a glowing dot runs along
   the line. Nodes flash while an agent works and turn green/red with its vote; the coloured bar and `KEY 1`/`KEY 2`
   label show which API key the agent runs on. Click a node for its job, the data it receives, who it gets
   information from and sends it to, its evidence, risk, model and timing.
-- **KPI strip**: session and killzone, H1 regime, open trades, win rate, total R, desk reviews, Gemini calls,
+- **KPI strip**: session and killzone, H1 regime, open trades, win rate, total R, desk reviews, AI requests,
   model slots ready.
 - **Agent directory**: a table of all 26 agents – only job, data it receives, who it sends to, key/model,
   **track record** (how often it was right, vote weight) and current vote.
@@ -157,20 +141,22 @@ When the bot starts it opens **http://localhost:8080** (it listens on this compu
   the analysts, each analyst's report to its desk lead, the leads' **challenges** back to their analysts and
   their **replies** (debate round), all reports to the Head Trader, the decision to the Signal Auditor and the
   final verdict. Replies/challenges run backwards along the lines in red.
-- Live activity feed, last AI decisions, open trades, news calendar + headlines, market structure, system
-  health (incl. each Gemini model/key and why it is resting) and performance.
+- **Account & lot size**: enter your balance and risk % once – every open signal shows the exact lot.
+- **AI market view**: a plain-language read of the current chart in your language.
+- **Performance**: equity curve (R), win rate, profit factor, max drawdown, per market and per style.
+- Live activity feed, last AI decisions, news calendar + headlines, market structure and system health
+  (incl. each AI model/key and why it is resting).
 - Buttons: **Scan now**, **Practice AI review** (runs the whole 26-agent desk on the live market right
-  now so you can watch it – nothing is sent to Telegram) and **Test agents** (one tiny request per model).
+  now so you can watch it – nothing is published) and **Test agents** (one tiny request per model).
 
-Set `DASHBOARD_PORT=0` to turn it off, or `DASHBOARD_OPEN=off` to stop it opening the browser.
+Set `DASHBOARD_PORT=8081` if 8080 is taken, or `DASHBOARD_OPEN=off` to stop it opening the browser.
 `static/lightweight-charts.js` is TradingView Lightweight Charts™ (Apache 2.0, see `static/LICENSE-lightweight-charts`).
 
 ## Keys you need
 
 | Key | Where to get it |
 |---|---|
-| `TELEGRAM_BOT_TOKEN` | Telegram → @BotFather → `/newbot` |
-| `GEMINI_API_KEY` | https://aistudio.google.com/apikey |
+| `GEMINI_API_KEY` (optional) | https://aistudio.google.com/apikey |
 | `GEMINI_API_KEYS` (optional) | more Gemini keys, comma separated – each has its own free quota and the bot rotates across all of them |
 | `MISTRAL_API_KEY` (recommended) | https://console.mistral.ai/api-keys – free "Experiment" plan, roughly 1 billion tokens a month, no card (phone verification) |
 | `GROQ_API_KEY` (optional) | https://console.groq.com/keys – free, very fast, ~1,000 requests a day per model |
@@ -220,12 +206,11 @@ The dashboard's **API keys & Gemini models** panel shows every slot, its health,
 1. Install Python from https://www.python.org/downloads/ (tick **"Add python.exe to PATH"**).
 2. Download this repo (green **Code** button → **Download ZIP**) and unzip it.
 3. Double-click **`start.bat`**. The first time, it installs everything and asks you to paste
-   your 3 keys; it saves them in a local `.env` file. After that it just starts the bot.
+   your keys (Twelve Data + Mistral; Gemini is optional); it saves them in a local `.env` file. After that it
+   just starts the app and opens the website.
 
 To change a key later, delete `.env` and run `start.bat` again (or edit `.env` in Notepad).
 
-> If Telegram is blocked on your internet, turn on a VPN (e.g. Cloudflare WARP) before starting the bot,
-> or set `PROXY_URL` in `.env`.
 
 ## Run it manually
 
@@ -237,57 +222,20 @@ cp .env.example .env      # then paste your keys into .env
 python bot.py
 ```
 
-## Run it 24/7 on a server
-
-Only run **one** copy of the bot per token (close `start.bat` on your PC once the server is running),
-otherwise Telegram rejects the second copy. A server outside your country also means no VPN is needed.
-
-### Option A – Railway (easiest, everything in the browser)
-
-1. Merge the pull request so the code is on `main`.
-2. Go to https://railway.com → **Login with GitHub**.
-3. **New Project → Deploy from GitHub repo →** `hunain757/gametelegram`. Railway finds the `Dockerfile`
-   and `railway.json` (auto-restart) by itself.
-4. Open the service → **Variables** → add `TELEGRAM_BOT_TOKEN`, `GEMINI_API_KEY`, `TWELVEDATA_API_KEY`
-   (and optionally `ADMIN_IDS`, `CHANNEL_ID`, any setting from `.env.example`).
-5. **Settings → Volumes → Add volume**, mount path **`/data`** (keeps users, trades and stats across restarts).
-6. **Settings → Region**: pick a Europe or Asia region (Binance volume data is not available from US servers).
-7. **Deploy**. The **Logs** tab should show `Gold SMC AI bot started`.
-
-Every push to `main` redeploys automatically. Railway's free allowance is small (a one-time trial credit,
-then a small monthly credit); a bot that runs 24/7 may use more than that, so check your usage in the
-Railway dashboard. For a truly free 24/7 server use Option B on Oracle Cloud's Always Free VM.
-
-### Option B – Any Ubuntu / Debian VPS (cheapest long-term)
-
-Rent a small Linux VPS (1 GB RAM is plenty; Hetzner, Contabo, DigitalOcean, Vultr, or Oracle Cloud's
-free tier), open its console / SSH and run:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/hunain757/gametelegram/main/deploy/setup_vps.sh | sudo bash
-```
-
-It installs everything, asks for your keys once, and runs the bot as a `goldbot` service that restarts
-on crashes and reboots. Run the same command again to update to the latest code.
-
-```bash
-sudo journalctl -u goldbot -f        # live logs
-sudo systemctl restart goldbot       # restart
-sudo nano /opt/goldbot/.env          # change keys/settings (then restart)
-```
-
-Gold is closed on weekends (Fri ~21:00 → Sun ~22:00 UTC), so the bot does not scan then.
+Keep the window open – the app scans every 5 minutes while it runs. Only run one copy at a time.
+Gold is closed on weekends (Fri ~21:00 → Sun ~22:00 UTC); bitcoin keeps being scanned.
 
 ## Free-plan limits (handled by the bot)
 
 - **Twelve Data**: 800 requests/day, 8/min. Higher timeframes are cached, so a 5-minute scan uses ~450/day.
+- **Mistral** (free plan): about 1 request/second per key – requests are spaced automatically.
 - **Gemini**: ~5 requests/minute *per model*. Each agent uses a different model, busy or overloaded models
   are skipped automatically, and the AI desk runs only when the engine has found a real setup.
 
 ## Settings
 
-All optional settings (styles, scan interval, score / confidence / vote thresholds, R:R, models,
-channel, admins, proxy) are documented in `.env.example`.
+All optional settings (markets, styles, scan interval, `MIN_CONVICTION` – 62 for fewer, 55 for more signals –,
+confidence / vote thresholds, R:R, explanation language, models) are documented in `.env.example`.
 
 ## Tests
 

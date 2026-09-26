@@ -1,9 +1,0 @@
-.env
-data.json
-data.json.tmp
-venv/
-.venv/
-__pycache__/
-*.pyc
-.git/
-tests/

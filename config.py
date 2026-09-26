@@ -43,8 +43,6 @@ def _markets(raw: str) -> list[str]:
 
 @dataclass(frozen=True)
 class Config:
-    telegram_token: str
-    use_telegram: bool
     gemini_api_key: str
     gemini_api_keys: list[str]
     twelvedata_api_key: str
@@ -63,15 +61,10 @@ class Config:
     min_agent_votes: int
     min_risk_reward: float
     engine_only_score: int
-    daily_report_hour: int
-    channel_id: str
-    admin_ids: list[int]
     data_file: str
-    proxy_url: str
     contract_size: float
     news_blackout_min: int
     news_currencies: tuple
-    briefings: bool
     dashboard_port: int
     dashboard_host: str
     dashboard_open: bool
@@ -104,10 +97,6 @@ def load_config() -> Config:
         raise SystemExit("No AI key found. Put MISTRAL_API_KEY (recommended), GROQ_API_KEY or GEMINI_API_KEY in .env")
 
     return Config(
-        telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
-        # Signals go to the local website. Telegram only runs when TELEGRAM=on (and a token is set).
-        use_telegram=os.getenv("TELEGRAM", "off").lower() in ("1", "on", "true", "yes")
-        and bool(os.getenv("TELEGRAM_BOT_TOKEN")),
         gemini_api_key=gemini_keys[0] if gemini_keys else "",
         # Extra keys (comma separated) multiply the free quota; the bot rotates between all of them.
         gemini_api_keys=gemini_keys,
@@ -130,21 +119,17 @@ def load_config() -> Config:
         min_agent_votes=int(os.getenv("MIN_AGENT_VOTES", "5")),
         min_risk_reward=float(os.getenv("MIN_RISK_REWARD", "1.5")),
         engine_only_score=int(os.getenv("ENGINE_ONLY_SCORE", "85")),
-        daily_report_hour=int(os.getenv("DAILY_REPORT_HOUR_UTC", "21")),
-        channel_id=os.getenv("CHANNEL_ID", ""),
-        admin_ids=[int(x) for x in _list(os.getenv("ADMIN_IDS", ""))],
         data_file=os.getenv("DATA_FILE", "data.json"),
-        proxy_url=os.getenv("PROXY_URL", ""),
         contract_size=float(os.getenv("CONTRACT_SIZE", "100")),
         news_blackout_min=int(os.getenv("NEWS_BLACKOUT_MIN", "30")),
         news_currencies=tuple(_list(os.getenv("NEWS_CURRENCIES", "USD"))),
-        briefings=os.getenv("BRIEFINGS", "on").lower() not in ("0", "off", "false", "no"),
         news_feeds=tuple(dict.fromkeys(_list(os.getenv("NEWS_FEEDS", "")) + list(news.DEFAULT_FEEDS))),
         markets=_markets(os.getenv("MARKETS", "XAUUSD,BTCUSD")),
         # Strict engine mode (every filter must agree) finds very few setups; the 26-agent desk is the quality
         # filter now, so the engine runs in normal mode unless STRICT_MODE=on.
         strict_mode=os.getenv("STRICT_MODE", "off").lower() in ("1", "on", "true", "yes"),
-        dashboard_port=int(os.getenv("DASHBOARD_PORT", "8080")),
+        # The website is the app: it always runs (signals, agents, charts).
+        dashboard_port=int(os.getenv("DASHBOARD_PORT", "8080")) or 8080,
         dashboard_host=os.getenv("DASHBOARD_HOST", "127.0.0.1"),
         # Open the dashboard in the browser automatically on Windows desktops.
         dashboard_open=os.getenv("DASHBOARD_OPEN", "on" if os.name == "nt" else "off").lower()

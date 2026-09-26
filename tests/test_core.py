@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 import setups
 import smc
 import tracker
-import ui
+import labels
 from agents import TradingDesk, parse_json
 from indicators import atr, ema, macd, rsi
 from sessions import is_market_open
@@ -225,11 +225,20 @@ class StorageTests(unittest.TestCase):
             path = os.path.join(d, "data.json")
             with open(path, "w") as f:
                 json.dump({"subscribers": [42], "last_signal": None}, f)
+            old = datetime.now(timezone.utc) - timedelta(days=5)
+            with open(path, "w") as f:  # a file written by the old Telegram version
+                json.dump({"subscribers": [42], "users": {"42": {}}, "owner": 42, "last_signal": None,
+                           "trades": [{"id": "a", "status": "closed", "messages": {"42": 7}}],
+                           "seen": {"old": old.isoformat()}, "style_settings": {"scalp": {"enabled": False}}}, f)
             s = Storage(path)
-            self.assertEqual(s.subscribers("scalp"), [42])
-            s.toggle_style(42, "scalp")
-            self.assertEqual(s.subscribers("scalp"), [])
-            self.assertEqual(Storage(path).subscribers("swing"), [42])
+            self.assertEqual(set(s.data), {"trades", "seen", "style_settings", "account", "ai_pool"})
+            self.assertNotIn("messages", s.data["trades"][0])
+            self.assertEqual(s.data["seen"], {})
+            self.assertFalse(s.style_settings("scalp")["enabled"])
+            with open(path) as f:
+                self.assertNotIn("subscribers", json.load(f))  # the cleaned file was written back
+            s.set_account(balance=1000, risk=2)
+            self.assertEqual(Storage(path).account, {"balance": 1000, "risk": 2})
 
     def test_stats(self):
         trades = [{"style": "scalp", "outcome": "win", "stage": 2, "result_r": 2.5},
@@ -237,6 +246,8 @@ class StorageTests(unittest.TestCase):
                   {"style": "swing", "outcome": "expired", "stage": 0, "result_r": 0}]
         s = stats(trades)
         self.assertEqual((s["trades"], s["wins"], s["win_rate"], s["total_r"], s["expired"]), (2, 1, 50, 1.5, 1))
+        self.assertEqual((s["profit_factor"], s["max_dd"]), (2.5, 1))
+        self.assertEqual([p["r"] for p in s["equity"]], [2.5, 1.5])
 
 
 class MarketHoursTests(unittest.TestCase):
@@ -266,7 +277,8 @@ class FakeModels:
                 "for": ["H1 bullish BOS @ 2617.9", "sell-side swept @ 2613.0"], "against": ["ADR 80% used"],
                 "invalidation": "A close below 2605 ends the idea.", "management": "Move stop to entry at TP1.",
                 "risks": ["CPI tomorrow"]}))
-        return types.SimpleNamespace(text='```json\n{"vote": "TAKE", "score": 75, "summary": "fine", "points": ["a"]}\n```')
+        return types.SimpleNamespace(text='```json\n{"vote": "TAKE", "score": 75, "summary": "data supports the trade", '
+                                          '"points": ["H1 bullish BOS @ 2617.9", "sell-side swept @ 2613.0"]}\n```')
 
 
 def fake_desk(**kw):
@@ -304,10 +316,9 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(v["invalidation"], "A close below 2605 ends the idea.")
         self.assertEqual(len(v["for"]), 2)
         t = tracker.new_trade(dict(setup, symbol_name="XAU/USD"), v, "2026-09-22 08:00:00")
-        card = ui.signal_card(t)
-        for part in ("WHY THIS TRADE", "EVIDENCE", "INVALIDATION", "MANAGEMENT", "RISKS", "swept the lows"):
-            self.assertIn(part, card)
-        self.assertIn("Invalid if", ui.signal_caption(t))
+        self.assertIn("swept the lows", t["explain"])
+        self.assertEqual(t["invalidation"], "A close below 2605 ends the idea.")
+        self.assertEqual(len(t["evidence_for"]), 2)
         cur = desk.monitor.current  # live-review panel: which setup, when it started/ended and the outcome
         self.assertIn("swept", cur["explain"])
         self.assertIn(setup["direction"], cur["label"])
@@ -353,8 +364,7 @@ class DebateTests(unittest.TestCase):
         self.assertTrue(any(f["kind"] == "challenge" and f["from"] == "tech_lead" and f["to"] == "structure" for f in flows))
         self.assertTrue(any(f["kind"] == "reply" and f["from"] == "structure" for f in flows))
         self.assertTrue(any(f["from"] == "engine" and ("SELL" in f["text"] or "BUY" in f["text"]) for f in flows))
-        self.assertIn("debated", ui.ai_report({**v, "direction": "BUY", "style_label": "x", "confidence": 20,
-                                              "reason": "", "engine_only": False}))
+        self.assertTrue(all(r.get("debate") for r in changed))
 
     def test_multiple_keys_become_slots(self):
         from agents import TradingDesk, split_slot
@@ -459,27 +469,6 @@ class ModelPoolTests(unittest.TestCase):
         self.assertIsNone(none_left)
 
 
-class UITests(unittest.TestCase):
-    def test_signal_card_and_updates_render(self):
-        t, _ = make_trade()
-        t["reports"] = [{"icon": "🏗", "vote": "TAKE", "name": "S", "score": 80, "summary": "<ok>", "points": []}]
-        t["reason"] = "Sweep & <OB>"
-        card = ui.signal_card(t)
-        self.assertIn("BUY LIMIT", card)
-        self.assertIn("&lt;OB&gt;", card)
-        self.assertIn("TP3", card)
-        for ev in ({"kind": "filled", "price": 100}, {"kind": "tp", "n": 1, "price": 103, "rr": 1.5, "new_sl": 100},
-                   {"kind": "tp", "n": 3, "price": 108, "rr": 4}, {"kind": "sl", "price": 98},
-                   {"kind": "protected_stop", "price": 100, "stage": 1}, {"kind": "expired"}, {"kind": "cancelled"}):
-            self.assertTrue(ui.event_message(t, ev))
-        self.assertIn("TP1", ui.trade_status(t, 101))
-        self.assertIn("AI DESK REPORT", ui.ai_report(t))
-
-    def test_dashboard_renders(self):
-        _, market, _ = first_setup()
-        self.assertIn("MARKET NOW", ui.market_dashboard(market, SESSION, True, datetime.now(timezone.utc)))
-
-
 class LevelsAndEngineTests(unittest.TestCase):
     def test_key_levels(self):
         from levels import key_levels
@@ -564,7 +553,7 @@ class NewsTests(unittest.TestCase):
         at = datetime(2026, 10, 2, 12, 15, tzinfo=timezone.utc)
         self.assertEqual(len(cal.due_alerts(at)), 1)
         self.assertEqual(cal.due_alerts(at), [])  # only once
-        self.assertIn("Non-Farm", ui.news_screen(cal.upcoming(at, 48), None, None))
+        self.assertIn("Non-Farm", " ".join(e["title"] for e in cal.upcoming(at, 48)))
 
 
 class HeadlineTests(unittest.TestCase):
@@ -583,34 +572,12 @@ class HeadlineTests(unittest.TestCase):
         self.assertIsNone(items[1]["time"])
 
 
-class LotAndCaptionTests(unittest.TestCase):
+class LotSizeTests(unittest.TestCase):
     def test_lot_size(self):
-        self.assertEqual(ui.lot_size(1000, 1, 5.0)[0], 0.02)   # $10 risk / ($5 * 100oz)
-        self.assertEqual(ui.lot_size(10000, 2, 2.5)[0], 0.8)
-        t, _ = make_trade()
-        self.assertIn("Position size: 0.05 lot", ui.lot_line({"balance": 1000, "risk": 1}, t))  # SL $2 -> 0.05
-        self.assertIn("/balance", ui.lot_line({"balance": None}, t))
-        self.assertIn("min", ui.lot_line({"balance": 50, "risk": 1}, t))
-
-    def test_caption_fits_telegram_limit(self):
-        t, _ = make_trade()
-        t["headline"] = "x" * 80
-        t["confluences"] = ["a very long confluence description " * 3] * 7
-        t["reports"] = [{"icon": "🏗", "vote": "TAKE"}] * 5
-        self.assertLessEqual(len(ui.signal_caption(t, "💰 Your lot: 0.05 (risk $10.00 = 1% of $1,000)")), 1024)
-
-
-class ChartTests(unittest.TestCase):
-    def test_charts_render_png(self):
-        import chart
-        setup, market, data = first_setup()
-        t, _ = make_trade()
-        t.update(entry=setup["entry"], stop_loss=setup["stop_loss"], tps=[x["price"] for x in setup["tps"]])
-        tf = setup["timeframes"]["entry"]
-        png = chart.signal_chart(data[tf], t, market[tf]["smc"], market["levels"], "H1")
-        self.assertEqual(png[:4], b"\x89PNG")
-        self.assertEqual(chart.market_chart(data["15min"], market["15min"]["smc"], market["levels"], "M15")[:4],
-                         b"\x89PNG")
+        self.assertEqual(labels.lot_size(1000, 1, 5.0)[0], 0.02)   # $10 risk / ($5 * 100oz)
+        self.assertEqual(labels.lot_size(10000, 2, 2.5)[0], 0.8)
+        self.assertEqual(labels.lot_size(1000, 1, 0)[0], 0.0)
+        self.assertEqual(labels.plain("\U0001F7E2 Scalp  (M5)"), "Scalp (M5)")
 
 
 def synthetic_history(days=12, seed=1):
@@ -651,7 +618,7 @@ class BacktestTests(unittest.TestCase):
         for t in r["trades"]:
             # every signal was created from candles that had already closed
             self.assertLessEqual(t["created_candle"], t["created_at"][:19].replace("T", " "))
-        self.assertIn("BACKTEST", ui.backtest_report(r))
+        self.assertIn("stats", r)
         self.assertIn("error", backtest.run({k: v[:50] for k, v in data.items()}, "swing"))
 
     def test_realized_r(self):
@@ -662,285 +629,125 @@ class BacktestTests(unittest.TestCase):
         self.assertAlmostEqual(tracker.realized_r(t), (1.5 + 2.5 + 4) / 3)
 
 
+def make_bot(data, **env):
+    """A website-only app on a temp data file with fake market data, news and AI desk."""
+    import bot as botmod
+    from config import load_config
+    tmp = tempfile.TemporaryDirectory()
+    env = {"GEMINI_API_KEY": "x", "TWELVEDATA_API_KEY": "x", "DATA_FILE": os.path.join(tmp.name, "data.json"), **env}
+    keep = {k: os.environ.get(k) for k in env}
+    os.environ.update(env)
+    try:
+        gb = botmod.GoldBot(load_config())
+    finally:
+        for k, v in keep.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    gb.desk = fake_desk()
+    gb._tmp = tmp
+
+    async def get():
+        return data, {}
+    gb.data.get = get
+
+    async def no_news():
+        return None
+    gb.news.refresh = no_news
+    gb.headlines.refresh = no_news
+    return gb
+
+
+EMOJI = re.compile("[\U0001F000-\U0001FAFF☀-➿⬀-⯿️]")
+
+
 class EndToEndTests(unittest.TestCase):
-    def test_scan_publishes_and_tracks(self):
-        os.environ.update(TELEGRAM_BOT_TOKEN="1:x", GEMINI_API_KEY="x", TWELVEDATA_API_KEY="x", TELEGRAM="on")
-        import bot as botmod
-        from config import load_config
-
+    def test_scan_publishes_and_tracks_on_the_website(self):
         setup, market, data = first_setup()
-        sent = []
+        gb = make_bot(data, STYLES=setup["style"], MIN_ENGINE_SCORE="0")
+        self.addCleanup(gb._tmp.cleanup)
+        gb.apply_setting({"account": {"balance": 5000, "risk": 1}})
 
-        class FakeBot:
-            async def send_message(self, chat_id, text, **kw):
-                sent.append((chat_id, text, kw))
-                return types.SimpleNamespace(message_id=len(sent))
+        notes = asyncio.run(gb.scan(manual=True))
+        self.assertIn("signal published", " ".join(notes))
+        trade = gb.storage.open_trades()[0]
+        feed = list(gb.desk.monitor.signal_feed)
+        self.assertEqual(feed[0]["kind"], "new")
+        self.assertIn("XAU/USD", feed[0]["text"])
+        st = gb.dashboard_state()
+        card = st["signals"]["open"][0]
+        self.assertEqual(card["id"], trade["id"])
+        self.assertGreaterEqual(card["lot"]["lots"], 0.01)
+        self.assertIn(card["smc_grade"], ("A+", "A", "B", "C"))
+        self.assertIn("conviction", card)
+        self.assertIsNone(EMOJI.search(json.dumps(st, ensure_ascii=False)))
+        page = open(os.path.join(os.path.dirname(__file__), "..", "static", "dashboard.html"), encoding="utf-8").read()
+        self.assertIsNone(EMOJI.search(page))
 
-            async def send_photo(self, chat_id, photo, caption=None, **kw):
-                assert isinstance(photo, (bytes, str)) and len(caption) <= 1024
-                sent.append((chat_id, caption, kw))
-                return types.SimpleNamespace(message_id=len(sent), photo=[types.SimpleNamespace(file_id="F")])
+        # Same setup again is not re-published.
+        asyncio.run(gb.scan(manual=True))
+        self.assertEqual(len(gb.storage.open_trades()), 1)
 
-        with tempfile.TemporaryDirectory() as d:
-            os.environ["DATA_FILE"] = os.path.join(d, "data.json")
-            os.environ["STYLES"] = setup["style"]
-            os.environ["MIN_ENGINE_SCORE"] = "0"
-            try:
-                gb = botmod.GoldBot(load_config())
-            finally:
-                for k in ("DATA_FILE", "STYLES", "MIN_ENGINE_SCORE"):
-                    os.environ.pop(k)
-            gb.desk = fake_desk()
-            gb.storage.set_subscribed(111, True)
-            gb.storage.set_field(111, "balance", 5000)
-            gb.storage.claim_owner(111)
+        # Price hits the stop on a new candle -> update in the website feed, trade closed.
+        bull = trade["direction"] == "BUY"
+        level = trade["stop_loss"] - 1 if bull else trade["stop_loss"] + 1
+        data["5min"].append(candle("9999-12-31 23:59:00", level, max(level, trade["entry"]),
+                                   min(level, trade["entry"]), level))
+        asyncio.run(gb.scan(manual=True))
+        self.assertEqual(gb.storage.trade(trade["id"])["status"], "closed")
+        kinds = [f["kind"] for f in gb.desk.monitor.signal_feed]
+        self.assertTrue({"sl", "expired", "cancelled", "filled"} & set(kinds), kinds)
+        self.assertTrue(gb.dashboard_state()["signals"]["closed"])
 
-            async def no_news():
-                return None
-            gb.news.refresh = no_news
+        # A high-impact event right now pauses new signals and warns on the website.
+        gb.news.events = [{"title": "CPI m/m", "country": "USD", "impact": "High", "forecast": "", "previous": "",
+                           "time": datetime.now(timezone.utc) + timedelta(minutes=10)}]
+        notes = asyncio.run(gb.scan(manual=True))
+        self.assertIn("News pause", notes[0])
+        self.assertTrue(any(f["kind"] == "news" for f in gb.desk.monitor.signal_feed))
 
-            async def fake_get():
-                return data, {}
-            gb.data.get = fake_get
-
-            notes = asyncio.run(gb.scan(FakeBot(), manual=True))
-            self.assertIn("signal sent", " ".join(notes))
-            self.assertEqual(sent[0][0], 111)
-            self.assertIn("XAU/USD", sent[0][1])
-            self.assertIn("Position size", sent[0][1])
-            trade = gb.storage.open_trades()[0]
-
-            # Every menu screen renders.
-            emoji = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\uFE0F]")
-            for key in ("menu", "trades", "hist", "perf", "mkt", "set", "help", "risk", "news", "status", "bt", "desk"):
-                text, kb = asyncio.run(gb.screen(key, 111, 111))
-                self.assertTrue(text and kb)
-                # house style: no emoji anywhere on Telegram - text or buttons
-                buttons = " ".join(b.text for row in kb.inline_keyboard for b in row)
-                self.assertIsNone(emoji.search(text + buttons), key)
-            self.assertIn("AI DESK", ui.ai_report(trade))
-            for msg in [sent[0][1], ui.ai_report(trade), ui.signal_card(trade), ui.trade_status(trade, None)]:
-                self.assertIsNone(emoji.search(msg))
-            page = open(os.path.join(os.path.dirname(__file__), "..", "static", "dashboard.html"), encoding="utf-8").read()
-            self.assertIsNone(emoji.search(page))
-
-            # Same setup again is not re-sent.
-            asyncio.run(gb.scan(FakeBot(), manual=True))
-            self.assertEqual(len(sent), 1)
-
-            # Price hits the stop on a new candle -> reply to the signal message.
-            bull = trade["direction"] == "BUY"
-            level = trade["stop_loss"] - 1 if bull else trade["stop_loss"] + 1
-            m5 = data["5min"]
-            m5.append(candle("9999-12-31 23:59:00", level, max(level, trade["entry"]), min(level, trade["entry"]), level))
-            asyncio.run(gb.scan(FakeBot(), manual=True))
-            replies = [s for s in sent[1:] if s[2].get("reply_parameters") and s[2]["reply_parameters"].message_id == 1]
-            self.assertTrue(replies)
-            self.assertEqual(gb.storage.trade(trade["id"])["status"], "closed")
-
-            # A high-impact event right now pauses new signals.
-            gb.news.events = [{"title": "CPI m/m", "country": "USD", "impact": "High", "forecast": "", "previous": "",
-                               "time": datetime.now(timezone.utc) + timedelta(minutes=10)}]
-            notes = asyncio.run(gb.scan(FakeBot(), manual=True))
-            self.assertIn("News pause", notes[0])
-            self.assertTrue(any("HIGH-IMPACT NEWS" in x[1] for x in sent))
+    def test_event_text_for_every_update(self):
+        import bot as botmod
+        t, _ = make_trade()
+        for ev in ({"kind": "filled", "price": 100}, {"kind": "tp", "n": 1, "price": 103, "rr": 1.5, "new_sl": 100},
+                   {"kind": "tp", "n": 3, "price": 108, "rr": 4}, {"kind": "sl", "price": 98},
+                   {"kind": "protected_stop", "price": 100, "stage": 1}, {"kind": "expired"},
+                   {"kind": "cancelled"}, {"kind": "timeout", "price": 101}):
+            text = botmod.event_text(t, ev)
+            self.assertTrue(text.startswith("XAU/USD BUY Intraday"), text)
+            self.assertIsNone(EMOJI.search(text))
+        self.assertIn("limit", botmod.failure_hint("You have run out of API credits"))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
-class InteractionTests(unittest.TestCase):
-    """Buttons, commands, health alerts and briefings against a fake Telegram."""
+class WebsiteControlTests(unittest.TestCase):
+    """Settings, lab, practice review, health alerts and market-closed refresh - all driven by the website."""
 
     def setUp(self):
-        os.environ.update(TELEGRAM_BOT_TOKEN="1:x", GEMINI_API_KEY="x", TWELVEDATA_API_KEY="x", TELEGRAM="on")
-        import bot as botmod
-        from config import load_config
-        self.tmp = tempfile.TemporaryDirectory()
-        os.environ["DATA_FILE"] = os.path.join(self.tmp.name, "data.json")
-        try:
-            self.gb = botmod.GoldBot(load_config())
-        finally:
-            os.environ.pop("DATA_FILE")
-        self.gb.desk = fake_desk()
         self.setup, market, self.data = first_setup()
-        self.sent = []
-        sent = self.sent
+        self.gb = make_bot(self.data)
+        self.addCleanup(self.gb._tmp.cleanup)
 
-        class FakeMsg:
-            def __init__(self, chat_type="private"):
-                self.chat = types.SimpleNamespace(id=111, type=chat_type)
+    def test_settings_account_and_style_switches(self):
+        gb = self.gb
+        self.assertEqual(gb.apply_setting({"account": {"balance": "2500", "risk": "2"}}), {"ok": True})
+        self.assertEqual(gb.storage.account, {"balance": 2500.0, "risk": 2.0})
+        gb.apply_setting({"account": {"balance": "", "risk": 50}})
+        self.assertEqual(gb.storage.account, {"balance": None, "risk": 10.0})
+        self.assertFalse(gb.apply_setting({"style": "nope", "action": "on"})["ok"])
+        self.assertFalse(gb.apply_setting({"style": "scalp", "action": "apply", "index": 0})["ok"])
+        gb.apply_setting({"style": "scalp", "action": "off"})
+        self.assertFalse(gb.style_params("scalp")["enabled"])
+        notes = asyncio.run(gb.scan(manual=True))
+        self.assertTrue(any("switched off" in n for n in notes))
+        gb.apply_setting({"style": "scalp", "action": "reset"})
+        self.assertTrue(gb.style_params("scalp")["enabled"])
+        st = gb.dashboard_state()
+        self.assertEqual(st["account"]["risk"], 10.0)
+        self.assertIn("scalp", st["styles"])
 
-            async def reply_text(self, text, **kw):
-                sent.append(("text", text))
-                return self
-
-            async def reply_photo(self, photo, **kw):
-                sent.append(("photo", kw.get("caption")))
-
-            async def edit_text(self, text, **kw):
-                sent.append(("edit", text))
-
-        class FakeBot:
-            async def send_message(self, chat_id, text, **kw):
-                sent.append(("send", text))
-                return types.SimpleNamespace(message_id=len(sent))
-
-            async def send_photo(self, chat_id, photo, caption=None, **kw):
-                sent.append(("sendphoto", caption))
-                return types.SimpleNamespace(message_id=len(sent), photo=[types.SimpleNamespace(file_id="F")])
-
-        self.FakeMsg, self.bot = FakeMsg, FakeBot()
-
-        async def get():
-            return self.data, {}
-        self.gb.data.get = get
-
-        async def no_news():
-            return None
-        self.gb.news.refresh = no_news
-
-    def tearDown(self):
-        self.tmp.cleanup()
-
-    def press(self, data, chat_type="private"):
-        answers = []
-        msg = self.FakeMsg(chat_type)
-
-        async def answer(text=None, show_alert=False):
-            answers.append(text)
-
-        async def edit(text, **kw):
-            self.sent.append(("edit", text))
-        q = types.SimpleNamespace(data=data, message=msg, from_user=types.SimpleNamespace(id=111),
-                                  answer=answer, edit_message_text=edit)
-        update = types.SimpleNamespace(callback_query=q)
-        ctx = types.SimpleNamespace(bot=self.bot, args=[])
-        asyncio.run(self.gb.on_button(update, ctx))
-        return answers
-
-    def command(self, method, text, args=()):
-        msg = self.FakeMsg()
-        msg.text = text
-        update = types.SimpleNamespace(message=msg, effective_chat=types.SimpleNamespace(id=111),
-                                       effective_user=types.SimpleNamespace(id=111))
-        asyncio.run(method(update, types.SimpleNamespace(bot=self.bot, args=list(args))))
-
-    def test_owner_commands_and_buttons(self):
-        self.command(self.gb.cmd_start, "/start")
-        self.assertIn("owner", self.sent[0][1])
-        self.command(self.gb.cmd_balance, "/balance 2500", ["2500"])
-        self.command(self.gb.cmd_risk, "/risk 2", ["2"])
-        self.command(self.gb.cmd_lot, "/lot 50", ["50"])
-        self.assertIn("0.10", self.sent[-1][1])  # 2% of $2500 = $50 risk / (50 pips = $5 * 100 oz)
-        for cmd in ("/news", "/status", "/market", "/stats", "/history", "/trades", "/help"):
-            self.command(self.gb.cmd_simple, cmd)
-        self.command(self.gb.cmd_scan, "/scan")
-        self.assertIn("SCAN COMPLETE", self.sent[-1][1])
-
-        for data in ("menu", "trades", "hist", "perf", "mkt", "set", "risk", "news", "status", "bt", "help",
-                     "sty:scalp", "tog:briefings", "rk:2", "alert", "chart:15min", "aiview", "scan"):
-            self.press(data)
-        self.assertTrue(any(kind == "photo" for kind, _ in self.sent))
-
-        trade = self.gb.storage.open_trades()[0]
-        for prefix in ("t:", "r:", "f:"):
-            self.press(prefix + trade["id"])
-        self.assertTrue(self.press("t:" + trade["id"], chat_type="channel")[0])
-        self.assertIn("not found", self.press("t:nope")[0])
-
-    def test_non_owner_is_blocked(self):
-        self.gb.storage.claim_owner(999)
-        self.assertIn("owner", self.press("scan")[0])
-
-    def test_health_alerts_and_briefing(self):
-        self.gb.storage.claim_owner(111)
-        good_get = self.gb.data.get
-
-        async def broken():
-            raise RuntimeError("Twelve Data (5min): You have run out of API credits for the current minute.")
-        self.gb.data.get = broken
-        ctx = types.SimpleNamespace(bot=self.bot)
-        import sessions as sess
-        orig_open = sess.is_market_open
-        sess.is_market_open = lambda now=None: True
-        try:
-            for _ in range(3):
-                asyncio.run(self.gb.scheduled_scan(ctx))
-            self.assertTrue(any("Bot problem" in t and "limit" in t for _, t in self.sent))
-            self.gb.data.get = good_get
-            asyncio.run(self.gb.scheduled_scan(ctx))
-            self.assertTrue(any("Recovered" in t for _, t in self.sent))
-            self.assertEqual(self.gb.fail_count, 0)
-
-            self.gb.storage.set_subscribed(111, True)
-            asyncio.run(self.gb.briefing(types.SimpleNamespace(bot=self.bot, job=types.SimpleNamespace(data="London"))))
-            self.assertTrue(any(kind == "sendphoto" and "LONDON OPEN BRIEFING" in (t or "") for kind, t in self.sent))
-        finally:
-            sess.is_market_open = orig_open
-
-
-class DashboardTests(unittest.TestCase):
-    def test_serves_page_state_and_chart(self):
-        import urllib.request
-        os.environ.update(TELEGRAM_BOT_TOKEN="1:x", GEMINI_API_KEY="x", TWELVEDATA_API_KEY="x", TELEGRAM="on")
-        import bot as botmod
-        from config import load_config
-        from dashboard import Dashboard
-
-        setup, market, data = first_setup()
-        with tempfile.TemporaryDirectory() as d:
-            os.environ["DATA_FILE"] = os.path.join(d, "data.json")
-            try:
-                gb = botmod.GoldBot(load_config())
-            finally:
-                os.environ.pop("DATA_FILE")
-            gb.desk = fake_desk()
-
-            async def get():
-                return data, {}
-            gb.data.get = get
-
-            async def no_news():
-                return None
-            gb.news.refresh = no_news
-
-            async def run():
-                dash = Dashboard(gb, asyncio.get_running_loop(), "127.0.0.1", 0)
-                dash.start()
-                port = dash.server.server_address[1]
-                base = f"http://127.0.0.1:{port}"
-                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-                fetch = lambda path: opener.open(base + path).read()  # noqa: E731
-                page = await asyncio.to_thread(fetch, "/")
-                before = json.loads(await asyncio.to_thread(fetch, "/api/state"))
-                gb.candles, gb.market = data, market
-                gb.last_scan = datetime.now(timezone.utc)
-                png = await asyncio.to_thread(fetch, "/api/chart.png?tf=1h")
-                candles = json.loads(await asyncio.to_thread(fetch, "/api/candles?tf=15min"))
-                js = await asyncio.to_thread(fetch, "/static/lightweight-charts.js")
-                self.assertEqual(len(candles["candles"]), 300)
-                self.assertIn(b"Lightweight Charts", js[:300])
-                after = json.loads(await asyncio.to_thread(fetch, "/api/state"))
-                dash.server.shutdown()
-                return page, before, png, after
-            page, before, png, after = asyncio.run(run())
-            self.assertIn(b"AI Control Room", page)
-            self.assertIn(b"Agent network", page)
-            self.assertIn(b"API keys &amp; Gemini models", page)
-            self.assertIn("current", before)
-            self.assertTrue(all(a["slot"] for a in before["agents"]))
-            self.assertEqual(len(before["agents"]), 26)
-            self.assertIsNone(before["market"])
-            self.assertEqual(png[:4], b"\x89PNG")
-            self.assertEqual(len(after["market"]["tfs"]), 5)
-
-
-class OptimizeAndWeekendTests(InteractionTests):
-    def test_optimize_apply_and_switch_off(self):
+    def test_lab_backtest_optimize_and_apply(self):
         import backtest
-        self.gb.storage.claim_owner(111)
         hist = synthetic_history(days=30)
 
         async def fake_fetch(*a):
@@ -948,60 +755,114 @@ class OptimizeAndWeekendTests(InteractionTests):
         orig = backtest.fetch_history
         backtest.fetch_history = fake_fetch
         try:
-            asyncio.run(self.gb.run_optimize(self.bot, 111, "intraday"))
+            asyncio.run(self.gb.run_lab("backtest", "intraday"))
+            self.assertFalse(self.gb.lab["running"])
+            self.assertIn("stats", self.gb.lab["result"])
+            self.assertNotIn("trades", self.gb.lab["result"])
+            asyncio.run(self.gb.run_lab("optimize", "intraday"))
         finally:
             backtest.fetch_history = orig
-        self.assertIn("OPTIMIZER", self.sent[-1][1])
         ranked = self.gb.last_optimize["intraday"]["ranked"]
         if ranked:
-            self.press("apply:intraday:0")
+            self.assertTrue(self.gb.apply_setting({"style": "intraday", "action": "apply", "index": 0})["ok"])
             self.assertEqual(self.gb.style_params("intraday")["min_score"], ranked[0]["config"]["min_score"])
-        self.press("soff:scalp")
-        self.assertFalse(self.gb.style_params("scalp")["enabled"])
-        notes = asyncio.run(self.gb.scan(self.bot, manual=True))
-        self.assertTrue(any("switched off" in n for n in notes))
-        self.press("son:scalp")
-        self.assertTrue(self.gb.style_params("scalp")["enabled"])
-        self.press("bt")
+        self.assertIn("lab", self.gb.dashboard_state())
 
-    def test_practice_review_runs_desk_without_sending(self):
+    def test_practice_review_runs_desk_without_publishing(self):
         verdict = asyncio.run(self.gb.practice_review())
         self.assertIsNotNone(verdict)
         self.assertEqual(self.gb.storage.open_trades(), [])
         self.assertTrue(self.gb.desk.monitor.reviews[0]["practice"])
-        self.gb.storage.claim_owner(111)
-        self.press("practice")
-        self.assertIn("PRACTICE REVIEW", self.sent[-1][1])
 
     def test_market_closed_still_refreshes_data(self):
-        import sessions as sess
-        orig = sess.is_market_open
-        sess.is_market_open = lambda now=None: False
+        import instruments as ins
+        orig = ins.is_open
+        ins.is_open = lambda inst, now=None: False
         try:
-            notes = asyncio.run(self.gb.scan(self.bot))
+            notes = asyncio.run(self.gb.scan())
         finally:
-            sess.is_market_open = orig
+            ins.is_open = orig
         self.assertEqual(notes, ["Market closed"])
         self.assertIsNotNone(self.gb.market)
         self.assertIn("refreshed", self.gb.desk.monitor.log[-1]["text"])
+
+    def test_health_alerts_on_the_website(self):
+        good_get = self.gb.data.get
+
+        async def broken():
+            raise RuntimeError("Twelve Data (5min): You have run out of API credits for the current minute.")
+        self.gb.data.get = broken
+        import instruments as ins
+        orig = ins.is_open
+        ins.is_open = lambda inst, now=None: True
+        try:
+            for _ in range(3):
+                asyncio.run(self.gb.scheduled_scan())
+            alerts = [f["text"] for f in self.gb.desk.monitor.signal_feed if f["kind"] == "alert"]
+            self.assertTrue(any("limit" in a for a in alerts), alerts)
+            self.gb.data.get = good_get
+            asyncio.run(self.gb.scheduled_scan())
+            self.assertTrue(any("Recovered" in f["text"] for f in self.gb.desk.monitor.signal_feed))
+            self.assertEqual(self.gb.fail_count, 0)
+        finally:
+            ins.is_open = orig
+
+
+class DashboardTests(unittest.TestCase):
+    def test_serves_page_state_candles_and_settings(self):
+        import urllib.request
+        from dashboard import Dashboard
+
+        setup, market, data = first_setup()
+        gb = make_bot(data)
+        self.addCleanup(gb._tmp.cleanup)
+
+        async def run():
+            dash = Dashboard(gb, asyncio.get_running_loop(), "127.0.0.1", 0)
+            dash.start()
+            port = dash.server.server_address[1]
+            base = f"http://127.0.0.1:{port}"
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            fetch = lambda path: opener.open(base + path).read()  # noqa: E731
+
+            def post(path, body):
+                req = urllib.request.Request(base + path, data=json.dumps(body).encode(), method="POST",
+                                             headers={"Content-Type": "application/json"})
+                return json.loads(opener.open(req).read())
+            page = await asyncio.to_thread(fetch, "/")
+            before = json.loads(await asyncio.to_thread(fetch, "/api/state"))
+            gb.candles, gb.market = data, market
+            gb.last_scan = datetime.now(timezone.utc)
+            candles = json.loads(await asyncio.to_thread(fetch, "/api/candles?tf=15min"))
+            js = await asyncio.to_thread(fetch, "/static/lightweight-charts.js")
+            saved = await asyncio.to_thread(post, "/api/settings", {"account": {"balance": 1000, "risk": 1}})
+            bad = await asyncio.to_thread(post, "/api/settings", {"style": "x", "action": "on"})
+            after = json.loads(await asyncio.to_thread(fetch, "/api/state"))
+            dash.server.shutdown()
+            return page, before, candles, js, saved, bad, after
+        page, before, candles, js, saved, bad, after = asyncio.run(run())
+        self.assertEqual(len(candles["candles"]), 300)
+        self.assertIn(b"Lightweight Charts", js[:300])
+        self.assertIn(b"AI Control Room", page)
+        self.assertIn(b"Agent network", page)
+        self.assertNotIn(b"Telegram", page)
+        self.assertIn("current", before)
+        self.assertTrue(all(a["slot"] for a in before["agents"]))
+        self.assertEqual(len(before["agents"]), 26)
+        self.assertIsNone(before["market"])
+        self.assertEqual(saved, {"ok": True})
+        self.assertFalse(bad["ok"])
+        self.assertEqual(after["account"]["balance"], 1000)
+        self.assertEqual(len(after["market"]["tfs"]), 5)
 
 
 class MultiMarketTests(unittest.TestCase):
     """Gold closed (weekend) while bitcoin trades: BTC is scanned, signalled and shown separately."""
 
     def setUp(self):
-        os.environ.update(TELEGRAM_BOT_TOKEN="1:x", GEMINI_API_KEY="x", TWELVEDATA_API_KEY="x", TELEGRAM="on")
-        import bot as botmod
-        from config import load_config
-        self.tmp = tempfile.TemporaryDirectory()
-        os.environ.update(DATA_FILE=os.path.join(self.tmp.name, "d.json"), MARKETS="XAUUSD,BTCUSD")
-        try:
-            self.gb = botmod.GoldBot(load_config())
-        finally:
-            os.environ["MARKETS"] = "XAUUSD"
-            os.environ.pop("DATA_FILE")
-        self.gb.desk = fake_desk()
         setup, market, data = first_setup()
+        self.gb = make_bot(data, MARKETS="XAUUSD,BTCUSD")
+        self.addCleanup(self.gb._tmp.cleanup)
         btc = {tf: [dict(c, open=c["open"] * 25, high=c["high"] * 25, low=c["low"] * 25, close=c["close"] * 25,
                          volume=100 + (i % 7) * 30) for i, c in enumerate(cs)] for tf, cs in data.items()}
         self.style = setup["style"]
@@ -1014,51 +875,29 @@ class MultiMarketTests(unittest.TestCase):
         self.gb.feeds["XAUUSD"].get = gold
         self.gb.feeds["BTCUSD"].get = bitcoin
 
-        async def no_news():
-            return None
-        self.gb.news.refresh = no_news
-        self.gb.headlines.refresh = no_news
-        self.sent = []
-        sent = self.sent
-
-        class FakeBot:
-            async def send_message(self, chat_id, text, **kw):
-                sent.append(text)
-                return types.SimpleNamespace(message_id=len(sent))
-
-            async def send_photo(self, chat_id, photo, caption=None, **kw):
-                sent.append(caption)
-                return types.SimpleNamespace(message_id=len(sent), photo=[types.SimpleNamespace(file_id="F")])
-        self.bot = FakeBot()
-
-    def tearDown(self):
-        self.tmp.cleanup()
-
     def test_btc_scanned_while_gold_closed(self):
-        import sessions as sess
-        orig = sess.is_market_open
-        sess.is_market_open = lambda now=None: False
+        import instruments as ins
+        orig = ins.is_open
+        ins.is_open = lambda inst, now=None: inst["key"] == "BTCUSD"
         try:
-            self.gb.storage.set_subscribed(5, True)
-            notes = asyncio.run(self.gb.scan(self.bot))
+            notes = asyncio.run(self.gb.scan())
         finally:
-            sess.is_market_open = orig
+            ins.is_open = orig
         self.assertTrue(any("BTC/USD" in n for n in notes))
         self.assertFalse(any("XAU/USD" in n and "signal" in n for n in notes))
         trades = self.gb.storage.open_trades()
         self.assertTrue(trades and all(t["instrument"] == "BTCUSD" and t["pip"] == 1.0 for t in trades))
-        self.assertTrue(any("BTC/USD" in (m or "") for m in self.sent))
+        self.assertTrue(any("BTC/USD" in f["text"] for f in self.gb.desk.monitor.signal_feed))
         self.assertIn("XAUUSD", self.gb.markets)  # closed gold still refreshed for the charts
 
         st = self.gb.dashboard_state()
         self.assertEqual({i["key"] for i in st["instruments"]}, {"XAUUSD", "BTCUSD"})
         self.assertIsNotNone(st["markets"]["BTCUSD"])
+        self.assertEqual(st["signals"]["open"][0]["symbol"], "BTC/USD")
         cd = self.gb.chart_data("15min", "BTCUSD")
         self.assertEqual(cd["symbol"], "BTC/USD")
         self.assertTrue(cd["market_open"])
         self.assertEqual(len({(m["time"], m["text"], m["position"]) for m in cd["markers"]}), len(cd["markers"]))
-        text, kb = asyncio.run(self.gb.screen("mkt:BTCUSD", 5, 5))
-        self.assertIn("BTC/USD", text)
 
     def test_drop_closed_and_binance_pagination(self):
         import backtest
@@ -1296,7 +1135,7 @@ class NoGeminiTests(unittest.TestCase):
 
     def test_config_without_gemini(self):
         import config
-        env = {"TELEGRAM_BOT_TOKEN": "1:x", "TWELVEDATA_API_KEY": "x", "MISTRAL_API_KEY": "mk", "GEMINI_API_KEY": ""}
+        env = {"TWELVEDATA_API_KEY": "x", "MISTRAL_API_KEY": "mk", "GEMINI_API_KEY": ""}
         old = {k: os.environ.get(k) for k in env}
         os.environ.update(env)
         try:
@@ -1333,10 +1172,13 @@ class NeutralVoteTests(unittest.TestCase):
                     if "YOUR ONLY JOB" in contents:
                         n["i"] += 1
                         if skip_every and n["i"] % skip_every == 0:
-                            return types.SimpleNamespace(text='{"vote": "SKIP", "score": 30, "summary": "against"}')
+                            return types.SimpleNamespace(text='{"vote": "SKIP", "score": 30, "summary": "against the trade", '
+                                                                        '"evidence": ["CHoCH @ 2610", "RSI 71"]}')
                         if neutral_every and n["i"] % neutral_every == 0:
-                            return types.SimpleNamespace(text='{"vote": "NEUTRAL", "score": 50, "summary": "quiet"}')
-                    return types.SimpleNamespace(text='{"vote": "TAKE", "score": 75, "summary": "fine"}')
+                            return types.SimpleNamespace(text='{"vote": "NEUTRAL", "score": 50, "summary": "quiet market now", '
+                                                                        '"evidence": ["ADX 14", "range 2600-2620"]}')
+                    return types.SimpleNamespace(text='{"vote": "TAKE", "score": 75, "summary": "fine setup here", '
+                                                      '"evidence": ["BOS @ 2617.9", "OB 2612-2614"]}')
             desk.client = types.SimpleNamespace(aio=types.SimpleNamespace(models=Models()))
             return asyncio.run(desk.review(setup, market, SESSION)), desk
         v, desk = run(neutral_every=2)            # 9 TAKE, 9 NEUTRAL, 0 SKIP
@@ -1367,8 +1209,38 @@ class NeutralVoteTests(unittest.TestCase):
         self.assertEqual(desk._vetoes(analysts, [r("risk", "SKIP", 40)], board), [])  # a mild concern is no veto
 
 
+class StrictAgentTests(unittest.TestCase):
+    def test_incomplete_answer_is_asked_again(self):
+        agent = {"desk": "tech", "name": "x"}
+        self.assertEqual(TradingDesk._incomplete({"vote": "TAKE", "score": 70, "summary": "clean BOS and sweep",
+                                                  "evidence": ["BOS @ 2617.9", "sweep @ 2613"]}, 1, agent), [])
+        lazy = TradingDesk._incomplete({"vote": "maybe", "summary": "ok", "evidence": ["looks good"]}, 1, agent)
+        self.assertEqual(len(lazy), 4)
+        self.assertIn("the evidence quotes no exact number from the data",
+                      TradingDesk._incomplete({"vote": "SKIP", "score": 20, "summary": "no confirmation here",
+                                               "evidence": ["weak", "flat"]}, 1, agent))
+        self.assertEqual(TradingDesk._incomplete({"vote": "NEUTRAL", "score": 50, "summary": "mixed signals now",
+                                                  "points": ["x"]}, 2, agent), ["the vote is missing or invalid"])
+
+        desk = fake_desk()
+        answers = iter(['{"vote": "TAKE", "score": 70, "summary": "fine"}',
+                        '{"vote": "TAKE", "score": 72, "summary": "BOS confirmed on H1", '
+                        '"evidence": ["BOS @ 2617.9", "OB 2612-2614"]}'])
+        prompts = []
+
+        async def gen(model, contents, config):
+            prompts.append(contents)
+            return types.SimpleNamespace(text=next(answers))
+        desk.fake.generate_content = gen
+        from agents import ANALYSTS
+        r = asyncio.run(desk._call(ANALYSTS[0], "analyse the setup", desk.monitor, 1))
+        self.assertTrue(r["retried"])
+        self.assertEqual(r["score"], 72)
+        self.assertIn("YOUR PREVIOUS ANSWER WAS REJECTED BECAUSE", prompts[1])
+
+
 class SmcGradeTests(unittest.TestCase):
-    def test_setup_has_grade_and_checklist_shown_on_telegram(self):
+    def test_setup_has_grade_and_checklist(self):
         setup, market, _ = first_setup()
         self.assertIn(setup["smc_grade"], ("A+", "A", "B", "C"))
         self.assertEqual(len(setup["smc_checklist"]), 10)
@@ -1376,51 +1248,10 @@ class SmcGradeTests(unittest.TestCase):
         v = asyncio.run(fake_desk().review(setup, market, SESSION))
         self.assertIn("conviction", v)
         t = tracker.new_trade(dict(setup, symbol_name="XAU/USD"), v, "2026-09-22 08:00:00")
-        card = ui.signal_card(t)
-        self.assertIn("SMC GRADE", card)
-        self.assertIn("SMC CHECKLIST", card)
-        self.assertIn("CONVICTION", card)
+        self.assertEqual(t["smc_grade"], setup["smc_grade"])
+        self.assertEqual(len(t["smc_checklist"]), 10)
+        self.assertEqual(t["conviction"], v["conviction"])
 
 
-class WebOnlyTests(unittest.TestCase):
-    def test_signals_go_to_the_website_without_telegram(self):
-        import bot as botmod
-        from config import load_config
-        setup, market, data = first_setup()
-        keep = {k: os.environ.get(k) for k in ("TELEGRAM", "TELEGRAM_BOT_TOKEN", "DATA_FILE", "STYLES", "MIN_ENGINE_SCORE")}
-        with tempfile.TemporaryDirectory() as d:
-            os.environ.update(TELEGRAM="off", TWELVEDATA_API_KEY="x", GEMINI_API_KEY="x", DATA_FILE=os.path.join(d, "d.json"),
-                              STYLES=setup["style"], MIN_ENGINE_SCORE="0")
-            os.environ.pop("TELEGRAM_BOT_TOKEN", None)
-            try:
-                cfg = load_config()
-                self.assertFalse(cfg.use_telegram)
-                gb = botmod.GoldBot(cfg)
-                gb.desk = fake_desk()
-
-                async def get():
-                    return data, {}
-                gb.data.get = get
-
-                async def no_news():
-                    return None
-                gb.news.refresh = no_news
-                gb.headlines.refresh = no_news
-                notes = asyncio.run(gb.scan(botmod.NullBot(), manual=True))
-            finally:
-                for k, v in keep.items():
-                    if v is None:
-                        os.environ.pop(k, None)
-                    else:
-                        os.environ[k] = v
-        self.assertIn("signal sent", " ".join(notes))
-        feed = list(gb.desk.monitor.signal_feed)
-        self.assertEqual(feed[0]["kind"], "new")
-        self.assertEqual(gb._targets(setup["style"]), [])  # nothing goes to Telegram
-        st = gb.dashboard_state()
-        card = st["signals"]["open"][0]
-        self.assertEqual(card["direction"], setup["direction"])
-        self.assertIn("explain", card)
-        self.assertEqual(st["signal_feed"][0]["kind"], "new")
-        page = open(os.path.join(os.path.dirname(__file__), "..", "static", "dashboard.html"), encoding="utf-8").read()
-        self.assertIn("Signals – live trade ideas", page)
+if __name__ == "__main__":
+    unittest.main()

@@ -1,31 +1,22 @@
-"""Gold (XAU/USD) Smart-Money AI signal bot for Telegram.
+"""Gold & Bitcoin SMC AI desk - runs on this PC, everything is shown on the local website.
 
-Every few minutes: fetch M5..D1 gold candles (+ PAXG volume) -> SMC engine finds setups for
-scalping / intraday / swing -> news filter -> 5 AI specialists + Head Trader review them ->
-approved trades are sent with a chart, per-user lot size and live TP/SL tracking.
+Every few minutes: fetch M5..D1 candles (+ real volume) -> SMC engine finds setups for scalping / intraday /
+swing -> news filter -> strategy board -> 26-agent AI desk reviews them -> approved signals appear on the
+website (http://localhost:8080) and are tracked live: entry fill, TP1-TP3, stop loss, expiry.
 """
 
 import asyncio
 import logging
-import re
 import time
-import types
-from datetime import date, datetime, time as dtime, timedelta, timezone
-from html import escape
-
-from telegram import ReplyParameters, Update
-from telegram.constants import ChatType, ParseMode
-from telegram.error import BadRequest, NetworkError
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
+from datetime import date, datetime, timedelta, timezone
 
 import backtest
-import chart
+import instruments
 import sessions
 import tracker
-import ui
 from agents import TradingDesk, agent_records
 from config import Config, load_config
-import instruments
+from labels import label, lot_size, plain, style_name
 from market_data import MarketData
 from news import Headlines, NewsCalendar
 from setups import STYLES, TF_LABEL, analyze_market, find_setup
@@ -33,27 +24,48 @@ from storage import Storage, stats
 
 logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("apscheduler").setLevel(logging.WARNING)
 log = logging.getLogger("goldbot")
 
-NETWORK_HELP = (
-    "Could not reach Telegram (api.telegram.org). Telegram is probably blocked on this internet.\n"
-    "Fix: turn on a VPN (e.g. Cloudflare WARP / 1.1.1.1) and run again, or set PROXY_URL in .env\n"
-    "(a SOCKS5/HTTP proxy - the MTProto proxy used by the Telegram app will NOT work)."
-)
-HTML = ParseMode.HTML
 FAILS_BEFORE_ALERT = 3
 
 
 def failure_hint(error: str) -> str:
     e = error.lower()
-    if "apikey" in e or "api key" in e or "api_key" in e:
-        return "Check TWELVEDATA_API_KEY – Twelve Data rejected the key."
-    if "credits" in e or "limit" in e or "429" in e:
-        return "Twelve Data limit reached – wait, or raise SCAN_INTERVAL_MINUTES."
-    if "connect" in e or "timeout" in e or "name or service" in e:
-        return "Internet / connection problem on the server."
-    return "See the server logs for details."
+    if "api credits" in e or "429" in e or "limit" in e:
+        return "Twelve Data free limit reached (800/day, 8/min) - raise SCAN_INTERVAL_MINUTES or wait for the reset."
+    if "apikey" in e or "api key" in e or "401" in e:
+        return "Twelve Data key rejected - check TWELVEDATA_API_KEY in .env."
+    if "timed out" in e or "connect" in e or "network" in e:
+        return "Internet / connection problem on this PC."
+    return "See the console window for details."
+
+
+def event_text(t: dict, ev: dict) -> str:
+    """One line for the website's update feed when a tracked trade changes."""
+    head = f"{t.get('symbol_name', 'XAU/USD')} {t['direction']} {label(t)}"
+    pip = t.get("pip", 0.1)
+    k = ev["kind"]
+    if k == "filled":
+        return f"{head}: entry filled at {ev['price']:,.2f} - stop {t['stop_loss']:,.2f}"
+    if k == "tp":
+        gain = tracker.pips(abs(ev["price"] - t["entry"]), pip)
+        text = f"{head}: TP{ev['n']} hit +{gain} pips (1:{ev['rr']:g})"
+        if ev["n"] == 3:
+            return text + " - full target, trade closed in profit"
+        if ev.get("new_sl") is not None:
+            text += f" - move stop to {ev['new_sl']:,.2f}" + (" (breakeven)" if ev["n"] == 1 else "")
+        return text
+    if k == "sl":
+        return f"{head}: stop loss hit -{tracker.pips(abs(t['entry'] - ev['price']), pip)} pips (-1R)"
+    if k == "protected_stop":
+        return f"{head}: closed at the protected stop {ev['price']:,.2f} after TP{ev['stage']} - profit secured"
+    if k == "expired":
+        return f"{head}: limit order expired - price never returned to {t['entry']:,.2f}"
+    if k == "cancelled":
+        return f"{head}: cancelled - price reached TP1 without filling the entry"
+    if k == "timeout":
+        return f"{head}: closed after 7 days at {ev['price']:,.2f}"
+    return f"{head}: {k}"
 
 
 class GoldBot:
@@ -86,13 +98,13 @@ class GoldBot:
         self.fail_count = 0
         self.last_error = ""
         self._ai_down_alert_at = 0.0
-        self._ai_view: tuple[float, str] = (0.0, "")
-        self.backtest_running = False
-        self.app_bot = None
+        self.ai_views: dict[str, dict] = {}
+        self.lab: dict = {"running": False, "kind": None, "style": None, "symbol": None, "result": None}
         self.last_optimize: dict[str, dict] = {}
+        self.dashboard = None
 
     # ================= instruments =================
-    # The first instrument in MARKETS is the "primary" one used by single-market screens.
+    # The first instrument in MARKETS is the "primary" one.
 
     @property
     def primary(self) -> str:
@@ -111,10 +123,6 @@ class GoldBot:
         self.candles_by[self.primary] = value
 
     @property
-    def volumes(self) -> dict:
-        return self.volumes_by.get(self.primary, {})
-
-    @property
     def market(self) -> dict | None:
         return self.markets.get(self.primary)
 
@@ -131,48 +139,10 @@ class GoldBot:
         self.markets[key] = analyze_market(candles, volumes)
         return candles
 
-    # ================= helpers =================
-
-    def admins(self) -> list[int]:
-        if self.cfg.admin_ids:
-            return self.cfg.admin_ids
-        return [self.storage.owner] if self.storage.owner else []
-
-    def is_admin(self, user_id: int) -> bool:
-        return user_id in self.admins()
-
-    async def tell_admins(self, bot, text: str):
-        for admin in self.admins():
-            try:
-                await bot.send_message(admin, text, parse_mode=HTML)
-            except Exception as e:
-                log.warning("Could not message admin %s: %s", admin, e)
-
-    def _targets(self, style: str | None = None, flag: str | None = None) -> list:
-        if not getattr(self.cfg, "use_telegram", True):
-            return []  # website-only mode
-        targets = self.storage.subscribers(style, flag)
-        if self.cfg.channel_id:
-            targets.append(self.cfg.channel_id)
-        return targets
-
-    async def broadcast(self, bot, text: str, flag: str | None = None, photo: bytes | None = None):
-        file_id = None
-        for chat_id in self._targets(flag=flag):
-            try:
-                if photo:
-                    msg = await bot.send_photo(chat_id, photo=file_id or photo, caption=text, parse_mode=HTML)
-                    if not file_id and getattr(msg, "photo", None):
-                        file_id = msg.photo[-1].file_id
-                else:
-                    await bot.send_message(chat_id, text, parse_mode=HTML)
-            except Exception as e:
-                log.warning("Could not send to %s: %s", chat_id, e)
-
     # ================= scanning =================
 
-    async def scan(self, bot, manual: bool = False) -> list[str]:
-        """One full cycle: data -> track trades -> news -> find & review setups -> publish."""
+    async def scan(self, manual: bool = False) -> list[str]:
+        """One full cycle: data -> track trades -> news -> find & review setups -> publish on the website."""
         open_now = [i for i in self.instruments if manual or instruments.is_open(i)]
         if not open_now:
             stale = not self.last_scan or datetime.now(timezone.utc) - self.last_scan > timedelta(hours=1)
@@ -187,7 +157,7 @@ class GoldBot:
             mon.set_phase("scanning")
             mon.event("Scan started" + (" (manual)" if manual else ""))
             try:
-                return await self._scan(bot, mon, open_now)
+                return await self._scan(mon, open_now)
             except Exception as e:
                 mon.event(f"Scan failed: {str(e)[:160]}", "error")
                 raise
@@ -195,7 +165,7 @@ class GoldBot:
                 mon.set_phase("idle")
 
     async def refresh_market(self, keys: list[str] | None = None):
-        """Market closed: keep charts, dashboard and menus up to date without looking for trades."""
+        """Market closed: keep the charts and market panels up to date without looking for trades."""
         async with self.scan_lock:
             for key in keys or [i["key"] for i in self.instruments]:
                 try:
@@ -203,14 +173,14 @@ class GoldBot:
                 except Exception as e:
                     self.desk.monitor.event(f"{self.inst(key)['name']} data refresh failed: {str(e)[:120]}", "error")
                     continue
-                self.desk.monitor.event(f"{self.inst(key)['name']} closed – chart & market data refreshed "
+                self.desk.monitor.event(f"{self.inst(key)['name']} closed - chart & market data refreshed "
                                         f"({candles['5min'][-1]['close']:,.2f})")
             self.last_scan = datetime.now(timezone.utc)
             await self.news.refresh()
             await self.headlines.refresh()
 
     def style_params(self, style: str) -> dict:
-        """Per-style settings chosen by the owner (e.g. from the optimizer), else the .env defaults."""
+        """Per-style settings chosen on the website (e.g. from the optimizer), else the .env defaults."""
         ss = self.storage.style_settings(style)
         return {"enabled": ss.get("enabled", True),
                 "min_score": ss.get("min_score", self.cfg.min_engine_score),
@@ -218,7 +188,7 @@ class GoldBot:
                 "tp1_max_r": ss.get("tp1_max_r"),
                 "strict": ss.get("strict", self.cfg.strict_mode)}
 
-    async def _scan(self, bot, mon, insts: list[dict]) -> list[str]:
+    async def _scan(self, mon, insts: list[dict]) -> list[str]:
         now = datetime.now(timezone.utc)
         self.last_scan = now
         if self.scans["day"] != date.today():
@@ -231,25 +201,25 @@ class GoldBot:
         session["headlines"] = self.headlines.brief()
         session["headlines_by_cat"] = self.headlines.by_category()
 
-        # Warn before high-impact news (once, for everybody).
+        # Warn on the website before high-impact news (once per event).
         for ev in self.news.due_alerts(now, 20):
             mins = max(int((ev["time"] - now).total_seconds() // 60), 0)
-            await self.broadcast(bot, ui.news_alert(ev, mins), flag="news_alerts")
+            mon.signal("news", f"High-impact news in {mins} min: {ev['country']} {ev['title']} at "
+                               f"{ev['time'].strftime('%H:%M UTC')} - consider breakeven or partial profit")
         blackout = self.news.blackout(now, self.cfg.news_blackout_min, self.cfg.news_blackout_min) \
             if self.cfg.news_blackout_min else None
 
         notes = []
         for inst in insts:
             try:
-                notes += await self._scan_instrument(bot, mon, inst, session, blackout)
+                notes += await self._scan_instrument(mon, inst, session, blackout)
             except Exception as e:
                 if len(insts) == 1:
                     raise
-                notes.append(f"{inst['name']}: scan failed – {str(e)[:100]}")
+                notes.append(f"{inst['name']}: scan failed - {str(e)[:100]}")
                 mon.event(notes[-1], "error")
         # Keep closed markets' charts fresh too.
-        closed = [i["key"] for i in self.instruments if i not in insts and i["key"] not in self.markets]
-        for key in closed:
+        for key in [i["key"] for i in self.instruments if i not in insts and i["key"] not in self.markets]:
             try:
                 await self.load(key)
             except Exception as e:
@@ -260,7 +230,7 @@ class GoldBot:
         log.info("Scan done: %s", " | ".join(notes))
         return notes
 
-    async def _scan_instrument(self, bot, mon, inst: dict, session: dict, blackout: dict | None) -> list[str]:
+    async def _scan_instrument(self, mon, inst: dict, session: dict, blackout: dict | None) -> list[str]:
         key = inst["key"]
         candles = await self.load(key)
         market = self.markets[key]
@@ -274,14 +244,12 @@ class GoldBot:
             if trade.get("instrument", "XAUUSD") != key:
                 continue
             for ev in tracker.update(trade, m5):
-                mon.event(f"{inst['name']} {trade['direction']} {trade['entry']} ({ui.label(trade)}): "
-                          f"{ev['kind']}" + (f" TP{ev['n']}" if ev.get("n") else ""), "signal")
-                await self.notify(bot, trade, ev)
+                self.notify(trade, ev)
         self.storage.save()
 
         # 2) no new trades around high-impact USD news (moves gold and crypto alike)
         if blackout:
-            note = f"{inst['name']}: news pause – {blackout['title']} at {blackout['time'].strftime('%H:%M UTC')}"
+            note = f"{inst['name']}: news pause - {blackout['title']} at {blackout['time'].strftime('%H:%M UTC')}"
             mon.event(note, "skip")
             return [note.replace(f"{inst['name']}: news pause", "News pause")]
 
@@ -289,288 +257,175 @@ class GoldBot:
         notes = []
         open_trades = [t for t in self.storage.open_trades() if t.get("instrument", "XAUUSD") == key]
         for style in self.cfg.styles:
-            label = f"{inst['name']} {ui.style_name(style)}"
+            name = f"{inst['name']} {style_name(style)}"
             sp = self.style_params(style)
             if not sp["enabled"]:
-                notes.append(f"{label}: switched off by owner")
+                notes.append(f"{name}: switched off in settings")
                 continue
             setup = find_setup(style, market, session, sp["min_rr"], sp["tp1_max_r"], sp["strict"])
             if not setup:
-                notes.append(f"{label}: no setup")
+                notes.append(f"{name}: no setup")
                 continue
             setup.update(instrument=key, symbol_name=inst["name"], pip=inst["pip"],
                          contract=self.cfg.contract_size if key == "XAUUSD" else inst["contract"],
                          key=f"{key}:{setup['key']}")
             if setup["score"] < sp["min_score"]:
-                notes.append(f"{label}: weak {setup['direction']} setup ({setup['score']})")
+                notes.append(f"{name}: weak {setup['direction']} setup ({setup['score']})")
                 continue
             if self.storage.seen(setup["key"]):
-                notes.append(f"{label}: setup already reviewed")
+                notes.append(f"{name}: setup already reviewed")
                 continue
             if any(t["style"] == style and t["direction"] == setup["direction"] for t in open_trades):
-                notes.append(f"{label}: already in a {setup['direction']} trade")
+                notes.append(f"{name}: already in a {setup['direction']} trade")
                 continue
 
             self.storage.mark_seen(setup["key"])
             log.info("Reviewing %s %s %s setup (score %s)", key, style, setup["direction"], setup["score"])
-            mon.event(f"{label}: engine found {setup['direction']} setup, score {setup['score']} – "
-                      + "; ".join(setup["confluences"][:3]))
+            mon.event(f"{name}: engine found {setup['direction']} setup, score {setup['score']}, "
+                      f"SMC grade {setup.get('smc_grade', '-')} - " + "; ".join(setup["confluences"][:3]))
             self.desk.records = agent_records(self.storage.closed_trades())
             verdict = await self.desk.review(setup, market, {**session, "intermarket": self.intermarket(key)},
                                              self.track_record(style, key), instrument=inst["ai_name"])
             if verdict.get("ai_down"):
-                await self._alert_ai_down(bot)
+                self._alert_ai_down()
             if not verdict["approved"]:
                 if verdict.get("ai_down") and self.cfg.engine_only_score and \
                         setup["score"] >= self.cfg.engine_only_score:
                     verdict["engine_only"] = True
                 else:
                     why = verdict.get("reject_reason") or verdict.get("reason")
-                    notes.append(f"{label}: {setup['direction']} rejected by AI desk – {why}")
+                    notes.append(f"{name}: {setup['direction']} rejected by AI desk - {why}")
                     continue
 
             trade = tracker.new_trade(setup, verdict, m5[-1]["time"])
-            await self.publish(bot, trade)
+            self.publish(trade)
             open_trades.append(trade)
-            notes.append(f"{label}: {trade['direction']} signal sent")
+            notes.append(f"{name}: {trade['direction']} signal published")
 
         for n in notes:
-            mon.event(n, "signal" if "signal sent" in n else "info")
+            mon.event(n, "signal" if "signal published" in n else "info")
         return notes
 
-    async def _alert_ai_down(self, bot):
+    def _alert_ai_down(self):
         if time.time() - self._ai_down_alert_at > 7200:
             self._ai_down_alert_at = time.time()
-            await self.tell_admins(bot, "<b>The AI desk is not responding</b> (quota or overload). Setups are "
-                                        "skipped until it recovers. Check the AI keys in .env (Mistral / Groq / Gemini) and their quota.")
+            self.desk.monitor.signal("alert", "The AI desk is not responding (quota or overload) - setups are skipped "
+                                              "until it recovers. Check the AI keys in .env and their quota.")
 
-    async def scheduled_scan(self, context: ContextTypes.DEFAULT_TYPE):
+    async def scheduled_scan(self):
         try:
-            await self.scan(context.bot)
+            await self.scan()
         except Exception as e:
             self.fail_count += 1
             self.last_error = str(e)
             log.exception("Scheduled scan failed (%s in a row)", self.fail_count)
             if self.fail_count == FAILS_BEFORE_ALERT:
-                await self.tell_admins(context.bot, f"<b>Bot problem:</b> the last {FAILS_BEFORE_ALERT} market scans "
-                                                    f"failed.\n<code>{escape(self.last_error[:300])}</code>\n\n"
-                                                    f"Hint: {failure_hint(self.last_error)}")
+                self.desk.monitor.signal("alert", f"The last {FAILS_BEFORE_ALERT} market scans failed: "
+                                                  f"{self.last_error[:200]} - {failure_hint(self.last_error)}")
             return
         if self.fail_count >= FAILS_BEFORE_ALERT:
-            await self.tell_admins(context.bot, "<b>Recovered</b> – market scans are working again.")
+            self.desk.monitor.signal("alert", "Recovered - market scans are working again.")
         self.fail_count, self.last_error = 0, ""
 
-    async def publish(self, bot, trade: dict):
+    def publish(self, trade: dict):
+        """A new approved signal: store it and announce it on the website (feed, sound, notification)."""
         self.storage.add_trade(trade)
         self.desk.monitor.signal(
-            "new", f"{trade.get('symbol_name', 'XAU/USD')} {trade['direction']} {'LIMIT' if trade['entry_type'] == 'LIMIT' else 'MARKET'} "
-                   f"@ {trade['entry']} · SL {trade['stop_loss']} · TP1 {trade['tps'][0]} · {ui.label(trade)}", trade["id"])
-        if not self._targets(trade["style"]):
-            return  # website only
-        png = None
-        try:
-            tf = trade["timeframes"]["entry"]
-            key = trade.get("instrument", self.primary)
-            png = await asyncio.to_thread(chart.signal_chart, self.candles_by[key][tf], trade,
-                                          self.markets[key][tf]["smc"], self.markets[key].get("levels", {}),
-                                          TF_LABEL[tf])
-        except Exception:
-            log.exception("Signal chart failed; sending text only")
+            "new", f"{trade.get('symbol_name', 'XAU/USD')} {trade['direction']} "
+                   f"{'LIMIT' if trade['entry_type'] == 'LIMIT' else 'MARKET'} @ {trade['entry']:,.2f} · SL "
+                   f"{trade['stop_loss']:,.2f} · TP1 {trade['tps'][0]:,.2f} · {label(trade)}", trade["id"])
 
-        kb = ui.signal_keyboard(trade["id"])
-        file_id = None
-        for chat_id in self._targets(trade["style"]):
-            user = self.storage.data["users"].get(str(chat_id))
-            lot = ui.lot_line(user, trade, self.cfg.contract_size)
-            try:
-                if png:
-                    msg = await bot.send_photo(chat_id, photo=file_id or png, caption=ui.signal_caption(trade, lot),
-                                               parse_mode=HTML, reply_markup=kb)
-                    if not file_id and getattr(msg, "photo", None):
-                        file_id = msg.photo[-1].file_id
-                else:
-                    text = ui.signal_card(trade) + (f"\n\n{lot}" if lot else "")
-                    msg = await bot.send_message(chat_id, text, parse_mode=HTML, reply_markup=kb)
-                trade["messages"][str(chat_id)] = msg.message_id
-            except Exception as e:
-                log.warning("Could not send signal to %s: %s", chat_id, e)
-        self.storage.save()
+    def notify(self, trade: dict, ev: dict):
+        text = event_text(trade, ev)
+        self.desk.monitor.event(text, "signal")
+        self.desk.monitor.signal(ev["kind"], text, trade["id"])
 
-    async def notify(self, bot, trade: dict, ev: dict):
-        text = ui.event_message(trade, ev)
-        self.desk.monitor.signal(ev["kind"], ui.plain(re.sub(r"<[^>]+>", "", text)).replace("\n", " · "), trade["id"])
-        for chat_id, msg_id in trade["messages"].items():
-            try:
-                await bot.send_message(chat_id, text, parse_mode=HTML,
-                                       reply_parameters=ReplyParameters(msg_id, allow_sending_without_reply=True))
-            except Exception as e:
-                log.warning("Could not send update to %s: %s", chat_id, e)
-
-    async def daily_report(self, context: ContextTypes.DEFAULT_TYPE):
-        since = datetime.now(timezone.utc) - timedelta(days=1)
-        closed = self.storage.closed_trades(since)
-        if not closed and not self.storage.open_trades():
-            return
-        await self.broadcast(context.bot, ui.daily_report(stats(closed), len(self.storage.open_trades())))
-
-    async def briefing(self, context: ContextTypes.DEFAULT_TYPE):
-        """AI outlook + chart at the London and New York opens."""
-        name = context.job.data
-        if not self.cfg.briefings or not sessions.is_market_open() or not self.market:
-            return
-        try:
-            text = await self.desk.market_view(self.market, {**sessions.current(), "news": self.news.brief()})
-            png = await asyncio.to_thread(chart.market_chart, self.candles["15min"], self.market["15min"]["smc"],
-                                          self.market.get("levels", {}), "M15", self.inst(self.primary)["name"])
-        except Exception:
-            log.exception("Briefing failed")
-            return
-        caption = f"<b>{name.upper()} OPEN BRIEFING · {self.inst(self.primary)['name']}</b>\n{ui.LINE}\n{escape(text)}"
-        if len(caption) > 1000:
-            caption = caption[:990].rsplit(" ", 1)[0] + "…"
-        await self.broadcast(context.bot, caption, flag="briefings", photo=png)
-
-    # ================= commands =================
-
-    async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        chat_id, user_id = update.effective_chat.id, update.effective_user.id
-        self.storage.set_subscribed(chat_id, True)
-        if not self.cfg.admin_ids and self.storage.claim_owner(user_id):
-            await update.message.reply_text("<b>You are the owner of this bot.</b> Admin tools (scan, status, "
-                                            "backtest, error alerts) are unlocked for you.", parse_mode=HTML)
-        text, kb = ui.main_menu(self.storage.user(chat_id), self.is_admin(user_id))
-        await update.message.reply_text(text, parse_mode=HTML, reply_markup=kb)
-
-    async def cmd_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        text, kb = ui.main_menu(self.storage.user(update.effective_chat.id), self.is_admin(update.effective_user.id))
-        await update.message.reply_text(text, parse_mode=HTML, reply_markup=kb)
-
-    async def cmd_stop(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        self.storage.set_subscribed(update.effective_chat.id, False)
-        await update.message.reply_text("Alerts OFF. Send /start to switch them on again.")
-
-    async def cmd_simple(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """/trades /stats /market /help /history /news /status – same screens as the menu buttons."""
-        cmd = update.message.text.split()[0].lstrip("/").split("@")[0]
-        key = {"trades": "trades", "stats": "perf", "market": "mkt", "help": "help", "history": "hist",
-               "news": "news", "status": "status"}[cmd]
-        text, kb = await self.screen(key, update.effective_chat.id, update.effective_user.id)
-        await update.message.reply_text(text, parse_mode=HTML, reply_markup=kb)
-
-    async def cmd_balance(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            value = float(context.args[0].replace(",", "").replace("$", ""))
-            assert value > 0
-        except (IndexError, ValueError, AssertionError):
-            await update.message.reply_text("Usage: <code>/balance 1000</code>", parse_mode=HTML)
-            return
-        self.storage.set_field(update.effective_chat.id, "balance", value)
-        text, kb = ui.risk_screen(self.storage.user(update.effective_chat.id), self.cfg.contract_size)
-        await update.message.reply_text("Balance saved.\n\n" + text, parse_mode=HTML, reply_markup=kb)
-
-    async def cmd_risk(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            value = float(context.args[0].rstrip("%"))
-            assert 0 < value <= 10
-        except (IndexError, ValueError, AssertionError):
-            await update.message.reply_text("Usage: <code>/risk 1</code>  (percent per trade, 0.1–10)", parse_mode=HTML)
-            return
-        self.storage.set_field(update.effective_chat.id, "risk", value)
-        text, kb = ui.risk_screen(self.storage.user(update.effective_chat.id), self.cfg.contract_size)
-        await update.message.reply_text("Risk saved.\n\n" + text, parse_mode=HTML, reply_markup=kb)
-
-    async def cmd_lot(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user = self.storage.user(update.effective_chat.id)
-        try:
-            sl_pips = float(context.args[0])
-            assert sl_pips > 0
-        except (IndexError, ValueError, AssertionError):
-            await update.message.reply_text("Usage: <code>/lot 50</code>  (stop loss in pips; 1 pip = $0.10)",
-                                            parse_mode=HTML)
-            return
-        if not user.get("balance"):
-            await update.message.reply_text("Set your balance first: <code>/balance 1000</code>", parse_mode=HTML)
-            return
-        lots, risk_usd = ui.lot_size(user["balance"], user.get("risk", 1.0), sl_pips / 10, self.cfg.contract_size)
-        await update.message.reply_text(
-            f"Stop <b>{sl_pips:g} pips</b> with {user.get('risk', 1.0):g}% risk (${risk_usd:,.2f})\n"
-            f"Lot size: <b>{max(lots, 0.01):.2f}</b>" + ("  (minimum lot – risk is higher)" if lots < 0.01 else ""),
-            parse_mode=HTML)
-
-    async def cmd_scan(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self.is_admin(update.effective_user.id):
-            await update.message.reply_text("Only the bot owner can run a manual scan.")
-            return
-        msg = await update.message.reply_text("The AI desk is scanning gold and bitcoin on M5 → D1…")
-        await msg.edit_text(await self._manual_scan_text(context.bot), parse_mode=HTML)
-
-    async def cmd_backtest(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not self.is_admin(update.effective_user.id):
-            await update.message.reply_text("Only the bot owner can run a backtest.")
-            return
-        style = context.args[0] if context.args else "intraday"
-        key = "BTCUSD" if any(a.upper().startswith("BTC") for a in context.args[1:]) else None
-        if style not in STYLES:
-            await update.message.reply_text(f"Usage: <code>/backtest intraday</code>  ({', '.join(STYLES)})",
-                                            parse_mode=HTML)
-            return
-        await self.run_backtest(context.bot, update.effective_chat.id, style, key)
+    # ================= backtest & optimizer (website "Lab") =================
 
     async def _history(self, style: str, key: str):
         inst = self.inst(key)
         symbol = self.cfg.symbol if inst["key"] == "XAUUSD" else inst["symbol"]
         return await backtest.fetch_history(self.cfg.twelvedata_api_key, symbol, style, inst["source"])
 
-    async def run_backtest(self, bot, chat_id: int, style: str, key: str | None = None):
-        inst = self.inst(key or self.primary)
-        if self.backtest_running:
-            await bot.send_message(chat_id, "A backtest is already running, please wait.")
+    async def run_lab(self, kind: str, style: str, key: str | None = None):
+        """Backtest or optimize one style on recent history; the result is shown in the website's Lab panel."""
+        if style not in STYLES or kind not in ("backtest", "optimize"):
             return
-        self.backtest_running = True
+        inst = self.inst(key or self.primary)
+        if self.lab["running"]:
+            self.desk.monitor.event("A backtest is already running - please wait", "skip")
+            return
+        self.lab = {"running": True, "kind": kind, "style": style, "symbol": inst["name"], "result": None,
+                    "started": datetime.now(timezone.utc).strftime("%H:%M UTC")}
+        self.desk.monitor.event(f"Lab: {kind} {inst['name']} {style_name(style)} started (1-6 minutes)")
         try:
-            await bot.send_message(chat_id, f"Backtesting {inst['name']} {ui.style_name(style)} "
-                                            "on recent history… this takes 1–5 minutes.")
             data = await self._history(style, inst["key"])
-            sp = self.style_params(style)
-            result = await asyncio.to_thread(backtest.run, data, style, sp["min_rr"], sp["min_score"],
-                                             sp["tp1_max_r"], sp["strict"])
+            if kind == "backtest":
+                sp = self.style_params(style)
+                result = await asyncio.to_thread(backtest.run, data, style, sp["min_rr"], sp["min_score"],
+                                                 sp["tp1_max_r"], sp["strict"])
+            else:
+                result = await asyncio.to_thread(backtest.optimize, data, style)
+                self.last_optimize[style] = result
         except Exception as e:
-            log.exception("Backtest failed")
+            log.exception("Lab %s failed", kind)
             result = {"error": str(e)[:200]}
-        finally:
-            self.backtest_running = False
         if not result.get("error"):
-            result["label"] = f"{inst['name']} {ui.plain(result['label'])}"
-        await bot.send_message(chat_id, ui.backtest_report(result), parse_mode=HTML)
+            result["label"] = f"{inst['name']} {plain(result.get('label', style_name(style)))}"
+            result.pop("trades", None)
+        self.lab.update(running=False, result=result)
+        self.desk.monitor.event(f"Lab: {kind} finished" + (f" - {result['error']}" if result.get("error") else ""),
+                                "error" if result.get("error") else "info")
 
-    async def run_optimize(self, bot, chat_id: int, style: str, key: str | None = None):
+    def apply_setting(self, body: dict) -> dict:
+        """Settings changed on the website: account for lot sizes, per-style switches and optimizer results."""
+        if "account" in body:
+            a = body["account"] or {}
+            self.storage.set_account(balance=float(a["balance"]) if a.get("balance") not in (None, "") else 0.0,
+                                     risk=float(a["risk"]) if a.get("risk") not in (None, "") else None)
+            return {"ok": True}
+        style, action = body.get("style"), body.get("action")
+        if style not in STYLES:
+            return {"ok": False, "error": "unknown style"}
+        if action == "on":
+            self.storage.set_style_settings(style, enabled=True)
+        elif action == "off":
+            self.storage.set_style_settings(style, enabled=False)
+        elif action == "reset":
+            self.storage.reset_style_settings(style)
+        elif action == "apply":
+            ranked = self.last_optimize.get(style, {}).get("ranked", [])
+            i = int(body.get("index", -1))
+            if not 0 <= i < len(ranked):
+                return {"ok": False, "error": "run the optimizer first"}
+            self.storage.set_style_settings(style, enabled=True, **ranked[i]["config"])
+        else:
+            return {"ok": False, "error": "unknown action"}
+        self.desk.monitor.event(f"Settings: {style_name(style)} {action}")
+        return {"ok": True}
+
+    # ================= AI market view =================
+
+    async def ai_market_view(self, key: str | None = None):
         inst = self.inst(key or self.primary)
-        if self.backtest_running:
-            await bot.send_message(chat_id, "A backtest is already running, please wait.")
+        market = self.markets.get(inst["key"])
+        if not market:
             return
-        self.backtest_running = True
+        cached = self.ai_views.get(inst["key"])
+        if cached and time.time() - cached["ts"] < 600:
+            return
+        self.ai_views[inst["key"]] = {"ts": time.time(), "time": datetime.now(timezone.utc).strftime("%H:%M UTC"),
+                                      "text": "The AI analyst is reading the chart…", "busy": True}
         try:
-            await bot.send_message(chat_id, f"Optimizing {inst['name']} {ui.style_name(style)}: "
-                                            f"testing {len(backtest.GRID)} settings on the same history… 2–6 minutes.")
-            data = await self._history(style, inst["key"])
-            result = await asyncio.to_thread(backtest.optimize, data, style)
+            text = await self.desk.market_view(market, {**sessions.current(), "news": self.news.brief()},
+                                               inst["ai_name"])
         except Exception as e:
-            log.exception("Optimize failed")
-            result = {"error": str(e)[:200]}
-        finally:
-            self.backtest_running = False
-        self.last_optimize[style] = result
-        text, kb = ui.optimize_report(result, self.style_params(style))
-        await bot.send_message(chat_id, text, parse_mode=HTML, reply_markup=kb)
+            log.warning("AI market view failed: %s", e)
+            text = "The AI analyst is busy right now - try again in a minute."
+            self.ai_views[inst["key"]]["ts"] = 0
+        self.ai_views[inst["key"]].update(text=text.strip(), busy=False)
 
-    async def _manual_scan_text(self, bot) -> str:
-        try:
-            notes = await self.scan(bot, manual=True)
-        except Exception as e:
-            log.exception("Manual scan failed")
-            return f"<b>Scan failed:</b> {escape(str(e)[:300])}\nHint: {failure_hint(str(e))}"
-        closed = "" if sessions.is_market_open() else "\n\n<i>Market is closed – setups are rare until it reopens.</i>"
-        return "<b>SCAN COMPLETE</b>\n" + "\n".join(f"– {escape(n)}" for n in notes) + closed
+    # ================= website state =================
 
     def status_info(self) -> dict:
         up = int(time.time() - self.started)
@@ -587,206 +442,12 @@ class GoldBot:
             "volume_ok": self.data.volume_ok,
             "news_ok": self.news.error is None,
             "open_trades": len(self.storage.open_trades()),
-            "users": len(self.storage.subscribers()),
             "notes": self.last_notes,
         }
 
-    # ================= screens & buttons =================
-
-    async def screen(self, key: str, chat_id: int, user_id: int):
-        user = self.storage.user(chat_id)
-        price = self.market["5min"]["price"] if self.market else None
-        if key == "trades":
-            return ui.trades_list(self.storage.open_trades(), price)
-        if key == "hist":
-            return ui.history(self.storage.closed_trades())
-        if key == "perf":
-            return ui.performance(stats(self.storage.closed_trades())), ui.back()
-        if key == "mkt" or key.startswith("mkt:"):
-            inst = self.inst(key[4:] or self.primary)
-            text = ui.market_dashboard(self.markets.get(inst["key"]), sessions.current(), instruments.is_open(inst),
-                                       self.last_scan, inst['name'])
-            return text, ui.market_keyboard(inst["key"], self.instruments)
-        if key == "set":
-            return ui.settings(user)
-        if key == "risk":
-            return ui.risk_screen(user, self.cfg.contract_size)
-        if key == "news":
-            await self.news.refresh()
-            now = datetime.now(timezone.utc)
-            await self.headlines.refresh()
-            return ui.news_screen(self.news.upcoming(now, 24 * 7), self.news.blackout(now), self.news.error,
-                                  self.headlines.latest(6)), ui.back()
-        if key == "status" and self.is_admin(user_id):
-            return ui.status_screen(self.status_info()), ui.back()
-        if key == "bt" and self.is_admin(user_id):
-            from telegram import InlineKeyboardButton as Btn
-            rows = []
-            for inst in self.instruments:
-                rows.append([Btn(f"Test {inst['label']} {ui.style_name(s)}", callback_data=f"bt:{s}:{inst['key']}")
-                             for s in STYLES])
-                rows.append([Btn(f"Optimize {inst['label']} {ui.style_name(s)}", callback_data=f"opt:{s}:{inst['key']}")
-                             for s in STYLES])
-            return ui.backtest_menu({s: self.style_params(s) for s in STYLES}), ui.back(rows)
-        if key == "help":
-            return ui.HELP, ui.back()
-        if key == "desk":
-            from agents import ALL_AGENTS
-            closed = self.storage.closed_trades()
-            return ui.desk_record(agent_records(closed), ALL_AGENTS, len(closed)), ui.back()
-        return ui.main_menu(user, self.is_admin(user_id))
-
-    async def on_button(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        q = update.callback_query
-        data = q.data or ""
-        chat = q.message.chat
-        user_id = q.from_user.id
-
-        # Buttons under a signal (also work in channels, where we answer with a popup).
-        if data[:2] in ("t:", "r:", "f:"):
-            trade = self.storage.trade(data[2:])
-            if not trade:
-                await q.answer("Trade not found", show_alert=True)
-                return
-            price = self.market["5min"]["price"] if self.market else None
-            text = {"t": lambda: ui.trade_status(trade, price), "r": lambda: ui.ai_report(trade),
-                    "f": lambda: ui.signal_card(trade)}[data[0]]()
-            if chat.type == ChatType.CHANNEL:
-                plain = text
-                for tag in ("<b>", "</b>", "<i>", "</i>", "<code>", "</code>"):
-                    plain = plain.replace(tag, "")
-                await q.answer(plain[:195], show_alert=True)
-            else:
-                await q.answer()
-                await q.message.reply_text(text, parse_mode=HTML)
-            return
-
-        if data.startswith("chart:"):
-            _, tf, key = (data + ":").split(":")[:3]
-            inst = self.inst(key or self.primary)
-            candles, market = self.candles_by.get(inst["key"]), self.markets.get(inst["key"])
-            if not candles or tf not in candles:
-                await q.answer("No market data yet – wait for the first scan", show_alert=True)
-                return
-            await q.answer("Drawing chart…")
-            png = await asyncio.to_thread(chart.market_chart, candles[tf], market[tf]["smc"],
-                                          market.get("levels", {}), TF_LABEL[tf], inst["name"])
-            await q.message.reply_photo(png, caption=f"{inst['name']} {TF_LABEL[tf]} · {market[tf]['price']:,.2f}")
-            return
-
-        if data.startswith(("opt:", "apply:", "soff:", "son:")):
-            if not self.is_admin(user_id):
-                await q.answer("Only the owner can change strategy settings", show_alert=True)
-                return
-            kind, _, rest = data.partition(":")
-            if kind == "opt":
-                style_, _, key_ = rest.partition(":")
-                await q.answer("Optimizer started")
-                asyncio.create_task(self.run_optimize(context.bot, chat.id, style_, key_ or None))
-                return
-            style, _, idx = rest.partition(":")
-            if kind == "apply":
-                ranked = self.last_optimize.get(style, {}).get("ranked", [])
-                if not idx.isdigit() or int(idx) >= len(ranked):
-                    await q.answer("Run the optimizer again first", show_alert=True)
-                    return
-                cfg = ranked[int(idx)]["config"]
-                self.storage.set_style_settings(style, enabled=True, **cfg)
-                await q.answer("Settings applied", show_alert=True)
-            elif kind == "soff":
-                self.storage.set_style_settings(style, enabled=False)
-                await q.answer(f"{STYLES[style]['label']} switched off", show_alert=True)
-            else:
-                self.storage.reset_style_settings(style)
-                await q.answer(f"{STYLES[style]['label']} back to default settings", show_alert=True)
-            text, kb = await self.screen("bt", chat.id, user_id)
-            await q.message.reply_text(text, parse_mode=HTML, reply_markup=kb)
-            return
-
-        if data.startswith("bt:"):
-            if not self.is_admin(user_id):
-                await q.answer("Only the owner can run backtests", show_alert=True)
-                return
-            style_, _, key_ = data[3:].partition(":")
-            await q.answer("Backtest started")
-            asyncio.create_task(self.run_backtest(context.bot, chat.id, style_, key_ or None))
-            return
-
-        if data.startswith("sty:"):
-            self.storage.toggle_style(chat.id, data[4:])
-            data = "set"
-        elif data.startswith("tog:"):
-            self.storage.toggle_field(chat.id, data[4:])
-            data = "set"
-        elif data.startswith("rk:"):
-            self.storage.set_field(chat.id, "risk", float(data[3:]))
-            data = "risk"
-        elif data == "alert":
-            u = self.storage.user(chat.id)
-            self.storage.set_subscribed(chat.id, not u.get("subscribed"))
-            data = "menu"
-        elif data == "scan":
-            if not self.is_admin(user_id):
-                await q.answer("Only the owner can scan manually", show_alert=True)
-                return
-            await q.answer("Scanning…")
-            await q.message.reply_text(await self._manual_scan_text(context.bot), parse_mode=HTML)
-            return
-        elif data == "practice":
-            if not self.is_admin(user_id):
-                await q.answer("Only the owner can run a practice review", show_alert=True)
-                return
-            await q.answer("Practice review started – watch it on the dashboard")
-            verdict = await self.practice_review()
-            if verdict:
-                votes = ui.desk_line({**verdict, "desk_votes": {"leads": verdict.get("lead_votes"),
-                                                                "verifiers": verdict.get("verifier_votes")},
-                                      "board": verdict.get("board") or {}})
-                await q.message.reply_text(
-                    f"<b>PRACTICE REVIEW</b> (no signal sent)\n{votes}\n"
-                    f"Result: <b>{'would be SENT' if verdict['approved'] else 'would be SKIPPED'}</b> · "
-                    f"confidence {verdict['confidence']}%\n<i>{escape(verdict.get('reject_reason') or verdict.get('reason') or '')}</i>",
-                    parse_mode=HTML)
-            return
-        elif data == "aiview" or data.startswith("aiview:"):
-            await q.answer("AI analyst is reading the chart…")
-            await q.message.reply_text(await self._ai_market_view(data[7:] or None), parse_mode=HTML)
-            return
-
-        await q.answer()
-        text, kb = await self.screen(data, chat.id, user_id)
-        try:
-            await q.edit_message_text(text, parse_mode=HTML, reply_markup=kb)
-        except BadRequest as e:
-            if "not modified" not in str(e).lower():
-                raise
-
-    async def _ai_market_view(self, key: str | None = None) -> str:
-        inst = self.inst(key or self.primary)
-        market = self.markets.get(inst["key"])
-        if not market:
-            return "No market data yet – wait for the first scan."
-        cached_at, text = self._ai_view.get(inst["key"], (0.0, "")) if isinstance(self._ai_view, dict) else (0.0, "")
-        if time.time() - cached_at > 600:
-            try:
-                text = await self.desk.market_view(market, {**sessions.current(), "news": self.news.brief()},
-                                                   inst["ai_name"])
-                if not isinstance(self._ai_view, dict):
-                    self._ai_view = {}
-                self._ai_view[inst["key"]] = (time.time(), text)
-            except Exception as e:
-                log.warning("AI market view failed: %s", e)
-                return "The AI analyst is busy right now, try again in a minute."
-        return f"<b>AI MARKET VIEW · {inst['name']}</b>\n{ui.LINE}\n{escape(text)}\n\n<i>{ui.DISCLAIMER}</i>"
-
-    # ================= local dashboard =================
-
     def _slot_label(self, agent_key: str) -> str:
-        from agents import slot_label
         slots = self.desk.slots_for(agent_key)
-        if not slots:
-            return ""
-        return self.desk.label(slots[0]) if hasattr(self.desk, "label") else slot_label(slots[0])
+        return self.desk.label(slots[0]) if slots else ""
 
     def _market_summary(self, key: str) -> dict | None:
         market = self.markets.get(key)
@@ -805,7 +466,7 @@ class GoldBot:
                         "atr": round(m["smc"]["atr"], 2),
                         "patterns": ", ".join(x["name"].split(" (")[0] for x in m["smc"].get("patterns", [])
                                               if x.get("age", 0) <= 1)[:60]})
-        return {"price": market["5min"]["price"], "levels": market.get("levels", {}),
+        return {"price": market["5min"]["price"], "levels": market.get("levels", {}), "pivots": market.get("pivots", {}),
                 "adr": market.get("adr", {}), "tfs": tfs}
 
     def dashboard_state(self) -> dict:
@@ -813,16 +474,14 @@ class GoldBot:
 
         mon = self.desk.monitor
         link = links()
-        records = agent_records(self.storage.closed_trades())
+        closed = self.storage.closed_trades()
+        records = agent_records(closed)
         agents = [{"key": a["key"], "name": a["name"], "icon": a["icon"], "role": a.get("focus", ""),
                    "desk": a.get("desk"), "inputs": inputs(a) if stage_no == 1 else [],
                    "receives": link[a["key"]]["from"], "sends": link[a["key"]]["to"],
-                   "home_key": self.desk.home_key(a["key"]) if hasattr(self.desk, "plan") else 1,
-                   "stage": stage_no, "slot": self._slot_label(a["key"]), "record": records.get(a["key"]),
-                   **dict(mon.agents.get(a["key"], {}))}
+                   "home_key": self.desk.home_key(a["key"]), "stage": stage_no, "slot": self._slot_label(a["key"]),
+                   "record": records.get(a["key"]), **dict(mon.agents.get(a["key"], {}))}
                   for stage_no, (_, members) in enumerate(PIPELINE, 1) for a in members]
-        stages = [name for name, _ in PIPELINE]
-        flows = list(mon.flows)[-250:]
         markets = {i["key"]: self._market_summary(i["key"]) for i in self.instruments}
         next_in = None
         if self.last_scan:
@@ -835,40 +494,48 @@ class GoldBot:
             "instruments": [{"key": i["key"], "name": i["name"], "label": i["label"], "icon": i["icon"],
                              "open": instruments.is_open(i)} for i in self.instruments],
             "agents": agents,
-            "stages": stages,
+            "stages": [name for name, _ in PIPELINE],
             "session": sessions.current(),
             "desks": DESKS,
             "board": mon.board,
-            "keys": len(getattr(self.desk, "clients", [None])),
-            "key_names": self.desk.key_names() if hasattr(self.desk, "key_names") else ["Gemini 1"],
-            "flows": flows,
+            "keys": len(self.desk.key_names()),
+            "key_names": self.desk.key_names(),
+            "flows": list(mon.flows)[-250:],
             "data_age": self.data_age(),
             "data_ages": {i["key"]: self.data_age(i["key"]) for i in self.instruments},
             "ai_models": self.desk.pool.status(),
-            "current": self.desk.monitor.current,
+            "current": mon.current,
             "news_error": self.headlines.error if not self.headlines.items else None,
             "calendar": [{"title": e["title"], "impact": e["impact"], "time": e["time"].strftime("%a %H:%M UTC"),
                           "forecast": e["forecast"], "previous": e["previous"]}
                          for e in self.news.upcoming(datetime.now(timezone.utc), 48)][:10],
-            "headlines": [{"title": h["title"], "source": h["source"], "link": h["link"], "gold": h["gold"],
+            "headlines": [{"title": h["title"], "source": h["source"], "link": h["link"],
                            "cats": h.get("categories", []),
                            "time": h["time"].strftime("%H:%M UTC") if h["time"] else ""} for h in self.headlines.latest(18)],
             "log": list(mon.log)[::-1][:200],
             "reviews": list(mon.reviews),
             "market": markets.get(self.primary),
             "markets": markets,
-            "trades": [{**{k: t[k] for k in ("direction", "style_label", "entry", "stop_loss", "tps", "status", "stage")},
-                        "symbol": t.get("symbol_name", "XAU/USD")} for t in self.storage.open_trades()],
             "signals": self._signals(),
             "signal_feed": list(mon.signal_feed)[:40],
-            "performance": stats(self.storage.closed_trades()),
+            "performance": stats(closed),
+            "account": self.storage.account,
+            "styles": {s: {**self.style_params(s), "label": style_name(s), "active": s in self.cfg.styles}
+                       for s in STYLES},
+            "lab": self.lab,
+            "optimizer": {s: [{"rank": i, "config": r["config"], "trades": r["trades"], "win_rate": r["win_rate"],
+                               "total_r": r["total_r"], "profit_factor": r["profit_factor"], "max_dd": r["max_dd"]}
+                              for i, r in enumerate(o.get("ranked", [])[:5])]
+                          for s, o in self.last_optimize.items() if not o.get("error")},
+            "ai_views": {k: {kk: v[kk] for kk in ("time", "text", "busy")} for k, v in self.ai_views.items()},
             "settings": {"styles": self.cfg.styles, "min_confidence": self.cfg.min_confidence,
-                         "min_votes": self.cfg.min_agent_votes},
+                         "min_conviction": self.cfg.min_conviction, "min_votes": self.cfg.min_agent_votes,
+                         "language": self.cfg.explain_language},
             "chart_version": str(self.last_scan) if self.last_scan else "",
         }
 
     def live_price(self, key: str | None = None) -> dict | None:
-        """Near real-time price for the dashboard (called from the dashboard thread, cached 5 s).
+        """Near real-time price for the website (called from the web thread, cached 5 s).
 
         Bitcoin comes straight from Binance. Gold candles come from Twelve Data every few minutes, so between
         scans the price is moved with PAXG/USDT (tokenized gold) calibrated to the last XAU/USD M5 close.
@@ -911,7 +578,7 @@ class GoldBot:
         return value
 
     def chart_data(self, tf: str, key: str | None = None) -> dict | None:
-        """Candles and SMC overlays for the dashboard's live chart."""
+        """Candles and SMC overlays for the website's live chart."""
         inst = self.inst(key or self.primary)
         all_candles, market = self.candles_by.get(inst["key"]), self.markets.get(inst["key"])
         if not all_candles or tf not in all_candles or not market or tf not in market:
@@ -950,7 +617,6 @@ class GoldBot:
             if (m["time"], m["text"], m["position"]) not in seen:
                 seen.add((m["time"], m["text"], m["position"]))
                 unique.append(m)
-        markers = unique
         vol = market[tf]["volume"]
         bubbles = [{"time": ts(b["time"]), "price": b["price"], "x": b["x_avg"], "dir": b["direction"]}
                    for b in vol.get("bubbles", []) if ts(b["time"]) >= first] if vol.get("available") else []
@@ -958,7 +624,7 @@ class GoldBot:
             "tf": tf,
             "candles": [{"time": ts(c["time"]), "open": c["open"], "high": c["high"], "low": c["low"],
                          "close": c["close"]} for c in candles],
-            "markers": sorted(markers, key=lambda m: m["time"]),
+            "markers": sorted(unique, key=lambda m: m["time"]),
             "zones": zones,
             "levels": {k: v for k, v in market.get("levels", {}).items() if abs(v - price) <= 10 * a},
             "liquidity": {"buy": smc_read["liquidity"]["buy_side"][:2], "sell": smc_read["liquidity"]["sell_side"][:2]},
@@ -974,25 +640,32 @@ class GoldBot:
     SIGNAL_FIELDS = ("id", "direction", "entry_type", "entry", "stop_loss", "tps", "rr", "status", "stage", "outcome",
                      "result_r", "created_at", "expires_at", "closed_at", "confidence", "conviction", "smc_grade",
                      "smc_checklist", "headline", "reason", "explain", "invalidation", "management", "risks",
-                     "evidence_for", "evidence_against", "confluences", "pip", "timeframes", "per_desk", "board")
+                     "evidence_for", "evidence_against", "confluences", "pip", "timeframes", "per_desk", "board",
+                     "engine_only")
 
     def _signals(self) -> dict:
-        """Open signals (with the last price and floating pips) and the latest finished ones, for the website."""
+        """Open signals (last price, floating pips, lot size for the saved account) and the latest finished ones."""
+        acct = self.storage.account
+
         def card(t):
             c = {k: t.get(k) for k in self.SIGNAL_FIELDS}
             c.update(symbol=t.get("symbol_name", "XAU/USD"), instrument=t.get("instrument", "XAUUSD"),
-                     style=ui.label(t), confluences=[ui.plain(x) for x in t.get("confluences") or []])
+                     style=label(t), confluences=[plain(x) for x in t.get("confluences") or []])
             market = self.markets.get(c["instrument"]) or {}
             price = (market.get("5min") or {}).get("price")
-            if price is not None and t["status"] == "active":
-                diff = (price - t["entry"]) if t["direction"] == "BUY" else (t["entry"] - price)
-                risk = abs(t["entry"] - (t.get("initial_sl") or t["stop_loss"]))
-                c.update(price=round(price, 2), floating_pips=tracker.pips(diff, t.get("pip", 0.1)),
-                         floating_r=round(diff / risk, 2) if risk else None)
-            elif price is not None:
+            if price is not None:
                 c["price"] = round(price, 2)
+                if t["status"] == "active":
+                    diff = (price - t["entry"]) if t["direction"] == "BUY" else (t["entry"] - price)
+                    risk = abs(t["entry"] - (t.get("initial_sl") or t["stop_loss"]))
+                    c.update(floating_pips=tracker.pips(diff, t.get("pip", 0.1)),
+                             floating_r=round(diff / risk, 2) if risk else None)
+            if acct.get("balance") and t["status"] != "closed":
+                lots, risk_usd = lot_size(acct["balance"], acct.get("risk", 1.0), abs(t["entry"] - t["stop_loss"]),
+                                          t.get("contract", 100))
+                c["lot"] = {"lots": max(lots, 0.01), "risk_usd": round(risk_usd, 2), "min_lot": lots < 0.01}
             return c
-        closed = self.storage.closed_trades()[-15:][::-1]
+        closed = self.storage.closed_trades()[-20:][::-1]
         return {"open": [card(t) for t in self.storage.open_trades()][::-1], "closed": [card(t) for t in closed]}
 
     def data_age(self, key: str | None = None) -> dict | None:
@@ -1007,11 +680,29 @@ class GoldBot:
                 "minutes": int((datetime.now(timezone.utc) - last).total_seconds() // 60),
                 "source": source, "open": instruments.is_open(inst)}
 
+    # ================= website buttons =================
+
     async def dashboard_scan(self):
         try:
-            await self.scan(self.app_bot, manual=True)
+            await self.scan(manual=True)
         except Exception:
-            log.exception("Dashboard scan failed")
+            log.exception("Manual scan failed")
+
+    async def dashboard_ping(self):
+        try:
+            await self.desk.ping()
+            self.save_ai_state()
+        except Exception:
+            log.exception("Agent test failed")
+
+    async def dashboard_practice(self, key: str | None = None):
+        try:
+            await self.practice_review(key)
+        except Exception as e:
+            log.exception("Practice review failed")
+            self.desk.monitor.event(f"Practice review failed: {str(e)[:150]}", "error")
+
+    # ================= AI desk helpers =================
 
     def save_ai_state(self):
         """Remember which model/key slots are out of daily quota across restarts."""
@@ -1026,12 +717,12 @@ class GoldBot:
             return "no closed trades yet"
         s = stats(closed)
         last = ", ".join(f"{t['direction']} {t['outcome']} {t.get('result_r') or 0:+g}R" for t in closed[-5:])
-        return (f"last {s['trades']} finished {ui.style_name(style)} trades: win rate {s['win_rate']}%, "
+        return (f"last {s['trades']} finished {style_name(style)} trades: win rate {s['win_rate']}%, "
                 f"total {s['total_r']:+g}R; most recent: {last}")
 
     def practice_setup(self, key: str | None = None) -> dict | None:
         """Best setup the engine can see right now (normal mode), or a probe trade in the higher-timeframe
-        direction – only for practice reviews, never sent as a signal."""
+        direction - only for practice reviews, never published as a signal."""
         inst = self.inst(key or self.primary)
         market = self.markets[inst["key"]]
         extra = {"instrument": inst["key"], "symbol_name": inst["name"], "pip": inst["pip"], "contract": inst["contract"]}
@@ -1048,8 +739,8 @@ class GoldBot:
         want = "bullish" if bull else "bearish"
         # Probe like a real SMC trade: limit order at the nearest order block / FVG in the H4 direction
         # (below price for a buy, above for a sell), stop beyond the zone. Market entry only if there is none.
-        zones = [dict(z, kind=k) for k, key in (("Order Block", "order_blocks"), ("Fair Value Gap", "fvgs"))
-                 for z in m["smc"][key] if z["direction"] == want]
+        zones = [dict(z, kind=k) for k, field in (("Order Block", "order_blocks"), ("Fair Value Gap", "fvgs"))
+                 for z in m["smc"][field] if z["direction"] == want]
         zones = [z for z in zones if (z["top"] <= price if bull else z["bottom"] >= price)
                  and abs(price - (z["top"] if bull else z["bottom"])) <= 4 * a]
         zone = min(zones, key=lambda z: abs(price - (z["top"] if bull else z["bottom"])), default=None)
@@ -1100,10 +791,10 @@ class GoldBot:
         return out or None
 
     async def practice_review(self, key: str | None = None) -> dict | None:
-        """Run the whole AI desk on live data right now so the owner can watch it work (no signal is sent)."""
+        """Run the whole AI desk on live data right now so the owner can watch it work (nothing is published)."""
         mon = self.desk.monitor
         if self.scan_lock.locked():
-            mon.event("Practice review skipped – a scan is running", "skip")
+            mon.event("Practice review skipped - a scan is running", "skip")
             return None
         inst = self.inst(key or self.primary)
         if inst["key"] not in self.markets:
@@ -1121,62 +812,31 @@ class GoldBot:
                 mon.set_phase("idle")
                 self.save_ai_state()
 
-    async def dashboard_practice(self, key: str | None = None):
-        try:
-            await self.practice_review(key)
-        except Exception as e:
-            log.exception("Practice review failed")
-            self.desk.monitor.event(f"Practice review failed: {str(e)[:150]}", "error")
+    # ================= start-up =================
 
-    async def dashboard_ping(self):
-        try:
-            await self.desk.ping()
-            self.save_ai_state()
-        except Exception:
-            log.exception("Agent test failed")
-
-    async def on_startup(self, app: Application | None):
-        self.app_bot = app.bot if app else NullBot()
-        if self.cfg.dashboard_port:
-            try:
-                from dashboard import Dashboard
-                dash = Dashboard(self, asyncio.get_running_loop(), self.cfg.dashboard_host, self.cfg.dashboard_port)
-                dash.start()
-                self.desk.monitor.event(f"Dashboard ready at {dash.url}")
-                print(f"\n  >>> Live dashboard: {dash.url}  (open it in your browser)\n", flush=True)
-                if self.cfg.dashboard_open:
-                    import webbrowser
-                    webbrowser.open(dash.url)
-            except OSError as e:
-                log.warning("Dashboard could not start on port %s: %s", self.cfg.dashboard_port, e)
-        self.desk.monitor.set_phase("idle")
-        self.desk.monitor.event("Bot online – first scan in a few seconds")
-        if app:
-            await self.tell_admins(app.bot, f"<b>Gold & Bitcoin AI desk is online</b> – scanning every "
-                                            f"{self.cfg.scan_interval_minutes} min.")
+    def start_website(self):
+        from dashboard import Dashboard
+        self.dashboard = Dashboard(self, asyncio.get_running_loop(), self.cfg.dashboard_host, self.cfg.dashboard_port)
+        self.dashboard.start()
+        self.desk.monitor.event(f"Website ready at {self.dashboard.url}")
+        print(f"\n  >>> Open the website: {self.dashboard.url}  (signals, agents, charts)\n", flush=True)
+        if self.cfg.dashboard_open:
+            import webbrowser
+            webbrowser.open(self.dashboard.url)
 
 
-class NullBot:
-    """Stands in for Telegram in website-only mode: nothing is sent anywhere, signals live on the website."""
-
-    async def send_message(self, *a, **kw):
-        return types.SimpleNamespace(message_id=0, photo=None)
-
-    async def send_photo(self, *a, **kw):
-        return types.SimpleNamespace(message_id=0, photo=None)
-
-
-async def run_web(cfg: Config, cycles: int | None = None):
-    """Website-only mode: dashboard + a scan every SCAN_INTERVAL_MINUTES, no Telegram at all."""
+async def run(cfg: Config, cycles: int | None = None) -> GoldBot:
+    """Website + a scan every SCAN_INTERVAL_MINUTES, forever (or `cycles` times in tests)."""
     bot = GoldBot(cfg)
-    await bot.on_startup(None)
-    ctx = types.SimpleNamespace(bot=bot.app_bot)
-    log.info("Gold & Bitcoin AI desk started (website only): styles=%s, scan every %s min",
-             ",".join(cfg.styles), cfg.scan_interval_minutes)
+    bot.start_website()
+    bot.desk.monitor.set_phase("idle")
+    bot.desk.monitor.event("Desk online - first scan in a few seconds")
+    log.info("Gold & Bitcoin AI desk started: styles=%s, scan every %s min", ",".join(cfg.styles),
+             cfg.scan_interval_minutes)
     await asyncio.sleep(10 if cycles is None else 0)
     n = 0
     while cycles is None or n < cycles:
-        await bot.scheduled_scan(ctx)
+        await bot.scheduled_scan()
         n += 1
         if cycles is None or n < cycles:
             await asyncio.sleep(cfg.scan_interval_minutes * 60)
@@ -1185,44 +845,13 @@ async def run_web(cfg: Config, cycles: int | None = None):
 
 def main():
     cfg = load_config()
-    if not cfg.use_telegram:
-        if not cfg.dashboard_port:
-            raise SystemExit("Website-only mode needs the dashboard: remove DASHBOARD_PORT=0 from .env")
-        try:
-            asyncio.run(run_web(cfg))
-        except KeyboardInterrupt:
-            pass
-        return
-    bot = GoldBot(cfg)
-    builder = Application.builder().token(cfg.telegram_token).connect_timeout(20).read_timeout(30)
-    if cfg.proxy_url:
-        builder = builder.proxy(cfg.proxy_url).get_updates_proxy(cfg.proxy_url)
-    app = builder.post_init(bot.on_startup).build()
-
-    app.add_handler(CommandHandler(["start", "subscribe"], bot.cmd_start))
-    app.add_handler(CommandHandler("menu", bot.cmd_menu))
-    app.add_handler(CommandHandler(["stop", "unsubscribe"], bot.cmd_stop))
-    app.add_handler(CommandHandler(["trades", "stats", "market", "help", "history", "news", "status"], bot.cmd_simple))
-    app.add_handler(CommandHandler("balance", bot.cmd_balance))
-    app.add_handler(CommandHandler("risk", bot.cmd_risk))
-    app.add_handler(CommandHandler("lot", bot.cmd_lot))
-    app.add_handler(CommandHandler("scan", bot.cmd_scan))
-    app.add_handler(CommandHandler("backtest", bot.cmd_backtest))
-    app.add_handler(CallbackQueryHandler(bot.on_button))
-
-    jq = app.job_queue
-    jq.run_repeating(bot.scheduled_scan, interval=cfg.scan_interval_minutes * 60, first=10)
-    weekdays = (1, 2, 3, 4, 5)  # python-telegram-bot counts Sunday as 0
-    jq.run_daily(bot.daily_report, time=dtime(cfg.daily_report_hour, 5, tzinfo=timezone.utc), days=weekdays)
-    jq.run_daily(bot.briefing, time=dtime(7, 2, tzinfo=timezone.utc), days=weekdays, data="London")
-    jq.run_daily(bot.briefing, time=dtime(12, 32, tzinfo=timezone.utc), days=weekdays, data="New York")
-
-    log.info("Gold SMC AI bot started: styles=%s, scan every %s min", ",".join(cfg.styles),
-             cfg.scan_interval_minutes)
     try:
-        app.run_polling(allowed_updates=Update.ALL_TYPES)
-    except NetworkError as e:  # includes TimedOut
-        raise SystemExit(f"\n{NETWORK_HELP}\n(error: {e})")
+        asyncio.run(run(cfg))
+    except KeyboardInterrupt:
+        pass
+    except OSError as e:
+        raise SystemExit(f"The website could not start on port {cfg.dashboard_port}: {e}\n"
+                         "Another copy may already be running - close it, or set DASHBOARD_PORT=8081 in .env")
 
 
 if __name__ == "__main__":

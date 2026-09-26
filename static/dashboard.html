@@ -151,6 +151,14 @@ section h2{border-left:3px solid var(--gold);padding-left:9px}
 .verdict.run{background:#2a2110;border:1px solid var(--amber);color:var(--amber)}
 .hb{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px}.hb.g{background:var(--green);box-shadow:0 0 6px var(--green)}.hb.r{background:var(--red)}
 .tag{font-size:10px;padding:1px 6px;border-radius:99px;background:#263045;color:var(--mut);text-transform:uppercase}.tag.lite{background:#123049;color:#8cc8ff}.tag.strong{background:#3a2c10;color:var(--gold2)}
+/* control center */
+.form{display:flex;flex-wrap:wrap;gap:8px;align-items:end}.form label{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.8px}
+input[type=number],select{background:#0b111b;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:7px 9px;font:13px ui-monospace,Consolas,monospace;width:130px}
+select{width:auto}.msgline{font-size:12px;margin-top:6px;min-height:16px}
+.onoff{font:800 10px ui-monospace,Consolas,monospace;padding:2px 7px;border-radius:5px}.onoff.on{background:#0f3a26;color:#6ff0ae}.onoff.off{background:#4a1a22;color:#ff9aa8}
+.eq{width:100%;height:150px;display:block;margin:6px 0 4px;background:#0a0e16;border:1px solid var(--line);border-radius:10px}
+.aiview{white-space:pre-wrap;font-size:13.5px;line-height:1.55;margin-top:8px;padding:10px 12px;border-radius:10px;background:#0d1320;border:1px solid var(--line);min-height:60px}
+.lotline{margin:4px 0;font-size:12.5px;padding:5px 8px;border-radius:8px;background:#101a2a;border:1px solid #1d2c44}.lotline b{color:var(--gold2);font-family:ui-monospace,Consolas,monospace}
 </style>
 </head>
 <body>
@@ -195,7 +203,7 @@ section h2{border-left:3px solid var(--gold);padding-left:9px}
     <section><h2><span>Live chart</span>
         <span class="tabs" id="tabs"></span></h2>
       <div class="toggles">
-        <button class="alt" style="padding:3px 10px;font-size:12px" onclick="resetView()">⟲ Reset view</button>
+        <button class="alt" style="padding:3px 10px;font-size:12px" onclick="resetView()">Reset view</button>
         <label><input type="checkbox" data-o="zones" checked> OB / Breaker / FVG</label>
         <label><input type="checkbox" data-o="levels" checked> Key levels</label>
         <label><input type="checkbox" data-o="liq" checked> Liquidity</label>
@@ -208,16 +216,36 @@ section h2{border-left:3px solid var(--gold);padding-left:9px}
     <section><h2>Live activity</h2><div class="log" id="log"></div></section>
   </div>
   <div class="grid3">
+    <section><h2><span>Account &amp; lot size</span><span class="role">saved on this PC</span></h2>
+      <div class="form"><label>Balance (USD)<input type="number" id="accBal" min="0" step="100" placeholder="e.g. 1000"></label>
+        <label>Risk per trade %<input type="number" id="accRisk" min="0.1" max="10" step="0.1" value="1"></label>
+        <button id="accSave" onclick="saveAccount()">Save</button></div>
+      <div class="msgline" id="accMsg"></div>
+      <div class="role">Every open signal then shows the exact lot size for this balance and risk (gold: 1 lot = 100 oz, bitcoin: 1 lot = 1 BTC).</div></section>
+    <section><h2><span>Signal styles</span><span class="role">switch on / off without restarting</span></h2><div id="styles"></div></section>
+    <section><h2><span>AI market view</span><button class="alt mini-btn" id="viewBtn" onclick="marketView()">Ask the AI now</button></h2>
+      <div class="role" id="viewMeta">A plain-language read of the current chart by the AI analyst (in your language). Updates at most every 10 minutes.</div>
+      <div class="aiview" id="aiview"><span class="empty">Press "Ask the AI now".</span></div></section>
+  </div>
+  <div class="row">
+    <section><h2><span>Strategy lab – backtest &amp; optimizer on real history</span><span id="labState"></span></h2>
+      <div class="form"><label>Style<select id="labStyle"><option value="scalp">Scalp</option><option value="intraday" selected>Intraday</option><option value="swing">Swing</option></select></label>
+        <button id="btBtn" onclick="lab('backtest')">Backtest</button><button class="alt" id="optBtn" onclick="lab('optimize')">Optimize settings</button>
+        <span class="role">Runs the SMC engine candle by candle on the selected market's history (no look-ahead). Takes 1–6 minutes and uses Twelve Data credits for gold.</span></div>
+      <div id="labOut" style="margin-top:10px"></div></section>
+    <section><h2><span>Performance</span><span id="perfSum"></span></h2>
+      <svg class="eq" id="equity" viewBox="0 0 400 150" preserveAspectRatio="none"></svg>
+      <div class="kv" id="perf"></div><div id="perfBy" style="margin-top:8px"></div></section>
+  </div>
+  <div class="grid3">
     <section><h2><span>Live review – stage by stage</span><span id="rvTimer"></span></h2><div id="live_review"></div></section>
-    <section style="grid-column:span 2"><h2><span>API keys &amp; Gemini models</span><span id="keysSum"></span></h2><div id="keys"></div></section>
+    <section style="grid-column:span 2"><h2><span>API keys &amp; AI models</span><span id="keysSum"></span></h2><div id="keys"></div></section>
   </div>
   <div class="grid3">
     <section><h2>Last AI decisions</h2><div id="reviews"></div></section>
-    <section><h2>Open trades</h2><div id="trades"></div></section>
     <section><h2>News &amp; calendar</h2><div id="news" class="news"></div></section>
     <section><h2>Market structure</h2><div id="market"></div></section>
     <section><h2>System &amp; data</h2><div class="kv" id="system"></div></section>
-    <section><h2>Performance</h2><div class="kv" id="perf"></div></section>
   </div>
 </main>
 <script>
@@ -265,7 +293,7 @@ function layout(agents){
   const ver = agents.filter(a => a.stage === 3);
   ver.forEach((a, i) => pos[a.key] = {x: X[3], y: MID + (i - (ver.length - 1) / 2) * 130, w: 180, h: 48, icon: a.icon, key: a.home_key, name: a.name, sub: ""});
   agents.filter(a => a.stage >= 4).forEach(a => pos[a.key] = {x: X[a.stage], y: MID, w: 150, h: 52, icon: a.icon, key: a.home_key, name: a.name, sub: ""});
-  pos.telegram = {x: 1335, y: MID, w: 96, h: 48, icon: "OUT", name: "Telegram", sub: "signal out"};
+  pos.website = {x: 1335, y: MID, w: 96, h: 48, icon: "WEB", name: "Website", sub: "signal out"};
   netHeight = Math.max(y + 20, MID * 2);
 }
 let netHeight = 940;
@@ -381,7 +409,7 @@ function paintPath(){
     t.textContent = f ? `${who(f.from)} → ${who(f.to)}: ${f.text || f.kind}` : `${who(e.a)} → ${who(e.b)}`;
   });
 }
-const NAMES = {engine: "SMC Engine", telegram: "Telegram"};
+const NAMES = {engine: "SMC Engine", website: "Website"};
 function who(k){ const a = state && state.agents.find(x => x.key === k); return a ? a.name : (NAMES[k] || k); }
 const PHASES = [
   ["1", "Engine hands the setup to the analysts", f => f.from === "engine"],
@@ -389,7 +417,7 @@ const PHASES = [
   ["3", "Debate: desk leads challenge, analysts answer", f => f.kind === "challenge" || f.kind === "reply"],
   ["4", "Desk leads brief the verifiers and the Head Trader", f => stageOf(f.from) === 2 && f.kind !== "challenge"],
   ["5", "Verifiers report to the Head Trader", f => stageOf(f.from) === 3],
-  ["6", "Decision: Head Trader → Auditor → Telegram", f => f.from === "head" || f.from === "auditor"],
+  ["6", "Decision: Head Trader → Auditor → Website", f => f.from === "head" || f.from === "auditor"],
 ];
 function stageOf(k){ const a = state && state.agents.find(x => x.key === k); return a ? a.stage : 0; }
 function chip(v){ return `<span class="vchip v-${v === "take" ? "agrees" : v === "skip" ? "against" : "neutral"}">${v.toUpperCase()}</span>`; }
@@ -593,11 +621,11 @@ function render(){
   const models = s.ai_models || [], ready = models.filter(m => m.ready).length;
   const dayOut = models.filter(m => m.kind === "quota_day");
   H.banner = models.length && !ready ? `<div class="banner"><b>AI desk paused:</b> all ${models.length} AI model slots are resting` +
-      (dayOut.length ? ` – the free <b>daily quota</b> is used up. It resets at midnight Pacific time (≈ 07:00 UTC, in ~${Math.max(...dayOut.map(m => m.back_in_min))} min).` : ".") +
-      ` The engine keeps scanning; only very strong engine-only setups are sent meanwhile. Tip: don't press "Test all agents" often – each test uses quota.</div>`
+      (dayOut.length ? ` – the free <b>daily quota</b> is used up. It comes back in ~${Math.max(...dayOut.map(m => m.back_in_min))} min.` : ".") +
+      ` The engine keeps scanning; only very strong engine-only setups are published meanwhile. Tip: don't press "Test agents" often – each test uses quota.</div>`
     : dayOut.length * 2 >= models.length ? `<div class="banner warnb"><b>Low on AI quota:</b> ${dayOut.length} of ${models.length} model slots used their free daily quota
-      (reset ≈ 07:00 UTC). A full review needs about 26–30 requests, so reviews may stop early. Add a key from a <b>different Google account</b>
-      (GEMINI_API_KEYS in .env) and avoid pressing Practice / Test often.</div>` : "";
+      . A full review needs about 26–30 requests, so reviews may stop early. Add a second free key
+      (MISTRAL_API_KEYS or GROQ_API_KEY in .env) and avoid pressing Practice / Test often.</div>` : "";
   paintNodes(s.agents); renderDetail(s.agents);
   H.log = s.log.map(l => `<div class="k-${l.kind}"><span class="t">${l.t}</span>${esc(l.text)}</div>`).join("") || '<div class="empty">Waiting for the first scan…</div>';
   H.reviews = s.reviews.length ? `<table><tr><th>Time</th><th>Setup</th><th>Desk</th><th>Result</th></tr>` +
@@ -606,9 +634,6 @@ function render(){
         ${r.board ? `<br><span class="role">strategies ${esc(r.board)}</span>` : ""}</td>
       <td class="${r.approved ? "ok" : "bad"}">${r.approved ? "SENT" : "SKIPPED"}<br><span class="role">${esc(r.reason || "")}</span>${r.explain ? `<div class="role" style="margin-top:4px;color:#b8c3d8">${esc(r.explain.slice(0, 220))}</div>` : ""}</td></tr>`).join("") + "</table>"
     : '<div class="empty">No setup reviewed yet. The desk only works when the engine finds a real setup.</div>';
-  H.trades = s.trades.length ? `<table><tr><th>Trade</th><th>Entry</th><th>SL</th><th>TPs</th><th>Status</th></tr>` +
-    s.trades.map(t => `<tr><td>${esc(t.symbol || "")} ${t.direction}<br><span class="role">${esc(t.style_label)}</span></td><td>${t.entry}</td><td>${t.stop_loss}</td>
-      <td>${t.tps.join("<br>")}</td><td>${t.status}<br>TP ${t.stage}/3</td></tr>`).join("") + "</table>" : '<div class="empty">No open trades.</div>';
   const cal = (s.calendar || []).map(e => `<div><span class="imp ${e.impact === "High" ? "hi" : "md"}">${e.impact === "High" ? "HIGH" : "MED"}</span> <b>${esc(e.time)}</b> ${esc(e.title)} <span class="role">${esc([e.forecast && "F " + e.forecast, e.previous && "P " + e.previous].filter(Boolean).join(" · "))}</span></div>`).join("");
   const hl = (s.headlines || []).map(h => `<div>${(h.cats || []).map(c => `<span class="ncat ${c}">${c}</span>`).join("")} <span class="role">${esc(h.time)} ${esc(h.source)}</span><br>${h.link ? `<a href="${esc(h.link)}" target="_blank" rel="noopener">${esc(h.title)}</a>` : esc(h.title)}</div>`).join("");
   H.news = (cal ? "<b>Next 48h (USD)</b>" + cal : '<div class="role">No high/medium USD events in the next 48h.</div>') +
@@ -620,15 +645,14 @@ function render(){
     : '<div class="empty">No market data yet.</div>';
   const kv = o => Object.entries(o).map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("");
   H.system = kv({"Uptime": st.uptime, "Price source": age ? esc(age.source) : "–", "Last candle": age ? `${age.last_candle} (${age.minutes} min ago)` : "–",
-    "Scans today": st.scans_today, "Twelve Data": st.td_requests + " / 800 requests", "Gemini": `${st.ai_calls} calls (${st.ai_failures} retried)`,
-    "Gemini models": models.length ? `${ready}/${models.length} ready` + models.filter(m => !m.ready).map(m => `<br><span class="role">${esc(m.model)}: ${esc(m.reason)}</span>`).join("") : "–",
-    "Volume feed": st.volume_ok ? '<span class="ok">OK</span>' : '<span class="warn">unavailable</span>', "News calendar": st.news_ok ? '<span class="ok">OK</span>' : '<span class="warn">unavailable</span>', "Telegram users": st.users,
-    "Signal types": s.settings.styles.join(", "), "Rules": `Head TAKE, conf ≥ ${s.settings.min_confidence}%, ≥ ${Math.round(100 * s.settings.min_votes / 8)}% of analysts, ≥ 2/3 desk leads, ≥ 2/3 verifiers, strategy board not against, auditor OK`,
+    "Scans today": st.scans_today, "Twelve Data": st.td_requests + " / 800 requests", "AI requests": `${st.ai_calls} calls (${st.ai_failures} retried)`,
+    "AI models": models.length ? `${ready}/${models.length} ready` + models.filter(m => !m.ready).map(m => `<br><span class="role">${esc(m.model)}: ${esc(m.reason)}</span>`).join("") : "–",
+    "Volume feed": st.volume_ok ? '<span class="ok">OK</span>' : '<span class="warn">unavailable</span>', "News calendar": st.news_ok ? '<span class="ok">OK</span>' : '<span class="warn">unavailable</span>',
+    "Signal types": s.settings.styles.join(", "), "Explanations": esc(s.settings.language || "English"),
+    "Rules": `Desk conviction ≥ ${s.settings.min_conviction}, Head Trader TAKE with confidence ≥ ${s.settings.min_confidence}%, no veto (analysts split, risk manager, strategy board, auditor)`,
     "Last error": st.last_error ? `<span class="bad">${esc(st.last_error.slice(0, 160))}</span>` : "none"});
   renderKpis(s, mk, models); renderSignals(s); renderLive(s); renderKeys(models); renderDirectory(s); renderBoard(s.board);
-  const p = s.performance;
-  H.perf = p.trades ? kv({"Finished trades": p.trades, "Win rate (TP1+)": p.win_rate + "%", "Total": p.total_r + "R",
-    "Wins / losses": p.wins + " / " + p.losses, "Hit TP3": p.tp3}) : '<span class="empty">No finished trades yet</span>';
+  renderPerf(s.performance || {}); renderControls(s);
 }
 function renderKpis(s, mk, models){
   const p = s.performance || {}, st = s.status, ses = s.session || {};
@@ -639,11 +663,11 @@ function renderKpis(s, mk, models){
   H.kpis = [
     k("Session", esc((ses.sessions || ["–"]).join(" / ")), ses.killzone ? esc(ses.killzone) + " killzone" : "no killzone"),
     k("H1 regime", esc(h1 && h1.regime || "–"), h1 ? esc(h1.trend || "ranging") + " · " + esc(h1.zone) : ""),
-    k("Open trades", s.trades.length, (s.trades.filter(t => t.status === "active").length) + " running"),
-    k("Win rate", p.trades ? p.win_rate + "%" : "–", p.trades ? p.trades + " finished" : "no finished trades", p.trades ? (p.win_rate >= 50 ? "ok" : "bad") : ""),
+    k("Open signals", (s.signals || {open: []}).open.length, (s.signals || {open: []}).open.filter(t => t.status === "active").length + " running"),
+    k("Win rate", p.trades ? p.win_rate + "%" : "–", p.trades ? p.trades + " finished" + (p.profit_factor != null ? " · PF " + p.profit_factor : "") : "no finished trades", p.trades ? (p.win_rate >= 50 ? "ok" : "bad") : ""),
     k("Total", p.trades ? (p.total_r >= 0 ? "+" : "") + p.total_r + "R" : "–", p.trades ? "TP3 hit " + p.tp3 : "", p.trades ? (p.total_r >= 0 ? "ok" : "bad") : ""),
     k("Desk reviews", (s.reviews || []).length, approved + " approved"),
-    k("Gemini today", st.ai_calls, st.ai_failures + " retried"),
+    k("AI requests today", st.ai_calls, st.ai_failures + " retried"),
     k("Model slots", models.length ? ready + "/" + models.length : "–", esc((s.key_names || []).join(" · ") || "1 API key"), models.length && !ready ? "bad" : "ok"),
   ].join("");
 }
@@ -715,6 +739,8 @@ function sigCard(c){
       ${c.tps.map((t, i) => `<tr><td>TP${i + 1}</td><td class="ok">${p2(t)}</td><td class="role">1:${(c.rr || [])[i] ?? "–"}${c.stage > i ? " · hit" : ""}</td></tr>`).join("")}</table>
     <div class="track">${marks}</div>
     <div class="now">${c.price != null ? "Price " + p2(c.price) : ""} ${fl}</div>
+    ${c.lot ? `<div class="lotline">Lot size <b>${c.lot.lots.toFixed(2)}</b> · risk $${p2(c.lot.risk_usd)}${c.lot.min_lot ? ' <span class="warn">(below the 0.01 minimum – the smallest lot risks more)</span>' : ""}</div>`
+      : c.status !== "closed" ? '<div class="role">Set your balance in "Account &amp; lot size" to see the lot size.</div>' : ""}
     ${bar("Confidence", c.confidence)}${bar("Conviction", c.conviction)}
     ${c.explain || c.reason ? `<div class="exp">${esc(c.explain || c.reason)}</div>` : ""}
     ${c.invalidation ? `<div class="kvx"><b>Invalidation</b> ${esc(c.invalidation)}</div>` : ""}
@@ -759,7 +785,7 @@ function renderLive(s){
   H.live_review = html;
 }
 function renderKeys(models){
-  if (!models.length) { H.keys = '<div class="empty">No Gemini key configured.</div>'; H.keysSum = ""; return; }
+  if (!models.length) { H.keys = '<div class="empty">No AI key configured.</div>'; H.keysSum = ""; return; }
   const keys = [...new Set(models.map(m => m.key))].sort();
   H.keysSum = keys.map(k => { const ms = models.filter(m => m.key === k), r = ms.filter(m => m.ready).length;
     return `<span class="pill ${r ? "ok" : "bad"}">${esc(keyName(k))}: ${r}/${ms.length} ready</span>`; }).join(" ");
@@ -770,9 +796,89 @@ function renderKeys(models){
       <td><span class="ok">${m.ok}</span> / <span class="${m.fail ? "bad" : ""}">${m.fail}</span></td><td>${m.latency != null ? m.latency + "s" : "–"}</td><td>${m.today ?? 0}</td>
       <td>${m.calls_last_min}</td><td>${(used[m.model] || []).join(" ")}</td></tr>`).join("") + "</table>";
 }
+/* ---------------- control center ---------------- */
+async function postSettings(body){
+  try { return await (await fetch("/api/settings", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)})).json(); }
+  catch (e) { return {ok: false, error: "bot not running"}; }
+}
+async function saveAccount(){
+  const r = await postSettings({account: {balance: $("accBal").value, risk: $("accRisk").value}});
+  $("accMsg").innerHTML = r.ok ? '<span class="ok">Saved – lot sizes updated on every open signal.</span>' : `<span class="bad">${esc(r.error)}</span>`;
+  accFilled = false; refresh();
+}
+async function styleAct(style, action, index){
+  const r = await postSettings({style, action, index});
+  if (!r.ok) alert(r.error); refresh();
+}
+async function lab(kind){
+  await fetch(`/api/${kind}?style=${$("labStyle").value}&sym=${sym}`, {method: "POST"});
+  setTimeout(refresh, 600);
+}
+async function marketView(){
+  const b = $("viewBtn"); b.disabled = true;
+  await fetch("/api/marketview?sym=" + sym, {method: "POST"});
+  setTimeout(() => { b.disabled = false; refresh(); }, 4000);
+}
+let accFilled = false;
+function renderControls(s){
+  const a = s.account || {};
+  if (!accFilled && document.activeElement !== $("accBal") && document.activeElement !== $("accRisk")) {
+    $("accBal").value = a.balance ?? ""; $("accRisk").value = a.risk ?? 1; accFilled = true;
+  }
+  H.styles = `<table><tr><th>Style</th><th>State</th><th>Min score</th><th>Min R:R</th><th></th></tr>` +
+    Object.entries(s.styles || {}).map(([k, v]) => `<tr><td><b>${esc(v.label)}</b>${v.active ? "" : '<br><span class="role">not in STYLES (.env)</span>'}</td>
+      <td><span class="onoff ${v.enabled ? "on" : "off"}">${v.enabled ? "ON" : "OFF"}</span></td><td>${v.min_score}</td><td>${v.min_rr}</td>
+      <td><button class="alt mini-btn" onclick="styleAct('${k}','${v.enabled ? "off" : "on"}')">${v.enabled ? "Switch off" : "Switch on"}</button>
+        <button class="alt mini-btn" onclick="styleAct('${k}','reset')">Reset</button></td></tr>`).join("") + "</table>";
+  const v = (s.ai_views || {})[sym];
+  H.aiview = v ? esc(v.text) : '<span class="empty">Press "Ask the AI now".</span>';
+  H.viewMeta = v ? `${esc(sym)} · ${esc(v.time)}${v.busy ? " · working…" : ""}` : "A plain-language read of the current chart by the AI analyst (in your language). Updates at most every 10 minutes.";
+  const L = s.lab || {};
+  $("btBtn").disabled = $("optBtn").disabled = !!L.running;
+  H.labState = L.running ? `<span class="pill warn">${esc(L.kind)} ${esc(L.symbol)} ${esc(L.style)} running since ${esc(L.started)}</span>` : "";
+  let out = "";
+  const r = L.result;
+  if (r && r.error) out += `<div class="bad">${esc(L.kind)} failed: ${esc(r.error)}</div>`;
+  else if (r && r.stats) { const t = r.stats;
+    out += `<div class="subh">Backtest · ${esc(r.label)} · ${esc(r.start)} → ${esc(r.end)}</div>` + `<div class="kv">` +
+      [["Signals", r.signals], ["Finished", t.trades], ["Win rate (TP1+)", t.win_rate != null ? t.win_rate + "%" : "–"], ["Total", t.total_r + "R"],
+       ["Average", r.avg_r + "R"], ["Profit factor", r.profit_factor], ["Max drawdown", r.max_dd + "R"], ["Hit TP3", t.tp3]]
+      .map(([k, x]) => `<span>${k}</span><span>${esc(x)}</span>`).join("") + "</div>"; }
+  const opt = s.optimizer || {};
+  Object.entries(opt).forEach(([st, rows]) => {
+    out += `<div class="subh" style="margin-top:12px">Optimizer · ${esc((s.styles[st] || {}).label || st)} – best settings first</div>` + (rows.length ?
+      `<table><tr><th>#</th><th>Min score</th><th>Min R:R</th><th>TP1 cap</th><th>Strict</th><th>Trades</th><th>Win</th><th>Total</th><th>PF</th><th>DD</th><th></th></tr>` +
+      rows.map(x => `<tr><td>${x.rank + 1}</td><td>${x.config.min_score}</td><td>${x.config.min_rr}</td><td>${x.config.tp1_max_r ?? "–"}</td><td>${x.config.strict ? "yes" : "no"}</td>
+        <td>${x.trades}</td><td>${x.win_rate ?? "–"}%</td><td class="${x.total_r >= 0 ? "ok" : "bad"}">${x.total_r}R</td><td>${x.profit_factor}</td><td>${x.max_dd}R</td>
+        <td><button class="mini-btn" onclick="styleAct('${st}','apply',${x.rank})">Apply</button></td></tr>`).join("") + "</table>"
+      : '<div class="empty">Not enough trades in the history for a reliable ranking.</div>');
+  });
+  H.labOut = out || '<div class="empty">No lab run yet. Pick a style and press Backtest or Optimize – the selected market (top tabs) is used.</div>';
+}
+function renderPerf(p){
+  const eq = p.equity || [];
+  const svg = $("equity");
+  if (eq.length > 1) {
+    const vals = [0, ...eq.map(e => e.r)], lo = Math.min(...vals), hi = Math.max(...vals), span = (hi - lo) || 1;
+    const pts = vals.map((v, i) => `${(400 * i / (vals.length - 1)).toFixed(1)},${(140 - 130 * (v - lo) / span).toFixed(1)}`).join(" ");
+    const zero = (140 - 130 * (0 - lo) / span).toFixed(1), last = vals[vals.length - 1];
+    const html = `<line x1="0" x2="400" y1="${zero}" y2="${zero}" stroke="#2a3447" stroke-dasharray="4 4"/>` +
+      `<polyline points="${pts}" fill="none" stroke="${last >= 0 ? "#22c77a" : "#f04f5a"}" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+    if (svg.dataset.sig !== pts) { svg.innerHTML = html; svg.dataset.sig = pts; }
+  } else if (svg.dataset.sig !== "none") { svg.innerHTML = '<text x="200" y="80" text-anchor="middle" fill="#8792a8" font-size="12">Equity curve (R) appears after finished signals</text>'; svg.dataset.sig = "none"; }
+  H.perfSum = p.trades ? `<span class="pill ${p.total_r >= 0 ? "ok" : "bad"}">${p.total_r >= 0 ? "+" : ""}${p.total_r}R</span>` : "";
+  const kv = o => Object.entries(o).map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("");
+  H.perf = p.trades ? kv({"Finished signals": p.trades, "Win rate (TP1+)": p.win_rate + "%", "Wins / losses": p.wins + " / " + p.losses,
+    "Total": p.total_r + "R", "Average per trade": (p.avg_r ?? "–") + "R", "Profit factor": p.profit_factor ?? "–",
+    "Max drawdown": p.max_dd + "R", "Hit TP3": p.tp3, "Expired / cancelled": p.expired}) : '<span class="empty">No finished signals yet</span>';
+  const rows = [...Object.entries(p.by_instrument || {}).map(([k, v]) => [k, v]),
+                ...Object.entries(p.by_style || {}).filter(([, v]) => v.trades).map(([k, v]) => [((state.styles || {})[k] || {}).label || k, v])];
+  H.perfBy = rows.length ? `<table><tr><th>By</th><th>Trades</th><th>Wins</th><th>Total</th></tr>` +
+    rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v.trades}</td><td>${v.wins}</td><td class="${v.total_r >= 0 ? "ok" : "bad"}">${v.total_r}R</td></tr>`).join("") + "</table>" : "";
+}
 function tick(){
   const cur = state && state.current;
-  $("rvTimer").textContent = cur ? "⏱ " + Math.round(((cur.end ?? Date.now() / 1000) - cur.ts)) + "s" : "";
+  $("rvTimer").textContent = cur ? Math.round(((cur.end ?? Date.now() / 1000) - cur.ts)) + "s" : "";
 }
 setInterval(tick, 1000);
 async function refresh(){

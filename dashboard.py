@@ -1,4 +1,4 @@
-"""Local live dashboard (http://localhost:8080): watch the scan, the 9 AI agents, the chart and trades.
+"""The local website (http://localhost:8080): signals, the 26 AI agents at work, live charts, lab and settings.
 
 Runs inside the bot process on a background thread and listens on 127.0.0.1 only, so it is
 visible just on the computer that runs the bot.
@@ -24,7 +24,6 @@ class Dashboard:
         self.host = host
         self.port = port
         self.server: ThreadingHTTPServer | None = None
-        self._charts: dict[str, tuple[str, bytes]] = {}
 
     @property
     def url(self) -> str:
@@ -61,12 +60,6 @@ class Dashboard:
                         self._send(200, json.dumps(live, default=str).encode(), "application/json")
                     elif u.path == "/static/lightweight-charts.js":
                         self._send(200, STATIC_JS.read_bytes(), "application/javascript")
-                    elif u.path == "/api/chart.png":
-                        png = dash.chart(parse_qs(u.query).get("tf", ["15min"])[0])
-                        if png:
-                            self._send(200, png, "image/png")
-                        else:
-                            self._send(404, b"no data yet", "text/plain")
                     else:
                         self._send(404, b"not found", "text/plain")
                 except Exception as e:
@@ -75,34 +68,43 @@ class Dashboard:
 
             def do_POST(self):
                 u = urlparse(self.path)
-                actions = {"/api/scan": dash.gb.dashboard_scan, "/api/ping": dash.gb.dashboard_ping,
-                           "/api/practice": dash.gb.dashboard_practice}
+                q = {k: v[0] for k, v in parse_qs(u.query).items()}
+                try:
+                    size = int(self.headers.get("Content-Length") or 0)
+                    body = json.loads(self.rfile.read(size) or b"{}") if size else {}
+                except (ValueError, json.JSONDecodeError):
+                    self._send(400, b'{"ok": false, "error": "bad json"}', "application/json")
+                    return
+                gb = dash.gb
+                if u.path == "/api/settings":  # quick, applied on the bot's loop and answered directly
+                    fut = asyncio.run_coroutine_threadsafe(_call(gb.apply_setting, body), dash.loop)
+                    try:
+                        result = fut.result(timeout=10)
+                    except Exception as e:
+                        result = {"ok": False, "error": str(e)[:200]}
+                    self._send(200, json.dumps(result).encode(), "application/json")
+                    return
+                actions = {
+                    "/api/scan": lambda: gb.dashboard_scan(),
+                    "/api/ping": lambda: gb.dashboard_ping(),
+                    "/api/practice": lambda: gb.dashboard_practice(q.get("sym")),
+                    "/api/backtest": lambda: gb.run_lab("backtest", q.get("style", "intraday"), q.get("sym")),
+                    "/api/optimize": lambda: gb.run_lab("optimize", q.get("style", "intraday"), q.get("sym")),
+                    "/api/marketview": lambda: gb.ai_market_view(q.get("sym")),
+                }
                 if u.path not in actions:
                     self._send(404, b"not found", "text/plain")
                     return
-                sym = parse_qs(u.query).get("sym", [None])[0]
-                coro = actions[u.path](sym) if u.path == "/api/practice" else actions[u.path]()
-                asyncio.run_coroutine_threadsafe(coro, dash.loop)
+                asyncio.run_coroutine_threadsafe(actions[u.path](), dash.loop)
                 self._send(202, b'{"started": true}', "application/json")
 
         self.server = ThreadingHTTPServer((self.host, self.port), Handler)
         threading.Thread(target=self.server.serve_forever, daemon=True, name="dashboard").start()
         log.info("Dashboard running at %s", self.url)
 
-    def chart(self, tf: str) -> bytes | None:
-        import chart as chart_mod
-        from setups import TF_LABEL
-
-        gb = self.gb
-        if not gb.candles or tf not in gb.candles or not gb.market or tf not in gb.market:
-            return None
-        version = str(gb.last_scan)
-        cached = self._charts.get(tf)
-        if cached and cached[0] == version:
-            return cached[1]
-        png = chart_mod.market_chart(gb.candles[tf], gb.market[tf]["smc"], gb.market.get("levels", {}), TF_LABEL[tf])
-        self._charts[tf] = (version, png)
-        return png
+async def _call(fn, *args):
+    """Run a plain function on the bot's event loop (keeps storage writes on one thread)."""
+    return fn(*args)
 
 
 PAGE = (Path(__file__).with_name("static") / "dashboard.html").read_text(encoding="utf-8")

@@ -187,7 +187,7 @@ def links() -> dict[str, dict]:
     for v in VERIFIERS:
         out[v["key"]] = {"from": [lead["key"] for lead in LEADS], "to": ["head"]}
     out["head"] = {"from": [lead["key"] for lead in LEADS] + [v["key"] for v in VERIFIERS], "to": ["auditor"]}
-    out["auditor"] = {"from": ["head"], "to": ["telegram"]}
+    out["auditor"] = {"from": ["head"], "to": ["website"]}
     return out
 
 
@@ -385,7 +385,7 @@ Market read (per timeframe):
 
 Session: {session}
 
-Write a short market outlook for traders on Telegram in {language} (max 110 words, no markdown symbols, no emoji):
+Write a short market outlook for traders on the website in {language} (max 110 words, no markdown symbols, no emoji):
 overall bias per timeframe, key liquidity above and below, the nearest order blocks / FVGs to watch,
 and what would make you buy or sell. Do not invent prices that are not in the data.
 """
@@ -998,6 +998,20 @@ class TradingDesk:
                 else:
                     mon.message(src, key)
             data, model = await self._ask_json(prompt, self.slots_for(key))
+            problems = self._incomplete(data, stage, agent)
+            retried = False
+            if problems:  # strict: an incomplete answer is sent back once with exactly what is missing
+                retried = True
+                mon.agent(key, "thinking", summary="Answer incomplete – asked again: " + "; ".join(problems))
+                fix = (prompt + "\n\nYOUR PREVIOUS ANSWER WAS REJECTED BECAUSE: " + "; ".join(problems)
+                       + ".\nDo your job completely this time: check your data, quote exact numbers, and reply with "
+                         "the full JSON only.")
+                try:
+                    data2, model2 = await self._ask_json(fix, self.slots_for(key))
+                    if len(self._incomplete(data2, stage, agent)) < len(problems):
+                        data, model = data2, model2
+                except Exception as e:  # keep the first answer if the retry fails
+                    log.warning("%s retry failed: %s", agent["name"], e)
             vote = str(data.get("vote", "SKIP")).upper()
             try:
                 score = max(0, min(int(float(data.get("score") or 0)), 100))
@@ -1009,7 +1023,9 @@ class TradingDesk:
                           points=[str(p)[:160] for p in (data.get("evidence") or data.get("points") or [])][:3],
                           risk=str(data.get("risk", ""))[:160],
                           doubtful=[str(x) for x in (data.get("doubtful") or [])][:9])
-            pts = report["points"] + ([f"Risk: {report['risk']}"] if report["risk"] else [])
+            report["retried"] = retried
+            pts = report["points"] + ([f"Risk: {report['risk']}"] if report["risk"] else []) + \
+                (["Re-asked once for an incomplete answer"] if retried else [])
             mon.agent(key, "done", vote=report["vote"], score=score, summary=report["summary"], points=pts,
                       model=model, seconds=round(time.monotonic() - started, 1))
             mon.event(f"{agent['icon']} {agent['name']}: {report['vote']} ({score}) – {report['summary']}",
@@ -1021,6 +1037,30 @@ class TradingDesk:
             mon.agent(key, "error", summary=friendly, err=kind, seconds=round(time.monotonic() - started, 1))
             mon.event(f"{agent['icon']} {agent['name']} failed: {friendly}", "error")
             return dict(base, vote="ERROR", score=0, summary="unavailable", points=[], risk="", doubtful=[])
+
+    @staticmethod
+    def _incomplete(data: dict, stage: int, agent: dict) -> list[str]:
+        """What is missing from an agent's answer (empty list = complete)."""
+        out = []
+        vote = str(data.get("vote", "")).upper()
+        if vote not in (("TAKE", "SKIP", "NEUTRAL") if stage == 1 else ("TAKE", "SKIP")):
+            out.append("the vote is missing or invalid")
+        try:
+            float(data.get("score"))
+        except (TypeError, ValueError):
+            out.append("the score is missing")
+        if len(str(data.get("summary") or "").strip()) < 12:
+            out.append("the summary is missing")
+        ev = [str(x) for x in (data.get("evidence") or data.get("points") or []) if str(x).strip()]
+        if stage == 1:
+            news_desk = agent.get("desk") == "macro"
+            if len(ev) < (1 if news_desk else 2):
+                out.append("not enough evidence items")
+            elif not news_desk and not any(re.search(r"\d", x) for x in ev):
+                out.append("the evidence quotes no exact number from the data")
+        elif not ev:
+            out.append("no points / findings given")
+        return out
 
     # Kept for older callers: one specialist on the old-style prompt.
     async def _specialist(self, i: int, agent: dict, ctx: dict, template: str | None = None, sources: tuple = ()):
@@ -1431,7 +1471,7 @@ class TradingDesk:
             approve, note, issues = True, "auditor offline – desk decision stands", []
             mon.agent("auditor", "error", summary=note)
         verdict["audit"] = {"approve": approve, "note": note, "issues": issues}
-        mon.message("auditor", "telegram", ("Signal approved – " if approve else "Vetoed – ")
+        mon.message("auditor", "website", ("Signal approved – " if approve else "Vetoed – ")
                     + (note or "; ".join(issues)), "decision")
         verdict["approved"] = approve
         if not approve:
